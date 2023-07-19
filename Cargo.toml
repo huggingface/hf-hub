@@ -30,14 +30,15 @@ num_cpus = { version = "1.15.0", optional = true}
 tokio = { version = "1.29.1", optional = true, features = ["fs", "macros"] }
 futures = { version = "0.3.28", optional = true}
 thiserror = { version = "1.0.43", optional = true }
-sha256 = { version = "1.2.1", optional = true }
 ureq = { version = "2.7.1", optional = true, features = ["native-tls", "json"] }
 native-tls = { version = "0.2.11", optional = true }
 
 [features]
 default = ["online"]
-online = ["dep:ureq", "dep:native-tls", "dep:rand", "dep:sha256", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
-tokio = ["dep:tokio", "dep:futures", "dep:rand", "dep:sha256", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
+online = ["dep:ureq", "dep:native-tls", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
+tokio = ["dep:tokio", "dep:futures", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
 
 [dev-dependencies]
+hex-literal = "0.4.1"
+sha2 = "0.10"
 tokio-test = "0.4.2"

@@ -561,7 +561,8 @@ mod tests {
     use super::*;
     use crate::RepoType;
     use rand::{distributions::Alphanumeric, Rng};
-    use sha256::digest;
+    use sha2::{Digest, Sha256};
+    use hex_literal::hex;
 
     struct TempDir {
         path: PathBuf,
@@ -598,10 +599,10 @@ mod tests {
         let repo = Repo::new("julien-c/dummy-unknown".to_string(), RepoType::Model);
         let downloaded_path = api.download(&repo, "config.json").await.unwrap();
         assert!(downloaded_path.exists());
-        let val = digest(std::fs::read(&*downloaded_path).unwrap());
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
         assert_eq!(
-            val,
-            "b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32"
+            val[..],
+            hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
         );
 
         // Make sure the file is now seeable without connection
@@ -627,10 +628,10 @@ mod tests {
             .await
             .unwrap();
         assert!(downloaded_path.exists());
-        let val = digest(std::fs::read(&*downloaded_path).unwrap());
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
         assert_eq!(
-            val,
-            "59ce09415ad8aa45a9e34f88cec2548aeb9de9a73fcda9f6b33a86a065f32b90"
+            val[..],
+            hex!("59ce09415ad8aa45a9e34f88cec2548aeb9de9a73fcda9f6b33a86a065f32b90")
         )
     }
 
