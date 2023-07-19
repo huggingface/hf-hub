@@ -1,13 +1,5 @@
 #![deny(missing_docs)]
-//! This crates aims to emulate and be compatible with the
-//! [huggingface_hub](https://github.com/huggingface/huggingface_hub/) python package.
-//!
-//! compatible means the Api should reuse the same files skipping downloads if
-//! they are already present and whenever this crate downloads or modifies this cache
-//! it should be consistent with [huggingface_hub](https://github.com/huggingface/huggingface_hub/)
-//!
-//! At this time only a limited subset of the functionality is present, the goal is to add new
-//! features over time
+#![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 use std::io::Write;
 use std::path::PathBuf;
 
