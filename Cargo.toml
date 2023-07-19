@@ -41,7 +41,7 @@ native-tls = { version = "0.2.11", optional = true }
 [features]
 default = ["online"]
 online = ["dep:ureq", "dep:native-tls", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
-tokio = ["dep:tokio", "dep:futures", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
+tokio = ["dep:reqwest", "dep:tokio", "dep:futures", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
 
 [dev-dependencies]
 hex-literal = "0.4.1"
