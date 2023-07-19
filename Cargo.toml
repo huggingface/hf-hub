@@ -2,16 +2,21 @@
 name = "hf-hub"
 version = "0.1.0"
 edition = "2021"
-description = "Huggingface hub management utilities written in Rust"
 homepage = "https://github.com/huggingface/hf-hub"
+license = "Apache-2.0"
 documentation = "https://docs.rs/hf-hub"
 repository = "https://github.com/huggingface/hf-hub"
 readme = "README.md"
-
 keywords = [
     "huggingface",
     "hf",
+    "hub",
+    "machine-learning"
 ]
+description = """
+This crates aims ease the interaction with [huggingface](https://huggingface.co/) 
+It aims to be compatible with [huggingface_hub](https://github.com/huggingface/huggingface_hub/) python package, but only implements a smaller subset of functions.
+"""
 
 [lib]
 crate-type = ["dylib"]
