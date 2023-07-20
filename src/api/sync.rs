@@ -1,4 +1,4 @@
-use crate::Error as HfHubError;
+use crate::Error;
 use crate::{Cache, Repo};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -14,9 +14,7 @@ use std::collections::HashMap;
 // };
 use serde::Deserialize;
 use std::io::{Seek, SeekFrom, Write};
-use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
-use thiserror::Error;
 use ureq::Agent;
 
 /// Current version (used in user-agent)
@@ -30,7 +28,7 @@ const LOCATION: &str = "Location";
 const USER_AGENT: &str = "User-Agent";
 const AUTHORIZATION: &str = "Authorization";
 type HeaderMap = HashMap<&'static str, String>;
-type HeaderName = &'static str;
+pub(crate) type HeaderName = &'static str;
 
 /// Simple wrapper over [`ureq::Agent`] to include default headers
 #[derive(Clone)]
@@ -51,34 +49,6 @@ impl HeaderAgent {
         }
         request
     }
-}
-
-#[derive(Debug, Error)]
-/// All errors the API can throw
-pub enum ApiError {
-    /// Api expects certain header to be present in the results to derive some information
-    #[error("Header {0} is missing")]
-    MissingHeader(HeaderName),
-
-    /// The header exists, but the value is not conform to what the Api expects.
-    #[error("Header {0} is invalid")]
-    InvalidHeader(HeaderName),
-
-    /// Error in the request
-    #[error("request error: {0}")]
-    Request(#[from] ureq::Error),
-
-    /// Error parsing some range value
-    #[error("Cannot parse int")]
-    ParseInt(#[from] ParseIntError),
-
-    /// I/O Error
-    #[error("I/O error {0}")]
-    Io(#[from] std::io::Error),
-
-    /// We tried to download chunk too many times
-    #[error("Too many retries: {0}")]
-    TooManyRetries(Box<ApiError>),
 }
 
 /// Siblings are simplified file descriptions of remote files on the hub
@@ -167,7 +137,7 @@ impl ApiBuilder {
         self
     }
 
-    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
+    fn build_headers(&self) -> Result<HeaderMap, Error> {
         let mut headers = HeaderMap::new();
         let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
         headers.insert(USER_AGENT, user_agent);
@@ -178,7 +148,7 @@ impl ApiBuilder {
     }
 
     /// Consumes the builder and buids the final [`Api`]
-    pub fn build(self) -> Result<Api, HfHubError> {
+    pub fn build(self) -> Result<Api, Error> {
         let headers = self.build_headers()?;
         let client = HeaderAgent::new(ureq::builder().build(), headers.clone());
         let no_redirect_client = HeaderAgent::new(ureq::builder().redirects(0).build(), headers);
@@ -291,7 +261,7 @@ fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
 
 impl Api {
     /// Creates a default Api, for Api options See [`ApiBuilder`]
-    pub fn new() -> Result<Self, HfHubError> {
+    pub fn new() -> Result<Self, Error> {
         ApiBuilder::new().build()
     }
 
@@ -319,7 +289,7 @@ impl Api {
         &self.client
     }
 
-    fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
+    fn metadata(&self, url: &str) -> Result<Metadata, Error> {
         let response = self
             .no_redirect_client
             .get(url)
@@ -334,13 +304,13 @@ impl Api {
             Some(etag) => etag,
             None => response
                 .header(&header_etag)
-                .ok_or(ApiError::MissingHeader(header_etag))?,
+                .ok_or(Error::MissingHeader(header_etag))?,
         };
         // Cleaning extra quotes
         let etag = etag.to_string().replace('"', "");
         let commit_hash = response
             .header(&header_commit)
-            .ok_or(ApiError::MissingHeader(header_commit))?
+            .ok_or(Error::MissingHeader(header_commit))?
             .to_string();
 
         // The response was redirected o S3 most likely which will
@@ -357,12 +327,12 @@ impl Api {
         };
         let content_range = response
             .header(CONTENT_RANGE)
-            .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?;
+            .ok_or(Error::MissingHeader(CONTENT_RANGE))?;
 
         let size = content_range
             .split('/')
             .last()
-            .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
+            .ok_or(Error::InvalidHeader(CONTENT_RANGE))?
             .parse()?;
         Ok(Metadata {
             commit_hash,
@@ -376,7 +346,7 @@ impl Api {
         url: &str,
         length: usize,
         progressbar: Option<ProgressBar>,
-    ) -> Result<PathBuf, ApiError> {
+    ) -> Result<PathBuf, Error> {
         let filename = temp_filename();
 
         // Create the file and set everything properly
@@ -410,7 +380,7 @@ impl Api {
                             chunk = Self::download_chunk(&client, &url, &filename, start, stop);
                             i += 1;
                             if i > max_retries {
-                                return Err(ApiError::TooManyRetries(dlerr.into()));
+                                return Err(Error::TooManyRetries(dlerr.into()));
                             }
                         }
                     }
@@ -423,8 +393,7 @@ impl Api {
             })
         });
 
-        let results: Result<Vec<()>, ApiError> =
-            handles.into_iter().flat_map(|h| h.join()).collect();
+        let results: Result<Vec<()>, Error> = handles.into_iter().flat_map(|h| h.join()).collect();
 
         results?;
         if let Some(p) = progressbar {
@@ -439,7 +408,7 @@ impl Api {
         filename: &PathBuf,
         start: usize,
         stop: usize,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(), Error> {
         // Process each socket concurrently.
         let range = format!("bytes={start}-{stop}");
         let mut file = std::fs::OpenOptions::new().write(true).open(filename)?;
@@ -468,7 +437,7 @@ impl Api {
     /// let api = ApiBuilder::new().build().unwrap();
     /// let repo = Repo::model("gpt2".to_string());
     /// let local_filename = api.get(&repo, "model.safetensors").unwrap();
-    pub fn get(&self, repo: &Repo, filename: &str) -> Result<PathBuf, HfHubError> {
+    pub fn get(&self, repo: &Repo, filename: &str) -> Result<PathBuf, Error> {
         if let Some(path) = self.cache.get(repo, filename) {
             Ok(path)
         } else {
@@ -486,12 +455,12 @@ impl Api {
     /// let repo = Repo::model("gpt2".to_string());
     /// let local_filename = api.download(&repo, "model.safetensors").unwrap();
     /// ```
-    pub fn download(&self, repo: &Repo, filename: &str) -> Result<PathBuf, HfHubError> {
+    pub fn download(&self, repo: &Repo, filename: &str) -> Result<PathBuf, Error> {
         let url = self.url(repo, filename);
         let metadata = self.metadata(&url)?;
 
         let blob_path = self.cache.blob_path(repo, &metadata.etag);
-        std::fs::create_dir_all(blob_path.parent().unwrap()).map_err(ApiError::Io)?;
+        std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
         let progressbar = if self.progress {
             let progress = ProgressBar::new(metadata.size as u64);
@@ -517,18 +486,16 @@ impl Api {
 
         if std::fs::rename(&tmp_filename, &blob_path).is_err() {
             // Renaming may fail if locations are different mount points
-            std::fs::File::create(&blob_path).map_err(ApiError::Io)?;
-            std::fs::copy(tmp_filename, &blob_path).map_err(ApiError::Io)?;
+            std::fs::File::create(&blob_path)?;
+            std::fs::copy(tmp_filename, &blob_path)?;
         }
 
         let mut pointer_path = self.cache.pointer_path(repo, &metadata.commit_hash);
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
-        symlink_or_rename(&blob_path, &pointer_path).map_err(ApiError::Io)?;
-        self.cache
-            .create_ref(repo, &metadata.commit_hash)
-            .map_err(ApiError::Io)?;
+        symlink_or_rename(&blob_path, &pointer_path)?;
+        self.cache.create_ref(repo, &metadata.commit_hash)?;
 
         Ok(pointer_path)
     }
@@ -540,11 +507,11 @@ impl Api {
     /// let repo = Repo::model("gpt2".to_string());
     /// api.info(&repo);
     /// ```
-    pub fn info(&self, repo: &Repo) -> Result<ModelInfo, HfHubError> {
+    pub fn info(&self, repo: &Repo) -> Result<ModelInfo, Error> {
         let url = format!("{}/api/{}", self.endpoint, repo.api_url());
-        let response = self.client.get(&url).call().map_err(ApiError::Request)?;
+        let response = self.client.get(&url).call()?;
 
-        let model_info = response.into_json().map_err(ApiError::Io)?;
+        let model_info = response.into_json()?;
 
         Ok(model_info)
     }

@@ -23,6 +23,7 @@ It aims to be compatible with [huggingface_hub](https://github.com/huggingface/h
 
 [dependencies]
 dirs = "5.0.1"
+thiserror = "1"
 rand = {version = "0.8.5", optional = true}
 reqwest = { version = "0.11.18", optional = true, features = ["json"] }
 serde = { version = "1.0.171", features = ["derive"] , optional = true}
@@ -31,14 +32,13 @@ indicatif = { version = "0.17.5", optional = true}
 num_cpus = { version = "1.15.0", optional = true}
 tokio = { version = "1.29.1", optional = true, features = ["fs", "macros"] }
 futures = { version = "0.3.28", optional = true}
-thiserror = { version = "1.0.43", optional = true }
 ureq = { version = "2.7.1", optional = true, features = ["native-tls", "json"] }
 native-tls = { version = "0.2.11", optional = true }
 
 [features]
-default = ["online"]
-online = ["dep:ureq", "dep:native-tls", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
-tokio = ["dep:reqwest", "dep:tokio", "dep:futures", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
+default = []
+sync = ["dep:ureq", "dep:native-tls", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus"]
+tokio = ["dep:reqwest", "dep:tokio", "dep:futures", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus"]
 
 [dev-dependencies]
 hex-literal = "0.4.1"

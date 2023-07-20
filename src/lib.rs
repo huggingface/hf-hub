@@ -1,25 +1,76 @@
 #![deny(missing_docs)]
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 use std::io::Write;
+use std::num::ParseIntError;
 use std::path::PathBuf;
-use thiserror::Error;
 
 /// The actual Api to interact with the hub.
-#[cfg(feature = "online")]
 pub mod api;
 
 /// hf-hub's error type
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Error from the sync API
-    #[cfg(feature = "online")]
-    #[error("online API error: {0}")]
-    Online(#[from] api::sync::ApiError),
+    /// I/O Error
+    #[error("I/O error {0}")]
+    Io(#[from] std::io::Error),
 
-    /// Error from the tokio API
+    /// Error parsing some range value
+    #[error("Cannot parse int")]
+    ParseInt(#[from] ParseIntError),
+
+    /// We tried to download chunk too many times
+    #[error("Too many retries: {0}")]
+    TooManyRetries(Box<Error>),
+
+    /// The header exists, but the value is not conform to what the Api expects.
+    #[cfg(feature = "sync")]
+    #[error("Header {0} is invalid")]
+    InvalidHeader(api::sync::HeaderName),
+
+    /// Api expects certain header to be present in the results to derive some information
+    #[cfg(feature = "sync")]
+    #[error("Header {0} is missing")]
+    MissingHeader(api::sync::HeaderName),
+
+    /// Error in the request
+    #[cfg(feature = "sync")]
+    #[error("request error: {0}")]
+    Request(#[from] ureq::Error),
+
+    /// Semaphore cannot be acquired
     #[cfg(feature = "tokio")]
-    #[error("tokio API error: {0}")]
-    Tokio(#[from] api::tokio::ApiError),
+    #[error("Acquire: {0}")]
+    Acquire(#[from] tokio::sync::AcquireError),
+
+    /// The header exists, but the value is not conform to what the Api expects.
+    #[cfg(feature = "tokio")]
+    #[error("Header {0} is invalid")]
+    InvalidHeader(reqwest::header::HeaderName),
+
+    /// The value cannot be used as a header during request header construction
+    #[cfg(feature = "tokio")]
+    #[error("Invalid header value {0}")]
+    InvalidHeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+
+    /// Api expects certain header to be present in the results to derive some information
+    #[cfg(feature = "tokio")]
+    #[error("Header {0} is missing")]
+    MissingHeader(reqwest::header::HeaderName),
+
+    /// Error in the request
+    #[cfg(feature = "tokio")]
+    #[error("request error: {0}")]
+    Request(#[from] reqwest::Error),
+
+    /// The header value is not valid utf-8
+    #[cfg(feature = "tokio")]
+    #[error("header value is not a string")]
+    ToStr(#[from] reqwest::header::ToStrError),
+
+    /// Semaphore cannot be acquired
+    #[cfg(feature = "tokio")]
+    #[error("Try acquire: {0}")]
+    TryAcquire(#[from] tokio::sync::TryAcquireError),
 }
 
 /// The type of repo to interact with
@@ -84,7 +135,7 @@ impl Cache {
         Ok(())
     }
 
-    #[cfg(feature = "online")]
+    #[cfg(any(feature = "sync", feature = "tokio"))]
     pub(crate) fn blob_path(&self, repo: &Repo, etag: &str) -> PathBuf {
         let mut blob_path = self.path.clone();
         blob_path.push(repo.folder_name());
@@ -172,7 +223,7 @@ impl Repo {
     }
 
     /// The actual URL part of the repo
-    #[cfg(feature = "online")]
+    #[cfg(any(feature = "sync", feature = "tokio"))]
     pub fn url(&self) -> String {
         match self.repo_type {
             RepoType::Model => self.repo_id.to_string(),
@@ -186,13 +237,13 @@ impl Repo {
     }
 
     /// Revision needs to be url escaped before being used in a URL
-    #[cfg(feature = "online")]
+    #[cfg(any(feature = "sync", feature = "tokio"))]
     pub fn url_revision(&self) -> String {
         self.revision.replace('/', "%2F")
     }
 
     /// Used to compute the repo's url part when accessing the metadata of the repo
-    #[cfg(feature = "online")]
+    #[cfg(any(feature = "sync", feature = "tokio"))]
     pub fn api_url(&self) -> String {
         let prefix = match self.repo_type {
             RepoType::Model => "models",

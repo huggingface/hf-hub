@@ -1,71 +1,25 @@
-use crate::Error as HfHubError;
+use crate::Error;
 use crate::{Cache, Repo};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use reqwest::{
     header::{
-        HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
-        CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
+        HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_RANGE, LOCATION, RANGE,
+        USER_AGENT,
     },
     redirect::Policy,
-    Client, Error as ReqwestError,
+    Client,
 };
 use serde::Deserialize;
-use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use thiserror::Error;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
-use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
+use tokio::sync::Semaphore;
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
-
-#[derive(Debug, Error)]
-/// All errors the API can throw
-pub enum ApiError {
-    /// Api expects certain header to be present in the results to derive some information
-    #[error("Header {0} is missing")]
-    MissingHeader(HeaderName),
-
-    /// The header exists, but the value is not conform to what the Api expects.
-    #[error("Header {0} is invalid")]
-    InvalidHeader(HeaderName),
-
-    /// The value cannot be used as a header during request header construction
-    #[error("Invalid header value {0}")]
-    InvalidHeaderValue(#[from] InvalidHeaderValue),
-
-    /// The header value is not valid utf-8
-    #[error("header value is not a string")]
-    ToStr(#[from] ToStrError),
-
-    /// Error in the request
-    #[error("request error: {0}")]
-    Request(#[from] ReqwestError),
-
-    /// Error parsing some range value
-    #[error("Cannot parse int")]
-    ParseInt(#[from] ParseIntError),
-
-    /// I/O Error
-    #[error("I/O error {0}")]
-    Io(#[from] std::io::Error),
-
-    /// We tried to download chunk too many times
-    #[error("Too many retries: {0}")]
-    TooManyRetries(Box<ApiError>),
-
-    /// Semaphore cannot be acquired
-    #[error("Try acquire: {0}")]
-    TryAcquire(#[from] TryAcquireError),
-
-    /// Semaphore cannot be acquired
-    #[error("Acquire: {0}")]
-    Acquire(#[from] AcquireError),
-}
 
 /// Siblings are simplified file descriptions of remote files on the hub
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -155,7 +109,7 @@ impl ApiBuilder {
         self
     }
 
-    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
+    fn build_headers(&self) -> Result<HeaderMap, Error> {
         let mut headers = HeaderMap::new();
         let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
         headers.insert(USER_AGENT, HeaderValue::from_str(&user_agent)?);
@@ -169,17 +123,13 @@ impl ApiBuilder {
     }
 
     /// Consumes the builder and buids the final [`Api`]
-    pub fn build(self) -> Result<Api, HfHubError> {
+    pub fn build(self) -> Result<Api, Error> {
         let headers = self.build_headers()?;
-        let client = Client::builder()
-            .default_headers(headers.clone())
-            .build()
-            .map_err(ApiError::Request)?;
+        let client = Client::builder().default_headers(headers.clone()).build()?;
         let no_redirect_client = Client::builder()
             .redirect(Policy::none())
             .default_headers(headers)
-            .build()
-            .map_err(ApiError::Request)?;
+            .build()?;
         Ok(Api {
             endpoint: self.endpoint,
             url_template: self.url_template,
@@ -291,7 +241,7 @@ fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
 
 impl Api {
     /// Creates a default Api, for Api options See [`ApiBuilder`]
-    pub fn new() -> Result<Self, HfHubError> {
+    pub fn new() -> Result<Self, Error> {
         ApiBuilder::new().build()
     }
 
@@ -319,14 +269,13 @@ impl Api {
         &self.client
     }
 
-    async fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
+    async fn metadata(&self, url: &str) -> Result<Metadata, Error> {
         let response = self
             .no_redirect_client
             .get(url)
             .header(RANGE, "bytes=0-0")
             .send()
-            .await
-            .map_err(ApiError::Request)?;
+            .await?;
         let response = response.error_for_status()?;
         let headers = response.headers();
         let header_commit = HeaderName::from_static("x-repo-commit");
@@ -337,13 +286,13 @@ impl Api {
             Some(etag) => etag,
             None => headers
                 .get(&header_etag)
-                .ok_or(ApiError::MissingHeader(header_etag))?,
+                .ok_or(Error::MissingHeader(header_etag))?,
         };
         // Cleaning extra quotes
         let etag = etag.to_str()?.to_owned().replace('"', "");
         let commit_hash = headers
             .get(&header_commit)
-            .ok_or(ApiError::MissingHeader(header_commit))?
+            .ok_or(Error::MissingHeader(header_commit))?
             .to_str()?
             .to_owned();
 
@@ -361,13 +310,13 @@ impl Api {
         let headers = response.headers();
         let content_range = headers
             .get(CONTENT_RANGE)
-            .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?
+            .ok_or(Error::MissingHeader(CONTENT_RANGE))?
             .to_str()?;
 
         let size = content_range
             .split('/')
             .last()
-            .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
+            .ok_or(Error::InvalidHeader(CONTENT_RANGE))?
             .parse()?;
         Ok(Metadata {
             commit_hash,
@@ -381,7 +330,7 @@ impl Api {
         url: &str,
         length: usize,
         progressbar: Option<ProgressBar>,
-    ) -> Result<PathBuf, ApiError> {
+    ) -> Result<PathBuf, Error> {
         let mut handles = vec![];
         let semaphore = Arc::new(Semaphore::new(self.max_files));
         let parallel_failures_semaphore = Arc::new(Semaphore::new(self.parallel_failures));
@@ -389,11 +338,9 @@ impl Api {
 
         // Create the file and set everything properly
         tokio::fs::File::create(&filename)
-            .await
-            .map_err(ApiError::Io)?
+            .await?
             .set_len(length as u64)
-            .await
-            .map_err(ApiError::Io)?;
+            .await?;
 
         let chunk_size = self.chunk_size;
         for start in (0..length).step_by(chunk_size) {
@@ -402,11 +349,7 @@ impl Api {
             let client = self.client.clone();
 
             let stop = std::cmp::min(start + chunk_size - 1, length);
-            let permit = semaphore
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(ApiError::Acquire)?;
+            let permit = semaphore.clone().acquire_owned().await?;
             let parallel_failures = self.parallel_failures;
             let max_retries = self.max_retries;
             let parallel_failures_semaphore = parallel_failures_semaphore.clone();
@@ -426,7 +369,7 @@ impl Api {
                         chunk = Self::download_chunk(&client, &url, &filename, start, stop).await;
                         i += 1;
                         if i > max_retries {
-                            return Err(ApiError::TooManyRetries(dlerr.into()));
+                            return Err(Error::TooManyRetries(dlerr.into()));
                         }
                         drop(parallel_failure_permit);
                     }
@@ -440,9 +383,9 @@ impl Api {
         }
 
         // Output the chained result
-        let results: Vec<Result<Result<(), ApiError>, tokio::task::JoinError>> =
+        let results: Vec<Result<Result<(), Error>, tokio::task::JoinError>> =
             futures::future::join_all(handles).await;
-        let results: Result<(), ApiError> = results.into_iter().flatten().collect();
+        let results: Result<(), Error> = results.into_iter().flatten().collect();
         results?;
         if let Some(p) = progressbar {
             p.finish()
@@ -456,7 +399,7 @@ impl Api {
         filename: &PathBuf,
         start: usize,
         stop: usize,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(), Error> {
         // Process each socket concurrently.
         let range = format!("bytes={start}-{stop}");
         let mut file = tokio::fs::OpenOptions::new()
@@ -484,7 +427,7 @@ impl Api {
     /// let repo = Repo::model("gpt2".to_string());
     /// let local_filename = api.get(&repo, "model.safetensors").await.unwrap();
     /// # })
-    pub async fn get(&self, repo: &Repo, filename: &str) -> Result<PathBuf, HfHubError> {
+    pub async fn get(&self, repo: &Repo, filename: &str) -> Result<PathBuf, Error> {
         if let Some(path) = self.cache.get(repo, filename) {
             Ok(path)
         } else {
@@ -504,12 +447,12 @@ impl Api {
     /// let local_filename = api.download(&repo, "model.safetensors").await.unwrap();
     /// # })
     /// ```
-    pub async fn download(&self, repo: &Repo, filename: &str) -> Result<PathBuf, HfHubError> {
+    pub async fn download(&self, repo: &Repo, filename: &str) -> Result<PathBuf, Error> {
         let url = self.url(repo, filename);
         let metadata = self.metadata(&url).await?;
 
         let blob_path = self.cache.blob_path(repo, &metadata.etag);
-        std::fs::create_dir_all(blob_path.parent().unwrap()).map_err(ApiError::Io)?;
+        std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
         let progressbar = if self.progress {
             let progress = ProgressBar::new(metadata.size as u64);
@@ -537,20 +480,16 @@ impl Api {
 
         if tokio::fs::rename(&tmp_filename, &blob_path).await.is_err() {
             // Renaming may fail if locations are different mount points
-            std::fs::File::create(&blob_path).map_err(ApiError::Io)?;
-            tokio::fs::copy(tmp_filename, &blob_path)
-                .await
-                .map_err(ApiError::Io)?;
+            std::fs::File::create(&blob_path)?;
+            tokio::fs::copy(tmp_filename, &blob_path).await?;
         }
 
         let mut pointer_path = self.cache.pointer_path(repo, &metadata.commit_hash);
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
-        symlink_or_rename(&blob_path, &pointer_path).map_err(ApiError::Io)?;
-        self.cache
-            .create_ref(repo, &metadata.commit_hash)
-            .map_err(ApiError::Io)?;
+        symlink_or_rename(&blob_path, &pointer_path)?;
+        self.cache.create_ref(repo, &metadata.commit_hash)?;
 
         Ok(pointer_path)
     }
@@ -564,17 +503,12 @@ impl Api {
     /// api.info(&repo);
     /// # })
     /// ```
-    pub async fn info(&self, repo: &Repo) -> Result<ModelInfo, HfHubError> {
+    pub async fn info(&self, repo: &Repo) -> Result<ModelInfo, Error> {
         let url = format!("{}/api/{}", self.endpoint, repo.api_url());
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(ApiError::Request)?;
-        let response = response.error_for_status().map_err(ApiError::Request)?;
+        let response = self.client.get(url).send().await?;
+        let response = response.error_for_status()?;
 
-        let model_info = response.json().await.map_err(ApiError::Request)?;
+        let model_info = response.json().await?;
 
         Ok(model_info)
     }
