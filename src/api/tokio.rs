@@ -111,7 +111,7 @@ impl ApiBuilder {
     pub fn new() -> Self {
         let cache = Cache::default();
         let mut token_filename = cache.path().clone();
-        token_filename.push(".token");
+        token_filename.push("token");
         let token = match std::fs::read_to_string(token_filename) {
             Ok(token_content) => {
                 let token_content = token_content.trim();
@@ -148,6 +148,12 @@ impl ApiBuilder {
     /// Changes the location of the cache directory. Defaults is `~/.cache/huggingface/`.
     pub fn with_cache_dir(mut self, cache_dir: PathBuf) -> Self {
         self.cache = Cache::new(cache_dir);
+        self
+    }
+
+    /// Sets the token to be used in the API
+    pub fn with_token(mut self, token: Option<String>) -> Self {
+        self.token = token;
         self
     }
 
