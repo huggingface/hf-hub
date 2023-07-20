@@ -1,3 +1,4 @@
+use crate::Error as HfHubError;
 use crate::{Cache, Repo};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -18,34 +19,35 @@ use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 use ureq::Agent;
 
-/// Current version (used in user-agent)
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
+/// Current version (used in user-agent)
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const RANGE: &str = "Range";
+const AUTHORIZATION: &str = "Authorization";
 const CONTENT_RANGE: &str = "Content-Range";
 const LOCATION: &str = "Location";
+const RANGE: &str = "Range";
 const USER_AGENT: &str = "User-Agent";
-const AUTHORIZATION: &str = "Authorization";
+
 type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
 
 /// Simple wrapper over [`ureq::Agent`] to include default headers
 #[derive(Clone)]
-pub struct HeaderAgent{
+pub struct HeaderAgent {
     agent: Agent,
     headers: HeaderMap,
 }
 
-impl HeaderAgent{
-    fn new(agent: Agent, headers:HeaderMap) -> Self{
-        Self{agent, headers}
+impl HeaderAgent {
+    fn new(agent: Agent, headers: HeaderMap) -> Self {
+        Self { agent, headers }
     }
 
-    fn get(&self, url: &str) -> ureq::Request{
+    fn get(&self, url: &str) -> ureq::Request {
         let mut request = self.agent.get(url);
-        for (header, value) in &self.headers{
+        for (header, value) in &self.headers {
             request = request.set(header, &value);
         }
         request
@@ -55,33 +57,25 @@ impl HeaderAgent{
 #[derive(Debug, Error)]
 /// All errors the API can throw
 pub enum ApiError {
-    /// Api expects certain header to be present in the results to derive some information
-    #[error("Header {0} is missing")]
-    MissingHeader(HeaderName),
-
     /// The header exists, but the value is not conform to what the Api expects.
     #[error("Header {0} is invalid")]
     InvalidHeader(HeaderName),
 
-    // /// The value cannot be used as a header during request header construction
-    // #[error("Invalid header value {0}")]
-    // InvalidHeaderValue(#[from] InvalidHeaderValue),
+    /// I/O Error
+    #[error("I/O error {0}")]
+    Io(#[from] std::io::Error),
 
-    // /// The header value is not valid utf-8
-    // #[error("header value is not a string")]
-    // ToStr(#[from] ToStrError),
-
-    /// Error in the request
-    #[error("request error: {0}")]
-    RequestError(#[from] ureq::Error),
+    /// Api expects certain header to be present in the results to derive some information
+    #[error("Header {0} is missing")]
+    MissingHeader(HeaderName),
 
     /// Error parsing some range value
     #[error("Cannot parse int")]
-    ParseIntError(#[from] ParseIntError),
+    ParseInt(#[from] ParseIntError),
 
-    /// I/O Error
-    #[error("I/O error {0}")]
-    IoError(#[from] std::io::Error),
+    /// Error in the request
+    #[error("request error: {0}")]
+    Request(#[from] ureq::Error),
 
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
@@ -117,6 +111,18 @@ pub struct ApiBuilder {
 impl Default for ApiBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl ApiBuilder {
+    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
+        let mut headers = HeaderMap::new();
+        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
+        headers.insert(USER_AGENT, user_agent);
+        if let Some(token) = &self.token {
+            headers.insert(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        Ok(headers)
     }
 }
 
@@ -174,26 +180,11 @@ impl ApiBuilder {
         self
     }
 
-    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
-        let mut headers = HeaderMap::new();
-        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
-        headers.insert(USER_AGENT, user_agent);
-        if let Some(token) = &self.token {
-            headers.insert(
-                AUTHORIZATION,
-                format!("Bearer {token}"),
-            );
-        }
-        Ok(headers)
-    }
-
     /// Consumes the builder and buids the final [`Api`]
-    pub fn build(self) -> Result<Api, ApiError> {
+    pub fn build(self) -> Result<Api, HfHubError> {
         let headers = self.build_headers()?;
         let client = HeaderAgent::new(ureq::builder().build(), headers.clone());
-        let no_redirect_client = HeaderAgent::new(ureq::builder()
-            .redirects(0)
-            .build(), headers);
+        let no_redirect_client = HeaderAgent::new(ureq::builder().redirects(0).build(), headers);
         Ok(Api {
             endpoint: self.endpoint,
             url_template: self.url_template,
@@ -302,35 +293,6 @@ fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
 }
 
 impl Api {
-    /// Creates a default Api, for Api options See [`ApiBuilder`]
-    pub fn new() -> Result<Self, ApiError> {
-        ApiBuilder::new().build()
-    }
-
-    /// Get the fully qualified URL of the remote filename
-    /// ```
-    /// # use hf_hub::{api::sync::Api, Repo};
-    /// let api = Api::new().unwrap();
-    /// let repo = Repo::model("gpt2".to_string());
-    /// let url = api.url(&repo, "model.safetensors");
-    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
-    /// ```
-    pub fn url(&self, repo: &Repo, filename: &str) -> String {
-        let endpoint = &self.endpoint;
-        let revision = &repo.url_revision();
-        self.url_template
-            .replace("{endpoint}", endpoint)
-            .replace("{repo_id}", &repo.url())
-            .replace("{revision}", revision)
-            .replace("{filename}", filename)
-    }
-
-    /// Get the underlying api client
-    /// Allows for lower level access
-    pub fn client(&self) -> &HeaderAgent {
-        &self.client
-    }
-
     fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let response = self
             .no_redirect_client
@@ -456,10 +418,7 @@ impl Api {
         let range = format!("bytes={start}-{stop}");
         let mut file = std::fs::OpenOptions::new().write(true).open(filename)?;
         file.seek(SeekFrom::Start(start as u64))?;
-        let response = client
-            .get(url)
-            .set(RANGE, &range)
-            .call()?;
+        let response = client.get(url).set(RANGE, &range).call()?;
 
         const MAX: usize = 4096;
         let mut buffer: [u8; MAX] = [0; MAX];
@@ -475,6 +434,37 @@ impl Api {
         // file.write_all(&content)?;
         Ok(())
     }
+}
+
+impl Api {
+    /// Creates a default Api, for Api options See [`ApiBuilder`]
+    pub fn new() -> Result<Self, HfHubError> {
+        ApiBuilder::new().build()
+    }
+
+    /// Get the fully qualified URL of the remote filename
+    /// ```
+    /// # use hf_hub::{api::sync::Api, Repo};
+    /// let api = Api::new().unwrap();
+    /// let repo = Repo::model("gpt2".to_string());
+    /// let url = api.url(&repo, "model.safetensors");
+    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
+    /// ```
+    pub fn url(&self, repo: &Repo, filename: &str) -> String {
+        let endpoint = &self.endpoint;
+        let revision = &repo.url_revision();
+        self.url_template
+            .replace("{endpoint}", endpoint)
+            .replace("{repo_id}", &repo.url())
+            .replace("{revision}", revision)
+            .replace("{filename}", filename)
+    }
+
+    /// Get the underlying api client
+    /// Allows for lower level access
+    pub fn client(&self) -> &HeaderAgent {
+        &self.client
+    }
 
     /// This will attempt the fetch the file locally first, then [`Api.download`]
     /// if the file is not present.
@@ -483,7 +473,7 @@ impl Api {
     /// let api = ApiBuilder::new().build().unwrap();
     /// let repo = Repo::model("gpt2".to_string());
     /// let local_filename = api.get(&repo, "model.safetensors").unwrap();
-    pub fn get(&self, repo: &Repo, filename: &str) -> Result<PathBuf, ApiError> {
+    pub fn get(&self, repo: &Repo, filename: &str) -> Result<PathBuf, HfHubError> {
         if let Some(path) = self.cache.get(repo, filename) {
             Ok(path)
         } else {
@@ -501,12 +491,12 @@ impl Api {
     /// let repo = Repo::model("gpt2".to_string());
     /// let local_filename = api.download(&repo, "model.safetensors").unwrap();
     /// ```
-    pub fn download(&self, repo: &Repo, filename: &str) -> Result<PathBuf, ApiError> {
+    pub fn download(&self, repo: &Repo, filename: &str) -> Result<PathBuf, HfHubError> {
         let url = self.url(repo, filename);
         let metadata = self.metadata(&url)?;
 
         let blob_path = self.cache.blob_path(repo, &metadata.etag);
-        std::fs::create_dir_all(blob_path.parent().unwrap())?;
+        std::fs::create_dir_all(blob_path.parent().unwrap()).map_err(ApiError::Io)?;
 
         let progressbar = if self.progress {
             let progress = ProgressBar::new(metadata.size as u64);
@@ -532,16 +522,18 @@ impl Api {
 
         if std::fs::rename(&tmp_filename, &blob_path).is_err() {
             // Renaming may fail if locations are different mount points
-            std::fs::File::create(&blob_path)?;
-            std::fs::copy(tmp_filename, &blob_path)?;
+            std::fs::File::create(&blob_path).map_err(ApiError::Io)?;
+            std::fs::copy(tmp_filename, &blob_path).map_err(ApiError::Io)?;
         }
 
         let mut pointer_path = self.cache.pointer_path(repo, &metadata.commit_hash);
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
-        symlink_or_rename(&blob_path, &pointer_path)?;
-        self.cache.create_ref(repo, &metadata.commit_hash)?;
+        symlink_or_rename(&blob_path, &pointer_path).map_err(ApiError::Io)?;
+        self.cache
+            .create_ref(repo, &metadata.commit_hash)
+            .map_err(ApiError::Io)?;
 
         Ok(pointer_path)
     }
@@ -553,25 +545,23 @@ impl Api {
     /// let repo = Repo::model("gpt2".to_string());
     /// api.info(&repo);
     /// ```
-    pub fn info(&self, repo: &Repo) -> Result<ModelInfo, ApiError> {
+    pub fn info(&self, repo: &Repo) -> Result<ModelInfo, HfHubError> {
         let url = format!("{}/api/{}", self.endpoint, repo.api_url());
-        let response = self.client.get(&url).call()?;
+        let response = self.client.get(&url).call().map_err(ApiError::Request)?;
 
-        let model_info = response.into_json()?;
+        let model_info = response.into_json().map_err(ApiError::Io)?;
 
         Ok(model_info)
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::RepoType;
+    use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
     use sha2::{Digest, Sha256};
-    use hex_literal::hex;
-
 
     struct TempDir {
         path: PathBuf,

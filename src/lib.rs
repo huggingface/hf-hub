@@ -2,10 +2,25 @@
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 use std::io::Write;
 use std::path::PathBuf;
+use thiserror::Error;
 
 /// The actual Api to interact with the hub.
 #[cfg(feature = "online")]
 pub mod api;
+
+/// hf-hub's error type
+#[derive(Debug, Error)]
+pub enum Error {
+    /// Error from the sync API
+    #[cfg(feature = "online")]
+    #[error("online API error: {0}")]
+    Online(#[from] api::sync::ApiError),
+
+    /// Error from the async API
+    #[cfg(feature = "tokio")]
+    #[error("tokio API error: {0}")]
+    Tokio(#[from] api::tokio::ApiError),
+}
 
 /// The type of repo to interact with
 #[derive(Debug, Clone, Copy)]
