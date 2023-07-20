@@ -19,17 +19,16 @@ use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 use ureq::Agent;
 
-/// Current name (used in user-agent)
-const NAME: &str = env!("CARGO_PKG_NAME");
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Current name (used in user-agent)
+const NAME: &str = env!("CARGO_PKG_NAME");
 
-const AUTHORIZATION: &str = "Authorization";
+const RANGE: &str = "Range";
 const CONTENT_RANGE: &str = "Content-Range";
 const LOCATION: &str = "Location";
-const RANGE: &str = "Range";
 const USER_AGENT: &str = "User-Agent";
-
+const AUTHORIZATION: &str = "Authorization";
 type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
 
@@ -57,25 +56,25 @@ impl HeaderAgent {
 #[derive(Debug, Error)]
 /// All errors the API can throw
 pub enum ApiError {
+    /// Api expects certain header to be present in the results to derive some information
+    #[error("Header {0} is missing")]
+    MissingHeader(HeaderName),
+
     /// The header exists, but the value is not conform to what the Api expects.
     #[error("Header {0} is invalid")]
     InvalidHeader(HeaderName),
 
-    /// I/O Error
-    #[error("I/O error {0}")]
-    Io(#[from] std::io::Error),
-
-    /// Api expects certain header to be present in the results to derive some information
-    #[error("Header {0} is missing")]
-    MissingHeader(HeaderName),
+    /// Error in the request
+    #[error("request error: {0}")]
+    Request(#[from] ureq::Error),
 
     /// Error parsing some range value
     #[error("Cannot parse int")]
     ParseInt(#[from] ParseIntError),
 
-    /// Error in the request
-    #[error("request error: {0}")]
-    Request(#[from] ureq::Error),
+    /// I/O Error
+    #[error("I/O error {0}")]
+    Io(#[from] std::io::Error),
 
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
@@ -111,18 +110,6 @@ pub struct ApiBuilder {
 impl Default for ApiBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl ApiBuilder {
-    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
-        let mut headers = HeaderMap::new();
-        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
-        headers.insert(USER_AGENT, user_agent);
-        if let Some(token) = &self.token {
-            headers.insert(AUTHORIZATION, format!("Bearer {token}"));
-        }
-        Ok(headers)
     }
 }
 
@@ -178,6 +165,16 @@ impl ApiBuilder {
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
+    }
+
+    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
+        let mut headers = HeaderMap::new();
+        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
+        headers.insert(USER_AGENT, user_agent);
+        if let Some(token) = &self.token {
+            headers.insert(AUTHORIZATION, format!("Bearer {token}"));
+        }
+        Ok(headers)
     }
 
     /// Consumes the builder and buids the final [`Api`]
@@ -293,6 +290,35 @@ fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
 }
 
 impl Api {
+    /// Creates a default Api, for Api options See [`ApiBuilder`]
+    pub fn new() -> Result<Self, HfHubError> {
+        ApiBuilder::new().build()
+    }
+
+    /// Get the fully qualified URL of the remote filename
+    /// ```
+    /// # use hf_hub::{api::sync::Api, Repo};
+    /// let api = Api::new().unwrap();
+    /// let repo = Repo::model("gpt2".to_string());
+    /// let url = api.url(&repo, "model.safetensors");
+    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
+    /// ```
+    pub fn url(&self, repo: &Repo, filename: &str) -> String {
+        let endpoint = &self.endpoint;
+        let revision = &repo.url_revision();
+        self.url_template
+            .replace("{endpoint}", endpoint)
+            .replace("{repo_id}", &repo.url())
+            .replace("{revision}", revision)
+            .replace("{filename}", filename)
+    }
+
+    /// Get the underlying api client
+    /// Allows for lower level access
+    pub fn client(&self) -> &HeaderAgent {
+        &self.client
+    }
+
     fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let response = self
             .no_redirect_client
@@ -433,37 +459,6 @@ impl Api {
         }
         // file.write_all(&content)?;
         Ok(())
-    }
-}
-
-impl Api {
-    /// Creates a default Api, for Api options See [`ApiBuilder`]
-    pub fn new() -> Result<Self, HfHubError> {
-        ApiBuilder::new().build()
-    }
-
-    /// Get the fully qualified URL of the remote filename
-    /// ```
-    /// # use hf_hub::{api::sync::Api, Repo};
-    /// let api = Api::new().unwrap();
-    /// let repo = Repo::model("gpt2".to_string());
-    /// let url = api.url(&repo, "model.safetensors");
-    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
-    /// ```
-    pub fn url(&self, repo: &Repo, filename: &str) -> String {
-        let endpoint = &self.endpoint;
-        let revision = &repo.url_revision();
-        self.url_template
-            .replace("{endpoint}", endpoint)
-            .replace("{repo_id}", &repo.url())
-            .replace("{revision}", revision)
-            .replace("{filename}", filename)
-    }
-
-    /// Get the underlying api client
-    /// Allows for lower level access
-    pub fn client(&self) -> &HeaderAgent {
-        &self.client
     }
 
     /// This will attempt the fetch the file locally first, then [`Api.download`]

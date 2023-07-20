@@ -16,7 +16,7 @@ pub enum Error {
     #[error("online API error: {0}")]
     Online(#[from] api::sync::ApiError),
 
-    /// Error from the async API
+    /// Error from the tokio API
     #[cfg(feature = "tokio")]
     #[error("tokio API error: {0}")]
     Tokio(#[from] api::tokio::ApiError),

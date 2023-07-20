@@ -18,17 +18,17 @@ use thiserror::Error;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
 
-/// Current name (used in user-agent)
-const NAME: &str = env!("CARGO_PKG_NAME");
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Current name (used in user-agent)
+const NAME: &str = env!("CARGO_PKG_NAME");
 
 #[derive(Debug, Error)]
 /// All errors the API can throw
 pub enum ApiError {
-    /// Semaphore cannot be acquired
-    #[error("Acquire: {0}")]
-    Acquire(#[from] AcquireError),
+    /// Api expects certain header to be present in the results to derive some information
+    #[error("Header {0} is missing")]
+    MissingHeader(HeaderName),
 
     /// The header exists, but the value is not conform to what the Api expects.
     #[error("Header {0} is invalid")]
@@ -38,33 +38,33 @@ pub enum ApiError {
     #[error("Invalid header value {0}")]
     InvalidHeaderValue(#[from] InvalidHeaderValue),
 
-    /// I/O Error
-    #[error("I/O error {0}")]
-    Io(#[from] std::io::Error),
-
-    /// Api expects certain header to be present in the results to derive some information
-    #[error("Header {0} is missing")]
-    MissingHeader(HeaderName),
-
-    /// Error parsing some range value
-    #[error("Cannot parse int")]
-    ParseInt(#[from] ParseIntError),
+    /// The header value is not valid utf-8
+    #[error("header value is not a string")]
+    ToStr(#[from] ToStrError),
 
     /// Error in the request
     #[error("request error: {0}")]
     Request(#[from] ReqwestError),
 
+    /// Error parsing some range value
+    #[error("Cannot parse int")]
+    ParseInt(#[from] ParseIntError),
+
+    /// I/O Error
+    #[error("I/O error {0}")]
+    Io(#[from] std::io::Error),
+
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
 
-    /// The header value is not valid utf-8
-    #[error("header value is not a string")]
-    ToStr(#[from] ToStrError),
-
     /// Semaphore cannot be acquired
     #[error("Try acquire: {0}")]
     TryAcquire(#[from] TryAcquireError),
+
+    /// Semaphore cannot be acquired
+    #[error("Acquire: {0}")]
+    Acquire(#[from] AcquireError),
 }
 
 /// Siblings are simplified file descriptions of remote files on the hub
@@ -97,21 +97,6 @@ pub struct ApiBuilder {
 impl Default for ApiBuilder {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl ApiBuilder {
-    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
-        let mut headers = HeaderMap::new();
-        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
-        headers.insert(USER_AGENT, HeaderValue::from_str(&user_agent)?);
-        if let Some(token) = &self.token {
-            headers.insert(
-                AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {token}"))?,
-            );
-        }
-        Ok(headers)
     }
 }
 
@@ -168,6 +153,19 @@ impl ApiBuilder {
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
+    }
+
+    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
+        let mut headers = HeaderMap::new();
+        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
+        headers.insert(USER_AGENT, HeaderValue::from_str(&user_agent)?);
+        if let Some(token) = &self.token {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {token}"))?,
+            );
+        }
+        Ok(headers)
     }
 
     /// Consumes the builder and buids the final [`Api`]
@@ -292,6 +290,35 @@ fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
 }
 
 impl Api {
+    /// Creates a default Api, for Api options See [`ApiBuilder`]
+    pub fn new() -> Result<Self, HfHubError> {
+        ApiBuilder::new().build()
+    }
+
+    /// Get the fully qualified URL of the remote filename
+    /// ```
+    /// # use hf_hub::{api::tokio::Api, Repo};
+    /// let api = Api::new().unwrap();
+    /// let repo = Repo::model("gpt2".to_string());
+    /// let url = api.url(&repo, "model.safetensors");
+    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
+    /// ```
+    pub fn url(&self, repo: &Repo, filename: &str) -> String {
+        let endpoint = &self.endpoint;
+        let revision = &repo.url_revision();
+        self.url_template
+            .replace("{endpoint}", endpoint)
+            .replace("{repo_id}", &repo.url())
+            .replace("{revision}", revision)
+            .replace("{filename}", filename)
+    }
+
+    /// Get the underlying api client
+    /// Allows for lower level access
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
     async fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let response = self
             .no_redirect_client
@@ -446,37 +473,6 @@ impl Api {
         let content = response.bytes().await?;
         file.write_all(&content).await?;
         Ok(())
-    }
-}
-
-impl Api {
-    /// Creates a default Api, for Api options See [`ApiBuilder`]
-    pub fn new() -> Result<Self, HfHubError> {
-        ApiBuilder::new().build()
-    }
-
-    /// Get the fully qualified URL of the remote filename
-    /// ```
-    /// # use hf_hub::{api::tokio::Api, Repo};
-    /// let api = Api::new().unwrap();
-    /// let repo = Repo::model("gpt2".to_string());
-    /// let url = api.url(&repo, "model.safetensors");
-    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
-    /// ```
-    pub fn url(&self, repo: &Repo, filename: &str) -> String {
-        let endpoint = &self.endpoint;
-        let revision = &repo.url_revision();
-        self.url_template
-            .replace("{endpoint}", endpoint)
-            .replace("{repo_id}", &repo.url())
-            .replace("{revision}", revision)
-            .replace("{filename}", filename)
-    }
-
-    /// Get the underlying api client
-    /// Allows for lower level access
-    pub fn client(&self) -> &Client {
-        &self.client
     }
 
     /// This will attempt the fetch the file locally first, then [`Api.download`]
