@@ -1,3 +1,4 @@
+use crate::api::{RepoInfo, RepoSha};
 use crate::{Cache, Repo};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -9,7 +10,6 @@ use reqwest::{
     redirect::Policy,
     Client, Error as ReqwestError,
 };
-use serde::Deserialize;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -67,20 +67,6 @@ pub enum ApiError {
     // /// Semaphore cannot be acquired
     // #[error("Invalid Response: {0:?}")]
     // InvalidResponse(Response),
-}
-
-/// Siblings are simplified file descriptions of remote files on the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct Siblings {
-    /// The path within the repo.
-    pub rfilename: String,
-}
-
-/// The description of the repo given by the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct ModelInfo {
-    /// See [`Siblings`]
-    pub siblings: Vec<Siblings>,
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -551,7 +537,7 @@ impl Api {
     /// api.info(&repo);
     /// # })
     /// ```
-    pub async fn info(&self, repo: &Repo) -> Result<ModelInfo, ApiError> {
+    pub async fn info(&self, repo: &Repo) -> Result<RepoInfo, ApiError> {
         let url = format!("{}/api/{}", self.endpoint, repo.api_url());
         let response = self.client.get(url).send().await?;
         let response = response.error_for_status()?;
@@ -560,15 +546,52 @@ impl Api {
 
         Ok(model_info)
     }
+
+    /// Check if the [`Repo`]'s revision is the latest commit rev on main
+    /// ```no_run
+    /// # use hf_hub::{api::tokio::ApiBuilder, Repo, RepoType};
+    /// # tokio_test::block_on(async {
+    /// let api = ApiBuilder::new().build().unwrap();
+    /// let repo = Repo::with_revision(
+    ///     "mcpotato/42".to_owned(),
+    ///     RepoType::Model,
+    ///     "b161dce5978d64da247bedd293b0c55fb4adb949".to_owned(),
+    /// );
+    /// if api
+    ///     .is_main(&repo)
+    ///     .await
+    ///     .expect("api call to go through successfully")
+    /// {
+    ///     println!(
+    ///         "repo's revision ({}) is the latest on main",
+    ///         repo.revision()
+    ///     );
+    /// }
+    /// # })
+    /// ```
+    pub async fn is_main(&self, repo: &Repo) -> Result<bool, ApiError> {
+        let url = format!("{}/api/{}", self.endpoint, repo.api_url());
+        let repo_sha: RepoSha = self
+            .client
+            .get(&url)
+            .query(&[("expand[]", "sha")])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        Ok(repo_sha.sha == repo.revision)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RepoType;
+    use crate::{api::Siblings, RepoType};
+    use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
     use sha2::{Digest, Sha256};
-    use hex_literal::hex;
 
     struct TempDir {
         path: PathBuf,
@@ -652,12 +675,13 @@ mod tests {
         let repo = Repo::with_revision(
             "wikitext".to_string(),
             RepoType::Dataset,
-            "refs/convert/parquet".to_string(),
+            "2dd3f79917d431e9af1c81bfa96a575741774077".to_string(),
         );
         let model_info = api.info(&repo).await.unwrap();
         assert_eq!(
             model_info,
-            ModelInfo {
+            RepoInfo {
+                sha: "2dd3f79917d431e9af1c81bfa96a575741774077".to_owned(),
                 siblings: vec![
                     Siblings {
                         rfilename: ".gitattributes".to_string()
@@ -726,5 +750,23 @@ mod tests {
                 ],
             }
         )
+    }
+
+    /// XXX: this test may break eventually,
+    /// I'll choose a repo that shouldn't receive commits
+    #[tokio::test]
+    async fn is_main() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = Repo::with_revision(
+            "mcpotato/42".to_owned(),
+            RepoType::Model,
+            "b161dce5978d64da247bedd293b0c55fb4adb949".to_owned(),
+        );
+        assert!(api.is_main(&repo).await.unwrap());
     }
 }

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 //     redirect::Policy,
 //     Error as ReqwestError,
 // };
-use serde::Deserialize;
+use crate::api::{RepoInfo, RepoSha};
 use std::io::{Seek, SeekFrom, Write};
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
@@ -33,19 +33,19 @@ type HeaderName = &'static str;
 
 /// Simple wrapper over [`ureq::Agent`] to include default headers
 #[derive(Clone)]
-pub struct HeaderAgent{
+pub struct HeaderAgent {
     agent: Agent,
     headers: HeaderMap,
 }
 
-impl HeaderAgent{
-    fn new(agent: Agent, headers:HeaderMap) -> Self{
-        Self{agent, headers}
+impl HeaderAgent {
+    fn new(agent: Agent, headers: HeaderMap) -> Self {
+        Self { agent, headers }
     }
 
-    fn get(&self, url: &str) -> ureq::Request{
+    fn get(&self, url: &str) -> ureq::Request {
         let mut request = self.agent.get(url);
-        for (header, value) in &self.headers{
+        for (header, value) in &self.headers {
             request = request.set(header, &value);
         }
         request
@@ -70,7 +70,6 @@ pub enum ApiError {
     // /// The header value is not valid utf-8
     // #[error("header value is not a string")]
     // ToStr(#[from] ToStrError),
-
     /// Error in the request
     #[error("request error: {0}")]
     RequestError(#[from] ureq::Error),
@@ -86,20 +85,6 @@ pub enum ApiError {
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
-}
-
-/// Siblings are simplified file descriptions of remote files on the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct Siblings {
-    /// The path within the repo.
-    pub rfilename: String,
-}
-
-/// The description of the repo given by the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct ModelInfo {
-    /// See [`Siblings`]
-    pub siblings: Vec<Siblings>,
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -179,10 +164,7 @@ impl ApiBuilder {
         let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
         headers.insert(USER_AGENT, user_agent);
         if let Some(token) = &self.token {
-            headers.insert(
-                AUTHORIZATION,
-                format!("Bearer {token}"),
-            );
+            headers.insert(AUTHORIZATION, format!("Bearer {token}"));
         }
         Ok(headers)
     }
@@ -191,9 +173,7 @@ impl ApiBuilder {
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
         let client = HeaderAgent::new(ureq::builder().build(), headers.clone());
-        let no_redirect_client = HeaderAgent::new(ureq::builder()
-            .redirects(0)
-            .build(), headers);
+        let no_redirect_client = HeaderAgent::new(ureq::builder().redirects(0).build(), headers);
         Ok(Api {
             endpoint: self.endpoint,
             url_template: self.url_template,
@@ -456,10 +436,7 @@ impl Api {
         let range = format!("bytes={start}-{stop}");
         let mut file = std::fs::OpenOptions::new().write(true).open(filename)?;
         file.seek(SeekFrom::Start(start as u64))?;
-        let response = client
-            .get(url)
-            .set(RANGE, &range)
-            .call()?;
+        let response = client.get(url).set(RANGE, &range).call()?;
 
         const MAX: usize = 4096;
         let mut buffer: [u8; MAX] = [0; MAX];
@@ -553,25 +530,50 @@ impl Api {
     /// let repo = Repo::model("gpt2".to_string());
     /// api.info(&repo);
     /// ```
-    pub fn info(&self, repo: &Repo) -> Result<ModelInfo, ApiError> {
+    pub fn info(&self, repo: &Repo) -> Result<RepoInfo, ApiError> {
         let url = format!("{}/api/{}", self.endpoint, repo.api_url());
         let response = self.client.get(&url).call()?;
 
-        let model_info = response.into_json()?;
+        let repo_info = response.into_json()?;
 
-        Ok(model_info)
+        Ok(repo_info)
+    }
+
+    /// Check if the [`Repo`]'s revision is the latest commit rev on main
+    /// ```
+    /// use hf_hub::{api::sync::Api, Repo, RepoType};
+    /// let api = Api::new().unwrap();
+    /// let repo = Repo::with_revision(
+    ///     "mcpotato/42".to_owned(),
+    ///     RepoType::Model,
+    ///     "b161dce5978d64da247bedd293b0c55fb4adb949".to_owned(),
+    /// );
+    /// if api
+    ///     .is_main(&repo)
+    ///     .expect("api call to go through successfully")
+    /// {
+    ///     println!(
+    ///         "repo's revision ({}) is the latest on main",
+    ///         repo.revision()
+    ///     );
+    /// }
+    /// ```
+    pub fn is_main(&self, repo: &Repo) -> Result<bool, ApiError> {
+        let url = format!("{}/api/{}", self.endpoint, repo.api_url());
+        let response = self.client.get(&url).query("expand[]", "sha").call()?;
+        let repo_sha: RepoSha = response.into_json()?;
+
+        Ok(repo_sha.sha == repo.revision)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RepoType;
+    use crate::{api::Siblings, RepoType};
+    use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
     use sha2::{Digest, Sha256};
-    use hex_literal::hex;
-
 
     struct TempDir {
         path: PathBuf,
@@ -654,12 +656,13 @@ mod tests {
         let repo = Repo::with_revision(
             "wikitext".to_string(),
             RepoType::Dataset,
-            "refs/convert/parquet".to_string(),
+            "2dd3f79917d431e9af1c81bfa96a575741774077".to_string(),
         );
         let model_info = api.info(&repo).unwrap();
         assert_eq!(
             model_info,
-            ModelInfo {
+            RepoInfo {
+                sha: "2dd3f79917d431e9af1c81bfa96a575741774077".to_owned(),
                 siblings: vec![
                     Siblings {
                         rfilename: ".gitattributes".to_string()
@@ -728,5 +731,23 @@ mod tests {
                 ],
             }
         )
+    }
+
+    /// XXX: this test may break eventually,
+    /// I'll choose a repo that shouldn't receive commits
+    #[test]
+    fn is_main() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = Repo::with_revision(
+            "mcpotato/42".to_owned(),
+            RepoType::Model,
+            "b161dce5978d64da247bedd293b0c55fb4adb949".to_owned(),
+        );
+        assert!(api.is_main(&repo).unwrap());
     }
 }
