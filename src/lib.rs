@@ -85,6 +85,14 @@ impl Cache {
         pointer_path.push(commit_hash);
         pointer_path
     }
+
+    pub(crate) fn token_path(&self) -> PathBuf {
+        let mut path = self.path.clone();
+        // Remove `"hub"`
+        path.pop();
+        path.push("token");
+        path
+    }
 }
 
 impl Default for Cache {
@@ -185,5 +193,19 @@ impl Repo {
             RepoType::Space => "spaces",
         };
         format!("{prefix}/{}/revision/{}", self.repo_id, self.url_revision())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_path() {
+        let cache = Cache::default();
+        let token_path = cache.token_path().to_str().unwrap().to_string();
+        let n = "huggingface/token".len();
+
+        assert_eq!(&token_path[token_path.len() - n..], "huggingface/token");
     }
 }
