@@ -35,7 +35,7 @@ use hf_hub::api::sync::Api;
 
 let api = Api::new().unwrap();
 
-let repo = api.model("meta-llama/Llama-2-7b-hf".to_string());
+let repo = api.model("bert-base-uncased".to_string());
 let _filename = repo.get("config.json").unwrap();
 
 // filename  is now the local location within hf cache of the config.json file
