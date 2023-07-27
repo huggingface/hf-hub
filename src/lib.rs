@@ -97,16 +97,16 @@ impl Cache {
 
 impl Default for Cache {
     fn default() -> Self {
-        let path = match std::env::var("HF_HOME") {
+        let mut path = match std::env::var("HF_HOME") {
             Ok(home) => home.into(),
             Err(_) => {
                 let mut cache = dirs::home_dir().expect("Cache directory cannot be found");
                 cache.push(".cache");
                 cache.push("huggingface");
-                cache.push("hub");
                 cache
             }
         };
+        path.push("hub");
         Self::new(path)
     }
 }
