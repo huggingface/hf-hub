@@ -33,19 +33,19 @@ type HeaderName = &'static str;
 
 /// Simple wrapper over [`ureq::Agent`] to include default headers
 #[derive(Clone)]
-pub struct HeaderAgent{
+pub struct HeaderAgent {
     agent: Agent,
     headers: HeaderMap,
 }
 
-impl HeaderAgent{
-    fn new(agent: Agent, headers:HeaderMap) -> Self{
-        Self{agent, headers}
+impl HeaderAgent {
+    fn new(agent: Agent, headers: HeaderMap) -> Self {
+        Self { agent, headers }
     }
 
-    fn get(&self, url: &str) -> ureq::Request{
+    fn get(&self, url: &str) -> ureq::Request {
         let mut request = self.agent.get(url);
-        for (header, value) in &self.headers{
+        for (header, value) in &self.headers {
             request = request.set(header, &value);
         }
         request
@@ -70,7 +70,6 @@ pub enum ApiError {
     // /// The header value is not valid utf-8
     // #[error("header value is not a string")]
     // ToStr(#[from] ToStrError),
-
     /// Error in the request
     #[error("request error: {0}")]
     RequestError(#[from] ureq::Error),
@@ -128,8 +127,7 @@ impl ApiBuilder {
     /// ```
     pub fn new() -> Self {
         let cache = Cache::default();
-        let mut token_filename = cache.path().clone();
-        token_filename.push("token");
+        let token_filename = cache.token_path();
         let token = match std::fs::read_to_string(token_filename) {
             Ok(token_content) => {
                 let token_content = token_content.trim();
@@ -179,10 +177,7 @@ impl ApiBuilder {
         let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
         headers.insert(USER_AGENT, user_agent);
         if let Some(token) = &self.token {
-            headers.insert(
-                AUTHORIZATION,
-                format!("Bearer {token}"),
-            );
+            headers.insert(AUTHORIZATION, format!("Bearer {token}"));
         }
         Ok(headers)
     }
@@ -191,9 +186,7 @@ impl ApiBuilder {
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
         let client = HeaderAgent::new(ureq::builder().build(), headers.clone());
-        let no_redirect_client = HeaderAgent::new(ureq::builder()
-            .redirects(0)
-            .build(), headers);
+        let no_redirect_client = HeaderAgent::new(ureq::builder().redirects(0).build(), headers);
         Ok(Api {
             endpoint: self.endpoint,
             url_template: self.url_template,
@@ -456,10 +449,7 @@ impl Api {
         let range = format!("bytes={start}-{stop}");
         let mut file = std::fs::OpenOptions::new().write(true).open(filename)?;
         file.seek(SeekFrom::Start(start as u64))?;
-        let response = client
-            .get(url)
-            .set(RANGE, &range)
-            .call()?;
+        let response = client.get(url).set(RANGE, &range).call()?;
 
         const MAX: usize = 4096;
         let mut buffer: [u8; MAX] = [0; MAX];
@@ -563,15 +553,13 @@ impl Api {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::RepoType;
+    use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
     use sha2::{Digest, Sha256};
-    use hex_literal::hex;
-
 
     struct TempDir {
         path: PathBuf,

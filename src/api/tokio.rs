@@ -110,8 +110,7 @@ impl ApiBuilder {
     /// ```
     pub fn new() -> Self {
         let cache = Cache::default();
-        let mut token_filename = cache.path().clone();
-        token_filename.push("token");
+        let token_filename = cache.token_path();
         let token = match std::fs::read_to_string(token_filename) {
             Ok(token_content) => {
                 let token_content = token_content.trim();
@@ -566,9 +565,9 @@ impl Api {
 mod tests {
     use super::*;
     use crate::RepoType;
+    use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
     use sha2::{Digest, Sha256};
-    use hex_literal::hex;
 
     struct TempDir {
         path: PathBuf,
