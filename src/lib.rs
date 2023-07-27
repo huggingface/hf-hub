@@ -202,6 +202,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(target_os="windows"))]
     fn token_path() {
         let cache = Cache::default();
         let token_path = cache.token_path().to_str().unwrap().to_string();
@@ -210,6 +211,19 @@ mod tests {
         }else{
             let n = "huggingface/token".len();
             assert_eq!(&token_path[token_path.len() - n..], "huggingface/token");
+        }
+    }
+
+    #[test]
+    #[cfg(target_os="windows")]
+    fn token_path() {
+        let cache = Cache::default();
+        let token_path = cache.token_path().to_str().unwrap().to_string();
+        if let Ok(hf_home) = std::env::var("HF_HOME"){
+            assert_eq!(token_path, format!("{hf_home}\\token"));
+        }else{
+            let n = "huggingface/token".len();
+            assert_eq!(&token_path[token_path.len() - n..], "huggingface\\token");
         }
     }
 }
