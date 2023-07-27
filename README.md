@@ -31,10 +31,12 @@ cargo add hf-hub  # --features tokio
 Use the crate:
 
 ```rust
-let api = Api::new().unwrap()
+use hf_hub::api::sync::Api;
 
-let repo = api.model("meta-llama/Llama-2-7b-hf");
-let filename = api.get("config.json").unwrap();
+let api = Api::new().unwrap();
+
+let repo = api.model("meta-llama/Llama-2-7b-hf".to_string());
+let _filename = repo.get("config.json").unwrap();
 
 // filename  is now the local location within hf cache of the config.json file
 ```
