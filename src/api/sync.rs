@@ -11,7 +11,7 @@ use std::collections::HashMap;
 //     redirect::Policy,
 //     Error as ReqwestError,
 // };
-use serde::Deserialize;
+use super::RepoInfo;
 use std::io::{Seek, SeekFrom, Write};
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
@@ -85,20 +85,6 @@ pub enum ApiError {
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
-}
-
-/// Siblings are simplified file descriptions of remote files on the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct Siblings {
-    /// The path within the repo.
-    pub rfilename: String,
-}
-
-/// The description of the repo given by the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct ModelInfo {
-    /// See [`Siblings`]
-    pub siblings: Vec<Siblings>,
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -543,7 +529,7 @@ impl Api {
     /// let repo = Repo::model("gpt2".to_string());
     /// api.info(&repo);
     /// ```
-    pub fn info(&self, repo: &Repo) -> Result<ModelInfo, ApiError> {
+    pub fn info(&self, repo: &Repo) -> Result<RepoInfo, ApiError> {
         let url = format!("{}/api/{}", self.endpoint, repo.api_url());
         let response = self.client.get(&url).call()?;
 
@@ -556,6 +542,7 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::Siblings;
     use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
@@ -647,7 +634,8 @@ mod tests {
         let model_info = api.info(&repo).unwrap();
         assert_eq!(
             model_info,
-            ModelInfo {
+            RepoInfo {
+                sha: "2dd3f79917d431e9af1c81bfa96a575741774077".to_string(),
                 siblings: vec![
                     Siblings {
                         rfilename: ".gitattributes".to_string()
