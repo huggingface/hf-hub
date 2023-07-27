@@ -1,6 +1,6 @@
 use crate::{Cache, Repo};
 use indicatif::{ProgressBar, ProgressStyle};
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use rand::{distributions::Alphanumeric, Rng};
 use std::collections::HashMap;
 // use reqwest::{
 //     blocking::Agent,
@@ -12,7 +12,6 @@ use std::collections::HashMap;
 //     Error as ReqwestError,
 // };
 use super::RepoInfo;
-use std::io::{Seek, SeekFrom, Write};
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
@@ -93,9 +92,6 @@ pub struct ApiBuilder {
     cache: Cache,
     url_template: String,
     token: Option<String>,
-    chunk_size: usize,
-    parallel_failures: usize,
-    max_retries: usize,
     progress: bool,
 }
 
@@ -133,9 +129,6 @@ impl ApiBuilder {
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
-            chunk_size: 10_000_000,
-            parallel_failures: 0,
-            max_retries: 0,
             progress,
         }
     }
@@ -180,9 +173,6 @@ impl ApiBuilder {
             client,
 
             no_redirect_client,
-            chunk_size: self.chunk_size,
-            parallel_failures: self.parallel_failures,
-            max_retries: self.max_retries,
             progress: self.progress,
         })
     }
@@ -204,9 +194,6 @@ pub struct Api {
     cache: Cache,
     client: HeaderAgent,
     no_redirect_client: HeaderAgent,
-    chunk_size: usize,
-    parallel_failures: usize,
-    max_retries: usize,
     progress: bool,
 }
 
@@ -270,14 +257,6 @@ fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
     std::fs::rename(src, dst)?;
 
     Ok(())
-}
-
-fn jitter() -> usize {
-    thread_rng().gen_range(0..=500)
-}
-
-fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
-    (base_wait_time + n.pow(2) + jitter()).min(max)
 }
 
 impl Api {
@@ -367,95 +346,29 @@ impl Api {
     fn download_tempfile(
         &self,
         url: &str,
-        length: usize,
         progressbar: Option<ProgressBar>,
     ) -> Result<PathBuf, ApiError> {
         let filename = temp_filename();
 
         // Create the file and set everything properly
-        std::fs::File::create(&filename)?.set_len(length as u64)?;
+        let mut file = std::fs::File::create(&filename)?;
 
-        let chunk_size = self.chunk_size;
+        let response = self.client
+            .get(url)
+            .call()
+            .map_err(Box::new)?;
 
-        let n_chunks = (length + chunk_size - 1) / chunk_size;
-        let n_threads = num_cpus::get();
-        let chunks_per_thread = (n_chunks + n_threads - 1) / n_threads;
-        let handles = (0..n_threads).map(|thread_id| {
-            let url = url.to_string();
-            let filename = filename.clone();
-            let client = self.client.clone();
-            let parallel_failures = self.parallel_failures;
-            let max_retries = self.max_retries;
-            let progress = progressbar.clone();
-            std::thread::spawn(move || {
-                for chunk_id in chunks_per_thread * thread_id
-                    ..std::cmp::min(chunks_per_thread * (thread_id + 1), n_chunks)
-                {
-                    let start = chunk_id * chunk_size;
-                    let stop = std::cmp::min(start + chunk_size - 1, length);
-                    let mut chunk = Self::download_chunk(&client, &url, &filename, start, stop);
-                    let mut i = 0;
-                    if parallel_failures > 0 {
-                        while let Err(dlerr) = chunk {
-                            let wait_time = exponential_backoff(300, i, 10_000);
-                            std::thread::sleep(std::time::Duration::from_millis(wait_time as u64));
+        let mut reader = response.into_reader();
+        if let Some(p) = &progressbar{
+            reader = Box::new(p.wrap_read(reader));
+        }
 
-                            chunk = Self::download_chunk(&client, &url, &filename, start, stop);
-                            i += 1;
-                            if i > max_retries {
-                                return Err(ApiError::TooManyRetries(dlerr.into()));
-                            }
-                        }
-                    }
-                    if let Some(p) = &progress {
-                        p.inc((stop - start) as u64);
-                    }
-                    chunk?
-                }
-                Ok(())
-            })
-        });
+        std::io::copy(&mut reader, &mut file)?;
 
-        let results: Result<Vec<()>, ApiError> =
-            handles.into_iter().flat_map(|h| h.join()).collect();
-
-        results?;
         if let Some(p) = progressbar {
             p.finish()
         }
         Ok(filename)
-    }
-
-    fn download_chunk(
-        client: &HeaderAgent,
-        url: &str,
-        filename: &PathBuf,
-        start: usize,
-        stop: usize,
-    ) -> Result<(), ApiError> {
-        // Process each socket concurrently.
-        let range = format!("bytes={start}-{stop}");
-        let mut file = std::fs::OpenOptions::new().write(true).open(filename)?;
-        file.seek(SeekFrom::Start(start as u64))?;
-        let response = client
-            .get(url)
-            .set(RANGE, &range)
-            .call()
-            .map_err(Box::new)?;
-
-        const MAX: usize = 4096;
-        let mut buffer: [u8; MAX] = [0; MAX];
-        let mut reader = response.into_reader();
-        let mut remaining = stop - start;
-        while remaining > 0 {
-            let to_read = if remaining > MAX { MAX } else { remaining };
-
-            reader.read_exact(&mut buffer[0..to_read])?;
-            remaining -= to_read;
-            file.write_all(&buffer[0..to_read])?;
-        }
-        // file.write_all(&content)?;
-        Ok(())
     }
 
     /// This will attempt the fetch the file locally first, then [`Api.download`]
@@ -510,7 +423,7 @@ impl Api {
             None
         };
 
-        let tmp_filename = self.download_tempfile(&url, metadata.size, progressbar)?;
+        let tmp_filename = self.download_tempfile(&url, progressbar)?;
 
         if std::fs::rename(&tmp_filename, &blob_path).is_err() {
             // Renaming may fail if locations are different mount points
