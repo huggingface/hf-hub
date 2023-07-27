@@ -7,8 +7,34 @@ it should be consistent with [huggingface_hub](https://github.com/huggingface/hu
 
 At this time only a limited subset of the functionality is present, the goal is to add new
 features over time. We are currently treating this as an internel/external tool, meaning
-we will treat what exists as public, and keep backward compatibility in the same regard.
+we will are currently modifying everything at will for out internal needs. This will eventually
+stabilize as it matures to accomodate most of our needs.
+
+If you're interested in using this, you're welcome to do it but be warned about potential changing grounds.
+
+If you want to contribute, you are more than welcome.
 
 However allowing new features or creating new features might be denied by lack of maintainability
 time. We're focusing on what we currently internally need. Hopefully that subset is already interesting
 to more users.
+
+
+# How to use 
+
+Add the dependency
+
+```bash
+cargo add hf-hub  # --features tokio
+```
+`tokio` feature will enable an async (and potentially faster) API.
+
+Use the crate:
+
+```rust
+let api = Api::new().unwrap()
+
+let repo = api.model("meta-llama/Llama-2-7b-hf");
+let filename = api.get("config.json").unwrap();
+
+// filename  is now the local location within hf cache of the config.json file
+```
