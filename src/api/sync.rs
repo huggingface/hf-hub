@@ -11,7 +11,7 @@ use std::collections::HashMap;
 //     redirect::Policy,
 //     Error as ReqwestError,
 // };
-use serde::Deserialize;
+use super::RepoInfo;
 use std::io::{Seek, SeekFrom, Write};
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
@@ -46,7 +46,7 @@ impl HeaderAgent {
     fn get(&self, url: &str) -> ureq::Request {
         let mut request = self.agent.get(url);
         for (header, value) in &self.headers {
-            request = request.set(header, &value);
+            request = request.set(header, value);
         }
         request
     }
@@ -72,7 +72,7 @@ pub enum ApiError {
     // ToStr(#[from] ToStrError),
     /// Error in the request
     #[error("request error: {0}")]
-    RequestError(#[from] ureq::Error),
+    RequestError(#[from] Box<ureq::Error>),
 
     /// Error parsing some range value
     #[error("Cannot parse int")]
@@ -85,20 +85,6 @@ pub enum ApiError {
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
-}
-
-/// Siblings are simplified file descriptions of remote files on the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct Siblings {
-    /// The path within the repo.
-    pub rfilename: String,
-}
-
-/// The description of the repo given by the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct ModelInfo {
-    /// See [`Siblings`]
-    pub siblings: Vec<Siblings>,
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -329,34 +315,36 @@ impl Api {
             .no_redirect_client
             .get(url)
             .set(RANGE, "bytes=0-0")
-            .call()?;
+            .call()
+            .map_err(Box::new)?;
         // let headers = response.headers();
         let header_commit = "x-repo-commit";
         let header_linked_etag = "x-linked-etag";
         let header_etag = "etag";
 
-        let etag = match response.header(&header_linked_etag) {
+        let etag = match response.header(header_linked_etag) {
             Some(etag) => etag,
             None => response
-                .header(&header_etag)
+                .header(header_etag)
                 .ok_or(ApiError::MissingHeader(header_etag))?,
         };
         // Cleaning extra quotes
         let etag = etag.to_string().replace('"', "");
         let commit_hash = response
-            .header(&header_commit)
+            .header(header_commit)
             .ok_or(ApiError::MissingHeader(header_commit))?
             .to_string();
 
         // The response was redirected o S3 most likely which will
         // know about the size of the file
         let status = response.status();
-        let is_redirection = status >= 300 && status < 400;
+        let is_redirection = (300..400).contains(&status);
         let response = if is_redirection {
             self.client
                 .get(response.header(LOCATION).unwrap())
                 .set(RANGE, "bytes=0-0")
-                .call()?
+                .call()
+                .map_err(Box::new)?
         } else {
             response
         };
@@ -449,7 +437,11 @@ impl Api {
         let range = format!("bytes={start}-{stop}");
         let mut file = std::fs::OpenOptions::new().write(true).open(filename)?;
         file.seek(SeekFrom::Start(start as u64))?;
-        let response = client.get(url).set(RANGE, &range).call()?;
+        let response = client
+            .get(url)
+            .set(RANGE, &range)
+            .call()
+            .map_err(Box::new)?;
 
         const MAX: usize = 4096;
         let mut buffer: [u8; MAX] = [0; MAX];
@@ -543,9 +535,9 @@ impl Api {
     /// let repo = Repo::model("gpt2".to_string());
     /// api.info(&repo);
     /// ```
-    pub fn info(&self, repo: &Repo) -> Result<ModelInfo, ApiError> {
+    pub fn info(&self, repo: &Repo) -> Result<RepoInfo, ApiError> {
         let url = format!("{}/api/{}", self.endpoint, repo.api_url());
-        let response = self.client.get(&url).call()?;
+        let response = self.client.get(&url).call().map_err(Box::new)?;
 
         let model_info = response.into_json()?;
 
@@ -556,6 +548,7 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::Siblings;
     use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
@@ -647,7 +640,8 @@ mod tests {
         let model_info = api.info(&repo).unwrap();
         assert_eq!(
             model_info,
-            ModelInfo {
+            RepoInfo {
+                sha: "2dd3f79917d431e9af1c81bfa96a575741774077".to_string(),
                 siblings: vec![
                     Siblings {
                         rfilename: ".gitattributes".to_string()

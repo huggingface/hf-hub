@@ -1,3 +1,4 @@
+use super::RepoInfo;
 use crate::{Cache, Repo};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -9,7 +10,6 @@ use reqwest::{
     redirect::Policy,
     Client, Error as ReqwestError,
 };
-use serde::Deserialize;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -67,20 +67,6 @@ pub enum ApiError {
     // /// Semaphore cannot be acquired
     // #[error("Invalid Response: {0:?}")]
     // InvalidResponse(Response),
-}
-
-/// Siblings are simplified file descriptions of remote files on the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct Siblings {
-    /// The path within the repo.
-    pub rfilename: String,
-}
-
-/// The description of the repo given by the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct ModelInfo {
-    /// See [`Siblings`]
-    pub siblings: Vec<Siblings>,
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -550,7 +536,7 @@ impl Api {
     /// api.info(&repo);
     /// # })
     /// ```
-    pub async fn info(&self, repo: &Repo) -> Result<ModelInfo, ApiError> {
+    pub async fn info(&self, repo: &Repo) -> Result<RepoInfo, ApiError> {
         let url = format!("{}/api/{}", self.endpoint, repo.api_url());
         let response = self.client.get(url).send().await?;
         let response = response.error_for_status()?;
@@ -564,6 +550,7 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::Siblings;
     use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
@@ -656,7 +643,8 @@ mod tests {
         let model_info = api.info(&repo).await.unwrap();
         assert_eq!(
             model_info,
-            ModelInfo {
+            RepoInfo {
+                sha: "2dd3f79917d431e9af1c81bfa96a575741774077".to_string(),
                 siblings: vec![
                     Siblings {
                         rfilename: ".gitattributes".to_string()
