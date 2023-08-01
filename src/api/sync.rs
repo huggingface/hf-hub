@@ -1,6 +1,7 @@
 use crate::{Cache, Repo, RepoType};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, Rng};
+use serde_json::Value;
 use std::collections::HashMap;
 // use reqwest::{
 //     blocking::Agent,
@@ -84,6 +85,10 @@ pub enum ApiError {
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
+
+    /// serde_json error
+    #[error("Serde json error: {0}")]
+    SerdeJson(#[from] serde_json::Error),
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -336,13 +341,10 @@ impl Api {
         // Create the file and set everything properly
         let mut file = std::fs::File::create(&filename)?;
 
-        let response = self.client
-            .get(url)
-            .call()
-            .map_err(Box::new)?;
+        let response = self.client.get(url).call().map_err(Box::new)?;
 
         let mut reader = response.into_reader();
-        if let Some(p) = &progressbar{
+        if let Some(p) = &progressbar {
             reader = Box::new(p.wrap_read(reader));
         }
 
@@ -356,7 +358,7 @@ impl Api {
 
     /// Creates a new handle [`ApiRepo`] which contains operations
     /// on a particular [`Repo`]
-    pub fn repo(&self, repo: Repo) -> ApiRepo{
+    pub fn repo(&self, repo: Repo) -> ApiRepo {
         ApiRepo::new(self.clone(), repo)
     }
 
@@ -367,7 +369,7 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Model));
     /// ```
-    pub fn model(&self, model_id: String) -> ApiRepo{
+    pub fn model(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Model))
     }
 
@@ -378,7 +380,7 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Dataset));
     /// ```
-    pub fn dataset(&self, model_id: String) -> ApiRepo{
+    pub fn dataset(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Dataset))
     }
 
@@ -389,25 +391,24 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Space));
     /// ```
-    pub fn space(&self, model_id: String) -> ApiRepo{
+    pub fn space(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
 }
 
 /// Shorthand for accessing things within a particular repo
-pub struct ApiRepo{
+pub struct ApiRepo {
     api: Api,
     repo: Repo,
 }
 
-impl ApiRepo{
-    fn new(api: Api, repo: Repo) -> Self{
-        Self{api, repo}
+impl ApiRepo {
+    fn new(api: Api, repo: Repo) -> Self {
+        Self { api, repo }
     }
 }
 
-
-impl ApiRepo{
+impl ApiRepo {
     /// Get the fully qualified URL of the remote filename
     /// ```
     /// # use hf_hub::api::sync::Api;
@@ -418,13 +419,13 @@ impl ApiRepo{
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
         let revision = &self.repo.url_revision();
-        self.api.url_template
+        self.api
+            .url_template
             .replace("{endpoint}", endpoint)
             .replace("{repo_id}", &self.repo.url())
             .replace("{revision}", revision)
             .replace("{filename}", filename)
     }
-
 
     /// This will attempt the fetch the file locally first, then [`Api.download`]
     /// if the file is not present.
@@ -484,12 +485,17 @@ impl ApiRepo{
             std::fs::copy(tmp_filename, &blob_path)?;
         }
 
-        let mut pointer_path = self.api.cache.pointer_path(&self.repo, &metadata.commit_hash);
+        let mut pointer_path = self
+            .api
+            .cache
+            .pointer_path(&self.repo, &metadata.commit_hash);
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
         symlink_or_rename(&blob_path, &pointer_path)?;
-        self.api.cache.create_ref(&self.repo, &metadata.commit_hash)?;
+        self.api
+            .cache
+            .create_ref(&self.repo, &metadata.commit_hash)?;
 
         Ok(pointer_path)
     }
@@ -501,12 +507,59 @@ impl ApiRepo{
     /// api.model("gpt2".to_string()).info();
     /// ```
     pub fn info(&self) -> Result<RepoInfo, ApiError> {
-        let url = format!("{}/api/{}", self.api.endpoint, self.repo.api_url());
-        let response = self.api.client.get(&url).call().map_err(Box::new)?;
+        Ok(serde_json::from_value(self.detailed_info().send()?)?)
+    }
 
-        let model_info = response.into_json()?;
+    ///
+    pub fn detailed_info(&self) -> DetailedInfoBuilder {
+        DetailedInfoBuilder::new(self.api.clone(), &self.api.endpoint, &self.repo)
+    }
+}
 
-        Ok(model_info)
+/// Builder to help create a request to the hub API
+/// to get detailed info on the repository
+pub struct DetailedInfoBuilder {
+    api: Api,
+    query_params: Option<Vec<(String, String)>>,
+    url: String,
+}
+
+impl DetailedInfoBuilder {
+    fn new(api: Api, endpoint: &str, repo: &Repo) -> Self {
+        let url = format!("{}/api/{}", endpoint, repo.api_url());
+        Self {
+            api,
+            query_params: None,
+            url,
+        }
+    }
+}
+
+impl DetailedInfoBuilder {
+    /// Add a query parameter to the request
+    pub fn query(mut self, key: String, value: String) -> Self {
+        if let Some(mut qps) = self.query_params {
+            qps.push((key, value));
+            self.query_params = Some(qps);
+        } else {
+            self.query_params = Some(vec![(key, value)]);
+        }
+        self
+    }
+
+    /// Send the request and get the resulting JSON
+    pub fn send(self) -> Result<Value, ApiError> {
+        let mut request = self.api.client.get(&self.url);
+        if let Some(qps) = self.query_params {
+            let qps: Vec<(&str, &str)> = qps
+                .iter()
+                .map(|qp| (qp.0.as_ref(), qp.1.as_ref()))
+                .collect();
+            request = request.query_pairs(qps);
+        }
+        let response = request.call().map_err(Box::new)?;
+
+        Ok(response.into_json()?)
     }
 }
 
@@ -517,6 +570,7 @@ mod tests {
     use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
+    use serde_json::json;
     use sha2::{Digest, Sha256};
 
     struct TempDir {
@@ -562,7 +616,10 @@ mod tests {
         );
 
         // Make sure the file is now seeable without connection
-        let cache_path = api.cache.get(&Repo::new(model_id, RepoType::Model), "config.json").unwrap();
+        let cache_path = api
+            .cache
+            .get(&Repo::new(model_id, RepoType::Model), "config.json")
+            .unwrap();
         assert_eq!(cache_path, downloaded_path);
     }
 
@@ -579,7 +636,8 @@ mod tests {
             RepoType::Dataset,
             "refs/convert/parquet".to_string(),
         );
-        let downloaded_path = api.repo(repo)
+        let downloaded_path = api
+            .repo(repo)
             .download("wikitext-103-v1/wikitext-test.parquet")
             .unwrap();
         assert!(downloaded_path.exists());
@@ -610,71 +668,175 @@ mod tests {
                 sha: "2dd3f79917d431e9af1c81bfa96a575741774077".to_string(),
                 siblings: vec![
                     Siblings {
-                        rfilename: ".gitattributes".to_string()
+                        rfilename: ".gitattributes".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-test.parquet".to_string()
+                        rfilename: "wikitext-103-raw-v1/wikitext-test.parquet".to_string(),
                     },
                     Siblings {
                         rfilename: "wikitext-103-raw-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string()
+                            .to_string(),
                     },
                     Siblings {
                         rfilename: "wikitext-103-raw-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string()
+                            .to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-validation.parquet".to_string()
+                        rfilename: "wikitext-103-raw-v1/wikitext-validation.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string()
+                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string()
+                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-test.parquet".to_string()
+                        rfilename: "wikitext-103-v1/wikitext-test.parquet".to_string(),
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string()
+                            .to_string(),
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string()
+                            .to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-validation.parquet".to_string()
+                        rfilename: "wikitext-103-v1/wikitext-validation.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string()
+                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string()
+                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string()
+                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-test.parquet".to_string()
+                        rfilename: "wikitext-2-raw-v1/wikitext-test.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-train.parquet".to_string()
+                        rfilename: "wikitext-2-raw-v1/wikitext-train.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-validation.parquet".to_string()
+                        rfilename: "wikitext-2-raw-v1/wikitext-validation.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-test.parquet".to_string()
+                        rfilename: "wikitext-2-v1/wikitext-test.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-train.parquet".to_string()
+                        rfilename: "wikitext-2-v1/wikitext-train.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-validation.parquet".to_string()
+                        rfilename: "wikitext-2-v1/wikitext-validation.parquet".to_string(),
                     }
                 ],
             }
         )
+    }
+
+    #[test]
+    fn detailed_info() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = Repo::with_revision(
+            "wikitext".to_string(),
+            RepoType::Dataset,
+            "refs/convert/parquet".to_string(),
+        );
+        let detailed_info = api
+            .repo(repo)
+            .detailed_info()
+            .query("blobs".to_owned(), "true".to_owned())
+            .send()
+            .unwrap();
+        assert_eq!(
+            detailed_info,
+            json!({
+                "sha": "2dd3f79917d431e9af1c81bfa96a575741774077",
+                "siblings": [
+                    {
+                        "rfilename": ".gitattributes",
+                    },
+                    {
+                        "rfilename": "wikitext-103-raw-v1/wikitext-test.parquet",
+                    },
+                    {
+                        "rfilename": "wikitext-103-raw-v1/wikitext-train-00000-of-00002.parquet"
+                            .to_string(),
+                        "lfs": { "size": 287495563 }
+                    },
+                    {
+                        "rfilename": "wikitext-103-raw-v1/wikitext-train-00001-of-00002.parquet"
+                            .to_string(),
+                        "lfs": { "size": 26572957 }
+                    },
+                    {
+                        "rfilename": "wikitext-103-raw-v1/wikitext-validation.parquet".to_string(),
+                    },
+                    {
+                        "rfilename": "wikitext-103-v1/test/index.duckdb".to_string(),
+                        "lfs": { "size": 2109440 }
+                    },
+                    {
+                        "rfilename": "wikitext-103-v1/validation/index.duckdb".to_string(),
+                        "lfs": { "size": 2109440 }
+                    },
+                    {
+                        "rfilename": "wikitext-103-v1/wikitext-test.parquet".to_string(),
+                    },
+                    {
+                        "rfilename": "wikitext-103-v1/wikitext-train-00000-of-00002.parquet"
+                            .to_string(),
+                        "lfs": { "size": 286018500 }
+                    },
+                    {
+                        "rfilename": "wikitext-103-v1/wikitext-train-00001-of-00002.parquet"
+                            .to_string(),
+                        "lfs": { "size": 25684679 }
+                    },
+                    {
+                        "rfilename": "wikitext-103-v1/wikitext-validation.parquet".to_string(),
+                    },
+                    {
+                        "rfilename": "wikitext-2-raw-v1/test/index.duckdb".to_string(),
+                        "lfs": { "size": 2109440 }
+                    },
+                    {
+                        "rfilename": "wikitext-2-raw-v1/train/index.duckdb".to_string(),
+                        "lfs": { "size": 13905920 }
+                    },
+                    {
+                        "rfilename": "wikitext-2-raw-v1/validation/index.duckdb".to_string(),
+                        "lfs": { "size": 2109440 }
+                    },
+                    {
+                        "rfilename": "wikitext-2-raw-v1/wikitext-test.parquet".to_string(),
+                    },
+                    {
+                        "rfilename": "wikitext-2-raw-v1/wikitext-train.parquet".to_string(),
+                        "lfs": { "size": 6357543 }
+                    },
+                    {
+                        "rfilename": "wikitext-2-raw-v1/wikitext-validation.parquet".to_string(),
+                    },
+                    {
+                        "rfilename": "wikitext-2-v1/wikitext-test.parquet".to_string(),
+                    },
+                    {
+                        "rfilename": "wikitext-2-v1/wikitext-train.parquet".to_string(),
+                        "lfs": { "size": 6068114 }
+                    },
+                    {
+                        "rfilename": "wikitext-2-v1/wikitext-validation.parquet".to_string(),
+                    }
+                ]
+            })
+        );
     }
 }

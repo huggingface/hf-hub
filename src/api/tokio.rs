@@ -341,10 +341,9 @@ impl Api {
         })
     }
 
-
     /// Creates a new handle [`ApiRepo`] which contains operations
     /// on a particular [`Repo`]
-    pub fn repo(&self, repo: Repo) -> ApiRepo{
+    pub fn repo(&self, repo: Repo) -> ApiRepo {
         ApiRepo::new(self.clone(), repo)
     }
 
@@ -355,7 +354,7 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Model));
     /// ```
-    pub fn model(&self, model_id: String) -> ApiRepo{
+    pub fn model(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Model))
     }
 
@@ -366,7 +365,7 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Dataset));
     /// ```
-    pub fn dataset(&self, model_id: String) -> ApiRepo{
+    pub fn dataset(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Dataset))
     }
 
@@ -377,26 +376,24 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Space));
     /// ```
-    pub fn space(&self, model_id: String) -> ApiRepo{
+    pub fn space(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
-
 }
 
-
 /// Shorthand for accessing things within a particular repo
-pub struct ApiRepo{
+pub struct ApiRepo {
     api: Api,
     repo: Repo,
 }
 
-impl ApiRepo{
-    fn new(api: Api, repo: Repo) -> Self{
-        Self{api, repo}
+impl ApiRepo {
+    fn new(api: Api, repo: Repo) -> Self {
+        Self { api, repo }
     }
 }
 
-impl ApiRepo{
+impl ApiRepo {
     /// Get the fully qualified URL of the remote filename
     /// ```
     /// # use hf_hub::api::tokio::Api;
@@ -407,7 +404,8 @@ impl ApiRepo{
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
         let revision = &self.repo.url_revision();
-        self.api.url_template
+        self.api
+            .url_template
             .replace("{endpoint}", endpoint)
             .replace("{repo_id}", &self.repo.url())
             .replace("{revision}", revision)
@@ -671,7 +669,8 @@ mod tests {
             RepoType::Dataset,
             "refs/convert/parquet".to_string(),
         );
-        let downloaded_path = api.repo(repo)
+        let downloaded_path = api
+            .repo(repo)
             .download("wikitext-103-v1/wikitext-test.parquet")
             .await
             .unwrap();
