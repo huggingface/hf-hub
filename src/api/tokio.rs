@@ -10,6 +10,7 @@ use reqwest::{
     redirect::Policy,
     Client, Error as ReqwestError,
 };
+use serde_json::Value;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -67,6 +68,9 @@ pub enum ApiError {
     // /// Semaphore cannot be acquired
     // #[error("Invalid Response: {0:?}")]
     // InvalidResponse(Response),
+    /// serde_json error
+    #[error("Serde json error: {0}")]
+    SerdeJson(#[from] serde_json::Error),
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -589,14 +593,56 @@ impl ApiRepo {
     /// # })
     /// ```
     pub async fn info(&self) -> Result<RepoInfo, ApiError> {
-        let repo = &self.repo;
-        let url = format!("{}/api/{}", self.api.endpoint, repo.api_url());
-        let response = self.api.client.get(url).send().await?;
+        Ok(serde_json::from_value(self.detailed_info().send().await?)?)
+    }
+
+    /// Get a builder to help create a request to the hub API
+    pub fn detailed_info(&self) -> DetailedInfoBuilder {
+        DetailedInfoBuilder::new(self.api.clone(), &self.api.endpoint, &self.repo)
+    }
+}
+
+/// Builder to help create a request to the hub API
+/// to get detailed info on the repository
+pub struct DetailedInfoBuilder {
+    api: Api,
+    query_params: Option<Vec<(String, String)>>,
+    url: String,
+}
+
+impl DetailedInfoBuilder {
+    fn new(api: Api, endpoint: &str, repo: &Repo) -> Self {
+        let url = format!("{}/api/{}", endpoint, repo.api_url());
+        Self {
+            api,
+            query_params: None,
+            url,
+        }
+    }
+}
+
+impl DetailedInfoBuilder {
+    /// Add a query parameter to the request
+    pub fn query(mut self, key: String, value: String) -> Self {
+        if let Some(mut qps) = self.query_params {
+            qps.push((key, value));
+            self.query_params = Some(qps);
+        } else {
+            self.query_params = Some(vec![(key, value)]);
+        }
+        self
+    }
+
+    /// Send the request and get the resulting JSON
+    pub async fn send(self) -> Result<Value, ApiError> {
+        let mut request = self.api.client.get(&self.url);
+        if let Some(qps) = self.query_params {
+            request = request.query(&qps);
+        }
+        let response = request.send().await?;
         let response = response.error_for_status()?;
 
-        let model_info = response.json().await?;
-
-        Ok(model_info)
+        Ok(response.json().await?)
     }
 }
 
@@ -607,6 +653,7 @@ mod tests {
     use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
+    use serde_json::json;
     use sha2::{Digest, Sha256};
 
     struct TempDir {
@@ -768,5 +815,88 @@ mod tests {
                 ],
             }
         )
+    }
+
+    #[tokio::test]
+    async fn detailed_info() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = Repo::with_revision(
+            "mcpotato/42-eicar-street".to_string(),
+            RepoType::Model,
+            "8b3861f6931c4026b0cd22b38dbc09e7668983ac".to_string(),
+        );
+        let detailed_info = api
+            .repo(repo)
+            .detailed_info()
+            .query("blobs".to_owned(), "true".to_owned())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            detailed_info,
+            json!({
+                "_id": "621ffdc136468d709f17ddb4",
+                "author": "mcpotato",
+                "config": {},
+                "disabled": false,
+                "downloads": 0,
+                "gated": false,
+                "id": "mcpotato/42-eicar-street",
+                "lastModified": "2022-11-30T19:54:16.000Z",
+                "likes": 0,
+                "modelId": "mcpotato/42-eicar-street",
+                "private": false,
+                "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
+                "siblings": [
+                    {
+                        "blobId": "6d34772f5ca361021038b404fb913ec8dc0b1a5a",
+                        "rfilename": ".gitattributes",
+                        "size": 1175
+                    },
+                    {
+                        "blobId": "be98037f7c542112c15a1d2fc7e2a2427e42cb50",
+                        "rfilename": "build_pickles.py",
+                        "size": 304
+                    },
+                    {
+                        "blobId": "8acd02161fff53f9df9597e377e22b04bc34feff",
+                        "rfilename": "danger.dat",
+                        "size": 66
+                    },
+                    {
+                        "blobId": "86b812515e075a1ae216e1239e615a1d9e0b316e",
+                        "rfilename": "eicar_test_file",
+                        "size": 70
+                    },
+                    {
+                        "blobId": "86b812515e075a1ae216e1239e615a1d9e0b316e",
+                        "rfilename": "eicar_test_file_bis",
+                        "size":70
+                    },
+                    {
+                        "blobId": "cd1c6d8bde5006076655711a49feae66f07d707e",
+                        "lfs": {
+                            "pointerSize": 127,
+                            "sha256": "f9343d7d7ec5c3d8bcced056c438fc9f1d3819e9ca3d42418a40857050e10e20",
+                            "size": 22
+                        },
+                        "rfilename": "pytorch_model.bin",
+                        "size": 22
+                    },
+                    {
+                        "blobId": "8ab39654695136173fee29cba0193f679dfbd652",
+                        "rfilename": "supposedly_safe.pkl",
+                        "size": 31
+                    }
+                ],
+                "spaces": [],
+                "tags": ["pytorch", "region:us"],
+            })
+        );
     }
 }

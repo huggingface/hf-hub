@@ -510,7 +510,7 @@ impl ApiRepo {
         Ok(serde_json::from_value(self.detailed_info().send()?)?)
     }
 
-    ///
+    /// Get a builder to help create a request to the hub API
     pub fn detailed_info(&self) -> DetailedInfoBuilder {
         DetailedInfoBuilder::new(self.api.clone(), &self.api.endpoint, &self.repo)
     }
@@ -745,9 +745,9 @@ mod tests {
             .build()
             .unwrap();
         let repo = Repo::with_revision(
-            "wikitext".to_string(),
-            RepoType::Dataset,
-            "refs/convert/parquet".to_string(),
+            "mcpotato/42-eicar-street".to_string(),
+            RepoType::Model,
+            "8b3861f6931c4026b0cd22b38dbc09e7668983ac".to_string(),
         );
         let detailed_info = api
             .repo(repo)
@@ -758,84 +758,62 @@ mod tests {
         assert_eq!(
             detailed_info,
             json!({
-                "sha": "2dd3f79917d431e9af1c81bfa96a575741774077",
+                "_id": "621ffdc136468d709f17ddb4",
+                "author": "mcpotato",
+                "config": {},
+                "disabled": false,
+                "downloads": 0,
+                "gated": false,
+                "id": "mcpotato/42-eicar-street",
+                "lastModified": "2022-11-30T19:54:16.000Z",
+                "likes": 0,
+                "modelId": "mcpotato/42-eicar-street",
+                "private": false,
+                "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
                 "siblings": [
                     {
+                        "blobId": "6d34772f5ca361021038b404fb913ec8dc0b1a5a",
                         "rfilename": ".gitattributes",
+                        "size": 1175
                     },
                     {
-                        "rfilename": "wikitext-103-raw-v1/wikitext-test.parquet",
+                        "blobId": "be98037f7c542112c15a1d2fc7e2a2427e42cb50",
+                        "rfilename": "build_pickles.py",
+                        "size": 304
                     },
                     {
-                        "rfilename": "wikitext-103-raw-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string(),
-                        "lfs": { "size": 287495563 }
+                        "blobId": "8acd02161fff53f9df9597e377e22b04bc34feff",
+                        "rfilename": "danger.dat",
+                        "size": 66
                     },
                     {
-                        "rfilename": "wikitext-103-raw-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string(),
-                        "lfs": { "size": 26572957 }
+                        "blobId": "86b812515e075a1ae216e1239e615a1d9e0b316e",
+                        "rfilename": "eicar_test_file",
+                        "size": 70
                     },
                     {
-                        "rfilename": "wikitext-103-raw-v1/wikitext-validation.parquet".to_string(),
+                        "blobId": "86b812515e075a1ae216e1239e615a1d9e0b316e",
+                        "rfilename": "eicar_test_file_bis",
+                        "size":70
                     },
                     {
-                        "rfilename": "wikitext-103-v1/test/index.duckdb".to_string(),
-                        "lfs": { "size": 2109440 }
+                        "blobId": "cd1c6d8bde5006076655711a49feae66f07d707e",
+                        "lfs": {
+                            "pointerSize": 127,
+                            "sha256": "f9343d7d7ec5c3d8bcced056c438fc9f1d3819e9ca3d42418a40857050e10e20",
+                            "size": 22
+                        },
+                        "rfilename": "pytorch_model.bin",
+                        "size": 22
                     },
                     {
-                        "rfilename": "wikitext-103-v1/validation/index.duckdb".to_string(),
-                        "lfs": { "size": 2109440 }
-                    },
-                    {
-                        "rfilename": "wikitext-103-v1/wikitext-test.parquet".to_string(),
-                    },
-                    {
-                        "rfilename": "wikitext-103-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string(),
-                        "lfs": { "size": 286018500 }
-                    },
-                    {
-                        "rfilename": "wikitext-103-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string(),
-                        "lfs": { "size": 25684679 }
-                    },
-                    {
-                        "rfilename": "wikitext-103-v1/wikitext-validation.parquet".to_string(),
-                    },
-                    {
-                        "rfilename": "wikitext-2-raw-v1/test/index.duckdb".to_string(),
-                        "lfs": { "size": 2109440 }
-                    },
-                    {
-                        "rfilename": "wikitext-2-raw-v1/train/index.duckdb".to_string(),
-                        "lfs": { "size": 13905920 }
-                    },
-                    {
-                        "rfilename": "wikitext-2-raw-v1/validation/index.duckdb".to_string(),
-                        "lfs": { "size": 2109440 }
-                    },
-                    {
-                        "rfilename": "wikitext-2-raw-v1/wikitext-test.parquet".to_string(),
-                    },
-                    {
-                        "rfilename": "wikitext-2-raw-v1/wikitext-train.parquet".to_string(),
-                        "lfs": { "size": 6357543 }
-                    },
-                    {
-                        "rfilename": "wikitext-2-raw-v1/wikitext-validation.parquet".to_string(),
-                    },
-                    {
-                        "rfilename": "wikitext-2-v1/wikitext-test.parquet".to_string(),
-                    },
-                    {
-                        "rfilename": "wikitext-2-v1/wikitext-train.parquet".to_string(),
-                        "lfs": { "size": 6068114 }
-                    },
-                    {
-                        "rfilename": "wikitext-2-v1/wikitext-validation.parquet".to_string(),
+                        "blobId": "8ab39654695136173fee29cba0193f679dfbd652",
+                        "rfilename": "supposedly_safe.pkl",
+                        "size": 31
                     }
-                ]
+                ],
+                "spaces": [],
+                "tags": ["pytorch", "region:us"],
             })
         );
     }
