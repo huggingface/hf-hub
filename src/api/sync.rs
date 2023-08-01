@@ -511,13 +511,23 @@ impl ApiRepo {
     }
 
     /// Get a builder to help create a request to the hub API
+    /// ```
+    /// # use hf_hub::api::tokio::Api;
+    /// # tokio_test::block_on(async {
+    /// let api = Api::new().unwrap();
+    /// api.model("gpt2".to_owned())
+    ///     .detailed_info()
+    ///     .query("blobs".to_owned(), "true".to_owned())
+    ///     .send();
+    /// # })
+    /// ```
     pub fn detailed_info(&self) -> DetailedInfoBuilder {
         DetailedInfoBuilder::new(self.api.clone(), &self.api.endpoint, &self.repo)
     }
 }
 
 /// Builder to help create a request to the hub API
-/// to get detailed info on the repository
+/// in order to get detailed info about the repository
 pub struct DetailedInfoBuilder {
     api: Api,
     query_params: Option<Vec<(String, String)>>,
