@@ -607,7 +607,7 @@ impl ApiRepo {
     /// ```
     pub fn info_request(&self) -> RequestBuilder {
         let url = format!("{}/api/{}", self.api.endpoint, self.repo.api_url());
-        self.api.client.get(&url)
+        self.api.client.get(url)
     }
 }
 
