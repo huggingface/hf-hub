@@ -1,7 +1,6 @@
 use crate::{Cache, Repo, RepoType};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, Rng};
-use serde_json::Value;
 use std::collections::HashMap;
 // use reqwest::{
 //     blocking::Agent,
@@ -16,7 +15,7 @@ use super::RepoInfo;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
-use ureq::Agent;
+use ureq::{Agent, Request};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -85,10 +84,6 @@ pub enum ApiError {
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
-
-    /// serde_json error
-    #[error("Serde json error: {0}")]
-    SerdeJson(#[from] serde_json::Error),
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -507,69 +502,21 @@ impl ApiRepo {
     /// api.model("gpt2".to_string()).info();
     /// ```
     pub fn info(&self) -> Result<RepoInfo, ApiError> {
-        Ok(serde_json::from_value(self.detailed_info().send()?)?)
+        Ok(self.info_request().call().map_err(Box::new)?.into_json()?)
     }
 
-    /// Get a builder to help create a request to the hub API
+    /// Get the raw [`ureq::Request`] with the url and method already set
     /// ```
-    /// # use hf_hub::api::tokio::Api;
-    /// # tokio_test::block_on(async {
+    /// # use hf_hub::api::sync::Api;
     /// let api = Api::new().unwrap();
     /// api.model("gpt2".to_owned())
-    ///     .detailed_info()
-    ///     .query("blobs".to_owned(), "true".to_owned())
-    ///     .send();
-    /// # })
+    ///     .info_request()
+    ///     .query("blobs", "true")
+    ///     .call();
     /// ```
-    pub fn detailed_info(&self) -> DetailedInfoBuilder {
-        DetailedInfoBuilder::new(self.api.clone(), &self.api.endpoint, &self.repo)
-    }
-}
-
-/// Builder to help create a request to the hub API
-/// in order to get detailed info about the repository
-pub struct DetailedInfoBuilder {
-    api: Api,
-    query_params: Option<Vec<(String, String)>>,
-    url: String,
-}
-
-impl DetailedInfoBuilder {
-    fn new(api: Api, endpoint: &str, repo: &Repo) -> Self {
-        let url = format!("{}/api/{}", endpoint, repo.api_url());
-        Self {
-            api,
-            query_params: None,
-            url,
-        }
-    }
-}
-
-impl DetailedInfoBuilder {
-    /// Add a query parameter to the request
-    pub fn query(mut self, key: String, value: String) -> Self {
-        if let Some(mut qps) = self.query_params {
-            qps.push((key, value));
-            self.query_params = Some(qps);
-        } else {
-            self.query_params = Some(vec![(key, value)]);
-        }
-        self
-    }
-
-    /// Send the request and get the resulting JSON
-    pub fn send(self) -> Result<Value, ApiError> {
-        let mut request = self.api.client.get(&self.url);
-        if let Some(qps) = self.query_params {
-            let qps: Vec<(&str, &str)> = qps
-                .iter()
-                .map(|qp| (qp.0.as_ref(), qp.1.as_ref()))
-                .collect();
-            request = request.query_pairs(qps);
-        }
-        let response = request.call().map_err(Box::new)?;
-
-        Ok(response.into_json()?)
+    pub fn info_request(&self) -> Request {
+        let url = format!("{}/api/{}", self.api.endpoint, self.repo.api_url());
+        self.api.client.get(&url)
     }
 }
 
@@ -580,7 +527,7 @@ mod tests {
     use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
-    use serde_json::json;
+    use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 
     struct TempDir {
@@ -759,14 +706,16 @@ mod tests {
             RepoType::Model,
             "8b3861f6931c4026b0cd22b38dbc09e7668983ac".to_string(),
         );
-        let detailed_info = api
+        let blobs_info: Value = api
             .repo(repo)
-            .detailed_info()
-            .query("blobs".to_owned(), "true".to_owned())
-            .send()
+            .info_request()
+            .query("blobs", "true")
+            .call()
+            .unwrap()
+            .into_json()
             .unwrap();
         assert_eq!(
-            detailed_info,
+            blobs_info,
             json!({
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
@@ -774,6 +723,7 @@ mod tests {
                 "disabled": false,
                 "downloads": 0,
                 "gated": false,
+                "gitalyUid": "e2f3311091b666481acd7ed5dc1f26b261e6b23a3aaf5f14773add21c24b24a7",
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
                 "likes": 0,

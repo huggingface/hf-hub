@@ -8,9 +8,8 @@ use reqwest::{
         CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
     },
     redirect::Policy,
-    Client, Error as ReqwestError,
+    Client, Error as ReqwestError, RequestBuilder,
 };
-use serde_json::Value;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -68,9 +67,6 @@ pub enum ApiError {
     // /// Semaphore cannot be acquired
     // #[error("Invalid Response: {0:?}")]
     // InvalidResponse(Response),
-    /// serde_json error
-    #[error("Serde json error: {0}")]
-    SerdeJson(#[from] serde_json::Error),
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -593,67 +589,25 @@ impl ApiRepo {
     /// # })
     /// ```
     pub async fn info(&self) -> Result<RepoInfo, ApiError> {
-        Ok(serde_json::from_value(self.detailed_info().send().await?)?)
+        Ok(self.info_request().send().await?.json().await?)
     }
 
-    /// Get a builder to help create a request to the hub API
+    /// Get the raw [`reqwest::RequestBuilder`] with the url and method already set
+    /// cf https://docs.rs/reqwest/latest/reqwest/struct.RequestBuilder.html
     /// ```
     /// # use hf_hub::api::tokio::Api;
     /// # tokio_test::block_on(async {
     /// let api = Api::new().unwrap();
     /// api.model("gpt2".to_owned())
-    ///     .detailed_info()
-    ///     .query("blobs".to_owned(), "true".to_owned())
+    ///     .info_request()
+    ///     .query(&[("blobs", "true")])
     ///     .send()
     ///     .await;
     /// # })
     /// ```
-    pub fn detailed_info(&self) -> DetailedInfoBuilder {
-        DetailedInfoBuilder::new(self.api.clone(), &self.api.endpoint, &self.repo)
-    }
-}
-
-/// Builder to help create a request to the hub API
-/// in order to get detailed info about the repository
-pub struct DetailedInfoBuilder {
-    api: Api,
-    query_params: Option<Vec<(String, String)>>,
-    url: String,
-}
-
-impl DetailedInfoBuilder {
-    fn new(api: Api, endpoint: &str, repo: &Repo) -> Self {
-        let url = format!("{}/api/{}", endpoint, repo.api_url());
-        Self {
-            api,
-            query_params: None,
-            url,
-        }
-    }
-}
-
-impl DetailedInfoBuilder {
-    /// Add a query parameter to the request
-    pub fn query(mut self, key: String, value: String) -> Self {
-        if let Some(mut qps) = self.query_params {
-            qps.push((key, value));
-            self.query_params = Some(qps);
-        } else {
-            self.query_params = Some(vec![(key, value)]);
-        }
-        self
-    }
-
-    /// Send the request and get the resulting JSON
-    pub async fn send(self) -> Result<Value, ApiError> {
-        let mut request = self.api.client.get(&self.url);
-        if let Some(qps) = self.query_params {
-            request = request.query(&qps);
-        }
-        let response = request.send().await?;
-        let response = response.error_for_status()?;
-
-        Ok(response.json().await?)
+    pub fn info_request(&self) -> RequestBuilder {
+        let url = format!("{}/api/{}", self.api.endpoint, self.repo.api_url());
+        self.api.client.get(&url)
     }
 }
 
@@ -664,7 +618,7 @@ mod tests {
     use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
-    use serde_json::json;
+    use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 
     struct TempDir {
@@ -829,7 +783,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detailed_info() {
+    async fn info_request() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
             .with_progress(false)
@@ -841,15 +795,18 @@ mod tests {
             RepoType::Model,
             "8b3861f6931c4026b0cd22b38dbc09e7668983ac".to_string(),
         );
-        let detailed_info = api
+        let blobs_info: Value = api
             .repo(repo)
-            .detailed_info()
-            .query("blobs".to_owned(), "true".to_owned())
+            .info_request()
+            .query(&[("blobs", "true")])
             .send()
+            .await
+            .unwrap()
+            .json()
             .await
             .unwrap();
         assert_eq!(
-            detailed_info,
+            blobs_info,
             json!({
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
@@ -857,6 +814,7 @@ mod tests {
                 "disabled": false,
                 "downloads": 0,
                 "gated": false,
+                "gitalyUid": "e2f3311091b666481acd7ed5dc1f26b261e6b23a3aaf5f14773add21c24b24a7",
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
                 "likes": 0,
