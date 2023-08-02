@@ -593,7 +593,6 @@ impl ApiRepo {
     }
 
     /// Get the raw [`reqwest::RequestBuilder`] with the url and method already set
-    /// cf https://docs.rs/reqwest/latest/reqwest/struct.RequestBuilder.html
     /// ```
     /// # use hf_hub::api::tokio::Api;
     /// # tokio_test::block_on(async {
