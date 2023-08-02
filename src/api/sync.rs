@@ -15,7 +15,7 @@ use super::RepoInfo;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
-use ureq::Agent;
+use ureq::{Agent, Request};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -336,13 +336,10 @@ impl Api {
         // Create the file and set everything properly
         let mut file = std::fs::File::create(&filename)?;
 
-        let response = self.client
-            .get(url)
-            .call()
-            .map_err(Box::new)?;
+        let response = self.client.get(url).call().map_err(Box::new)?;
 
         let mut reader = response.into_reader();
-        if let Some(p) = &progressbar{
+        if let Some(p) = &progressbar {
             reader = Box::new(p.wrap_read(reader));
         }
 
@@ -356,7 +353,7 @@ impl Api {
 
     /// Creates a new handle [`ApiRepo`] which contains operations
     /// on a particular [`Repo`]
-    pub fn repo(&self, repo: Repo) -> ApiRepo{
+    pub fn repo(&self, repo: Repo) -> ApiRepo {
         ApiRepo::new(self.clone(), repo)
     }
 
@@ -367,7 +364,7 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Model));
     /// ```
-    pub fn model(&self, model_id: String) -> ApiRepo{
+    pub fn model(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Model))
     }
 
@@ -378,7 +375,7 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Dataset));
     /// ```
-    pub fn dataset(&self, model_id: String) -> ApiRepo{
+    pub fn dataset(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Dataset))
     }
 
@@ -389,25 +386,24 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Space));
     /// ```
-    pub fn space(&self, model_id: String) -> ApiRepo{
+    pub fn space(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
 }
 
 /// Shorthand for accessing things within a particular repo
-pub struct ApiRepo{
+pub struct ApiRepo {
     api: Api,
     repo: Repo,
 }
 
-impl ApiRepo{
-    fn new(api: Api, repo: Repo) -> Self{
-        Self{api, repo}
+impl ApiRepo {
+    fn new(api: Api, repo: Repo) -> Self {
+        Self { api, repo }
     }
 }
 
-
-impl ApiRepo{
+impl ApiRepo {
     /// Get the fully qualified URL of the remote filename
     /// ```
     /// # use hf_hub::api::sync::Api;
@@ -418,13 +414,13 @@ impl ApiRepo{
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
         let revision = &self.repo.url_revision();
-        self.api.url_template
+        self.api
+            .url_template
             .replace("{endpoint}", endpoint)
             .replace("{repo_id}", &self.repo.url())
             .replace("{revision}", revision)
             .replace("{filename}", filename)
     }
-
 
     /// This will attempt the fetch the file locally first, then [`Api.download`]
     /// if the file is not present.
@@ -484,12 +480,17 @@ impl ApiRepo{
             std::fs::copy(tmp_filename, &blob_path)?;
         }
 
-        let mut pointer_path = self.api.cache.pointer_path(&self.repo, &metadata.commit_hash);
+        let mut pointer_path = self
+            .api
+            .cache
+            .pointer_path(&self.repo, &metadata.commit_hash);
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
         symlink_or_rename(&blob_path, &pointer_path)?;
-        self.api.cache.create_ref(&self.repo, &metadata.commit_hash)?;
+        self.api
+            .cache
+            .create_ref(&self.repo, &metadata.commit_hash)?;
 
         Ok(pointer_path)
     }
@@ -501,12 +502,21 @@ impl ApiRepo{
     /// api.model("gpt2".to_string()).info();
     /// ```
     pub fn info(&self) -> Result<RepoInfo, ApiError> {
+        Ok(self.info_request().call().map_err(Box::new)?.into_json()?)
+    }
+
+    /// Get the raw [`ureq::Request`] with the url and method already set
+    /// ```
+    /// # use hf_hub::api::sync::Api;
+    /// let api = Api::new().unwrap();
+    /// api.model("gpt2".to_owned())
+    ///     .info_request()
+    ///     .query("blobs", "true")
+    ///     .call();
+    /// ```
+    pub fn info_request(&self) -> Request {
         let url = format!("{}/api/{}", self.api.endpoint, self.repo.api_url());
-        let response = self.api.client.get(&url).call().map_err(Box::new)?;
-
-        let model_info = response.into_json()?;
-
-        Ok(model_info)
+        self.api.client.get(&url)
     }
 }
 
@@ -517,6 +527,7 @@ mod tests {
     use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
+    use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 
     struct TempDir {
@@ -562,7 +573,10 @@ mod tests {
         );
 
         // Make sure the file is now seeable without connection
-        let cache_path = api.cache.get(&Repo::new(model_id, RepoType::Model), "config.json").unwrap();
+        let cache_path = api
+            .cache
+            .get(&Repo::new(model_id, RepoType::Model), "config.json")
+            .unwrap();
         assert_eq!(cache_path, downloaded_path);
     }
 
@@ -579,7 +593,8 @@ mod tests {
             RepoType::Dataset,
             "refs/convert/parquet".to_string(),
         );
-        let downloaded_path = api.repo(repo)
+        let downloaded_path = api
+            .repo(repo)
             .download("wikitext-103-v1/wikitext-test.parquet")
             .unwrap();
         assert!(downloaded_path.exists());
@@ -610,71 +625,155 @@ mod tests {
                 sha: "2dd3f79917d431e9af1c81bfa96a575741774077".to_string(),
                 siblings: vec![
                     Siblings {
-                        rfilename: ".gitattributes".to_string()
+                        rfilename: ".gitattributes".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-test.parquet".to_string()
+                        rfilename: "wikitext-103-raw-v1/wikitext-test.parquet".to_string(),
                     },
                     Siblings {
                         rfilename: "wikitext-103-raw-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string()
+                            .to_string(),
                     },
                     Siblings {
                         rfilename: "wikitext-103-raw-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string()
+                            .to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-validation.parquet".to_string()
+                        rfilename: "wikitext-103-raw-v1/wikitext-validation.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string()
+                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string()
+                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-test.parquet".to_string()
+                        rfilename: "wikitext-103-v1/wikitext-test.parquet".to_string(),
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string()
+                            .to_string(),
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string()
+                            .to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-validation.parquet".to_string()
+                        rfilename: "wikitext-103-v1/wikitext-validation.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string()
+                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string()
+                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string()
+                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-test.parquet".to_string()
+                        rfilename: "wikitext-2-raw-v1/wikitext-test.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-train.parquet".to_string()
+                        rfilename: "wikitext-2-raw-v1/wikitext-train.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-validation.parquet".to_string()
+                        rfilename: "wikitext-2-raw-v1/wikitext-validation.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-test.parquet".to_string()
+                        rfilename: "wikitext-2-v1/wikitext-test.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-train.parquet".to_string()
+                        rfilename: "wikitext-2-v1/wikitext-train.parquet".to_string(),
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-validation.parquet".to_string()
+                        rfilename: "wikitext-2-v1/wikitext-validation.parquet".to_string(),
                     }
                 ],
             }
         )
+    }
+
+    #[test]
+    fn detailed_info() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = Repo::with_revision(
+            "mcpotato/42-eicar-street".to_string(),
+            RepoType::Model,
+            "8b3861f6931c4026b0cd22b38dbc09e7668983ac".to_string(),
+        );
+        let blobs_info: Value = api
+            .repo(repo)
+            .info_request()
+            .query("blobs", "true")
+            .call()
+            .unwrap()
+            .into_json()
+            .unwrap();
+        assert_eq!(
+            blobs_info,
+            json!({
+                "_id": "621ffdc136468d709f17ddb4",
+                "author": "mcpotato",
+                "config": {},
+                "disabled": false,
+                "downloads": 0,
+                "gated": false,
+                "id": "mcpotato/42-eicar-street",
+                "lastModified": "2022-11-30T19:54:16.000Z",
+                "likes": 0,
+                "modelId": "mcpotato/42-eicar-street",
+                "private": false,
+                "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
+                "siblings": [
+                    {
+                        "blobId": "6d34772f5ca361021038b404fb913ec8dc0b1a5a",
+                        "rfilename": ".gitattributes",
+                        "size": 1175
+                    },
+                    {
+                        "blobId": "be98037f7c542112c15a1d2fc7e2a2427e42cb50",
+                        "rfilename": "build_pickles.py",
+                        "size": 304
+                    },
+                    {
+                        "blobId": "8acd02161fff53f9df9597e377e22b04bc34feff",
+                        "rfilename": "danger.dat",
+                        "size": 66
+                    },
+                    {
+                        "blobId": "86b812515e075a1ae216e1239e615a1d9e0b316e",
+                        "rfilename": "eicar_test_file",
+                        "size": 70
+                    },
+                    {
+                        "blobId": "86b812515e075a1ae216e1239e615a1d9e0b316e",
+                        "rfilename": "eicar_test_file_bis",
+                        "size":70
+                    },
+                    {
+                        "blobId": "cd1c6d8bde5006076655711a49feae66f07d707e",
+                        "lfs": {
+                            "pointerSize": 127,
+                            "sha256": "f9343d7d7ec5c3d8bcced056c438fc9f1d3819e9ca3d42418a40857050e10e20",
+                            "size": 22
+                        },
+                        "rfilename": "pytorch_model.bin",
+                        "size": 22
+                    },
+                    {
+                        "blobId": "8ab39654695136173fee29cba0193f679dfbd652",
+                        "rfilename": "supposedly_safe.pkl",
+                        "size": 31
+                    }
+                ],
+                "spaces": [],
+                "tags": ["pytorch", "region:us"],
+            })
+        );
     }
 }
