@@ -707,7 +707,6 @@ mod tests {
                 "disabled": false,
                 "downloads": 0,
                 "gated": false,
-                "gitalyUid": "e2f3311091b666481acd7ed5dc1f26b261e6b23a3aaf5f14773add21c24b24a7",
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
                 "likes": 0,
