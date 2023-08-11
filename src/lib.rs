@@ -2,6 +2,7 @@
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
 use std::io::Write;
 use std::path::PathBuf;
+use rand::{distributions::Alphanumeric, Rng};
 
 /// The actual Api to interact with the hub.
 #[cfg(feature = "online")]
@@ -92,6 +93,20 @@ impl Cache {
         // Remove `"hub"`
         path.pop();
         path.push("token");
+        path
+    }
+
+    pub(crate) fn temp_path(&self) -> PathBuf {
+        let mut path = self.path.clone();
+        path.push("tmp");
+        std::fs::create_dir_all(&path).ok();
+
+        let s: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+        path.push(s);
         path
     }
 }

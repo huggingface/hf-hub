@@ -1,7 +1,7 @@
 use super::RepoInfo;
 use crate::{Cache, Repo, RepoType};
 use indicatif::{ProgressBar, ProgressStyle};
-use rand::{distributions::Alphanumeric, thread_rng, Rng};
+use rand::Rng;
 use reqwest::{
     header::{
         HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
@@ -203,17 +203,6 @@ pub struct Api {
     progress: bool,
 }
 
-fn temp_filename() -> PathBuf {
-    let s: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(7)
-        .map(char::from)
-        .collect();
-    let mut path = std::env::temp_dir();
-    path.push(s);
-    path
-}
-
 fn make_relative(src: &Path, dst: &Path) -> PathBuf {
     let path = src;
     let base = dst;
@@ -266,7 +255,7 @@ fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
 }
 
 fn jitter() -> usize {
-    thread_rng().gen_range(0..=500)
+    rand::thread_rng().gen_range(0..=500)
 }
 
 fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
@@ -421,7 +410,7 @@ impl ApiRepo {
         let mut handles = vec![];
         let semaphore = Arc::new(Semaphore::new(self.api.max_files));
         let parallel_failures_semaphore = Arc::new(Semaphore::new(self.api.parallel_failures));
-        let filename = temp_filename();
+        let filename = self.api.cache.temp_path();
 
         // Create the file and set everything properly
         tokio::fs::File::create(&filename)
@@ -564,11 +553,7 @@ impl ApiRepo {
             .download_tempfile(&url, metadata.size, progressbar)
             .await?;
 
-        if tokio::fs::rename(&tmp_filename, &blob_path).await.is_err() {
-            // Renaming may fail if locations are different mount points
-            std::fs::File::create(&blob_path)?;
-            tokio::fs::copy(tmp_filename, &blob_path).await?;
-        }
+        tokio::fs::rename(&tmp_filename, &blob_path).await?;
 
         let mut pointer_path = self.api.cache.pointer_path(repo, &metadata.commit_hash);
         pointer_path.push(filename);
@@ -710,7 +695,7 @@ mod tests {
         assert_eq!(
             model_info,
             RepoInfo {
-                sha: "2dd3f79917d431e9af1c81bfa96a575741774077".to_string(),
+                sha: "06ac3f4b846ef171cae5a48a35c3e85f2b44f636".to_string(),
                 siblings: vec![
                     Siblings {
                         rfilename: ".gitattributes".to_string()
@@ -813,6 +798,7 @@ mod tests {
                 "disabled": false,
                 "downloads": 0,
                 "gated": false,
+                "gitalyUid": "e2f3311091b666481acd7ed5dc1f26b261e6b23a3aaf5f14773add21c24b24a7",
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
                 "likes": 0,

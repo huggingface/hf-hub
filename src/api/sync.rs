@@ -1,6 +1,5 @@
 use crate::{Cache, Repo, RepoType};
 use indicatif::{ProgressBar, ProgressStyle};
-use rand::{distributions::Alphanumeric, Rng};
 use std::collections::HashMap;
 // use reqwest::{
 //     blocking::Agent,
@@ -198,17 +197,6 @@ pub struct Api {
     progress: bool,
 }
 
-fn temp_filename() -> PathBuf {
-    let s: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(7)
-        .map(char::from)
-        .collect();
-    let mut path = std::env::temp_dir();
-    path.push(s);
-    path
-}
-
 fn make_relative(src: &Path, dst: &Path) -> PathBuf {
     let path = src;
     let base = dst;
@@ -331,7 +319,7 @@ impl Api {
         url: &str,
         progressbar: Option<ProgressBar>,
     ) -> Result<PathBuf, ApiError> {
-        let filename = temp_filename();
+        let filename = self.cache.temp_path();
 
         // Create the file and set everything properly
         let mut file = std::fs::File::create(&filename)?;
@@ -474,11 +462,7 @@ impl ApiRepo {
 
         let tmp_filename = self.api.download_tempfile(&url, progressbar)?;
 
-        if std::fs::rename(&tmp_filename, &blob_path).is_err() {
-            // Renaming may fail if locations are different mount points
-            std::fs::File::create(&blob_path)?;
-            std::fs::copy(tmp_filename, &blob_path)?;
-        }
+        std::fs::rename(&tmp_filename, &blob_path)?;
 
         let mut pointer_path = self
             .api
@@ -622,7 +606,7 @@ mod tests {
         assert_eq!(
             model_info,
             RepoInfo {
-                sha: "2dd3f79917d431e9af1c81bfa96a575741774077".to_string(),
+                sha: "06ac3f4b846ef171cae5a48a35c3e85f2b44f636".to_string(),
                 siblings: vec![
                     Siblings {
                         rfilename: ".gitattributes".to_string(),
@@ -723,6 +707,7 @@ mod tests {
                 "disabled": false,
                 "downloads": 0,
                 "gated": false,
+                "gitalyUid": "e2f3311091b666481acd7ed5dc1f26b261e6b23a3aaf5f14773add21c24b24a7",
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
                 "likes": 0,
