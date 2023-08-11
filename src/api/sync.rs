@@ -462,7 +462,7 @@ impl ApiRepo {
 
         let tmp_filename = self.api.download_tempfile(&url, progressbar)?;
 
-        std::fs::rename(&tmp_filename, &blob_path)?;
+        std::fs::rename(tmp_filename, &blob_path)?;
 
         let mut pointer_path = self
             .api
