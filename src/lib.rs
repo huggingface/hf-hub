@@ -1,5 +1,6 @@
 #![deny(missing_docs)]
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
+use rand::{distributions::Alphanumeric, Rng};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -92,6 +93,20 @@ impl Cache {
         // Remove `"hub"`
         path.pop();
         path.push("token");
+        path
+    }
+
+    pub(crate) fn temp_path(&self) -> PathBuf {
+        let mut path = self.path.clone();
+        path.push("tmp");
+        std::fs::create_dir_all(&path).ok();
+
+        let s: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+        path.push(s);
         path
     }
 }
@@ -202,26 +217,26 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(not(target_os="windows"))]
+    #[cfg(not(target_os = "windows"))]
     fn token_path() {
         let cache = Cache::default();
         let token_path = cache.token_path().to_str().unwrap().to_string();
-        if let Ok(hf_home) = std::env::var("HF_HOME"){
+        if let Ok(hf_home) = std::env::var("HF_HOME") {
             assert_eq!(token_path, format!("{hf_home}/token"));
-        }else{
+        } else {
             let n = "huggingface/token".len();
             assert_eq!(&token_path[token_path.len() - n..], "huggingface/token");
         }
     }
 
     #[test]
-    #[cfg(target_os="windows")]
+    #[cfg(target_os = "windows")]
     fn token_path() {
         let cache = Cache::default();
         let token_path = cache.token_path().to_str().unwrap().to_string();
-        if let Ok(hf_home) = std::env::var("HF_HOME"){
+        if let Ok(hf_home) = std::env::var("HF_HOME") {
             assert_eq!(token_path, format!("{hf_home}\\token"));
-        }else{
+        } else {
             let n = "huggingface/token".len();
             assert_eq!(&token_path[token_path.len() - n..], "huggingface\\token");
         }
