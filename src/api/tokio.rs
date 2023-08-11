@@ -10,6 +10,7 @@ use reqwest::{
     redirect::Policy,
     Client, Error as ReqwestError, RequestBuilder,
 };
+use std::env::var;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -155,11 +156,30 @@ impl ApiBuilder {
         Ok(headers)
     }
 
+    fn client_builder() -> Result<reqwest::ClientBuilder, ApiError> {
+        let builder = Client::builder();
+
+        let proxy = if let Ok(url) = var("HTTP_PROXY") {
+            reqwest::Proxy::http(url)
+        } else if let Ok(url) = var("HTTPS_PROXY") {
+            reqwest::Proxy::https(url)
+        } else if let Ok(url) = var("ALL_PROXY") {
+            reqwest::Proxy::all(url)
+        } else {
+            return Ok(builder);
+        }
+        .map_err(ApiError::RequestError)?;
+
+        Ok(builder.proxy(proxy))
+    }
+
     /// Consumes the builder and buids the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
-        let client = Client::builder().default_headers(headers.clone()).build()?;
-        let no_redirect_client = Client::builder()
+        let client = Self::client_builder()?
+            .default_headers(headers.clone())
+            .build()?;
+        let no_redirect_client = Self::client_builder()?
             .redirect(Policy::none())
             .default_headers(headers)
             .build()?;

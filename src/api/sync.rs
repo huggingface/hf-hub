@@ -2,6 +2,7 @@ use crate::{Cache, Repo, RepoType};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{distributions::Alphanumeric, Rng};
 use std::collections::HashMap;
+use std::env::var;
 // use reqwest::{
 //     blocking::Agent,
 //     header::{
@@ -161,11 +162,24 @@ impl ApiBuilder {
         Ok(headers)
     }
 
+    fn ureq_builder() -> Result<ureq::AgentBuilder, ApiError> {
+        let mut builder = ureq::builder();
+        if let Ok(url) = var("HTTP_PROXY")
+            .or_else(|_| var("HTTPS_PROXY"))
+            .or_else(|_| var("ALL_PROXY"))
+        {
+            let proxy = ureq::Proxy::new(url).map_err(|e| ApiError::RequestError(e.into()))?;
+            builder = builder.proxy(proxy);
+        }
+        Ok(builder)
+    }
+
     /// Consumes the builder and buids the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
-        let client = HeaderAgent::new(ureq::builder().build(), headers.clone());
-        let no_redirect_client = HeaderAgent::new(ureq::builder().redirects(0).build(), headers);
+        let client = HeaderAgent::new(Self::ureq_builder()?.build(), headers.clone());
+        let no_redirect_client =
+            HeaderAgent::new(Self::ureq_builder()?.redirects(0).build(), headers);
         Ok(Api {
             endpoint: self.endpoint,
             url_template: self.url_template,
