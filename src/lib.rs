@@ -93,6 +93,9 @@ impl Cache {
         // Remove `"hub"`
         path.pop();
         path.push("token");
+        if !path.exists() {
+            log::warn!("File with your token is absent by path {:?}", path);
+        }
         path
     }
 
@@ -219,6 +222,7 @@ mod tests {
     #[test]
     #[cfg(not(target_os = "windows"))]
     fn token_path() {
+        env_logger::Builder::from_env(env_logger::Env::new().default_filter_or("warn")).init();
         let cache = Cache::default();
         let token_path = cache.token_path().to_str().unwrap().to_string();
         if let Ok(hf_home) = std::env::var("HF_HOME") {
@@ -232,6 +236,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn token_path() {
+        env_logger::Builder::from_env(env_logger::Env::new().default_filter_or("warn")).init();
         let cache = Cache::default();
         let token_path = cache.token_path().to_str().unwrap().to_string();
         if let Ok(hf_home) = std::env::var("HF_HOME") {
