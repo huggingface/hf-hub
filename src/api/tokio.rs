@@ -97,6 +97,9 @@ impl ApiBuilder {
     pub fn new() -> Self {
         let cache = Cache::default();
         let token_filename = cache.token_path();
+        if !token_filename.exists() {
+            log::info!("Token file not found {path:?}");
+        }
         let token = match std::fs::read_to_string(token_filename) {
             Ok(token_content) => {
                 let token_content = token_content.trim();
