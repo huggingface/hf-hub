@@ -773,6 +773,7 @@ mod tests {
     async fn info_request() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
+            .with_token(None)
             .with_progress(false)
             .with_cache_dir(tmp.path.clone())
             .build()

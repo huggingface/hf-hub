@@ -55,7 +55,7 @@ impl Cache {
     /// ```
     /// # use hf_hub::{Cache, Repo, RepoType};
     /// # let model_id = "gpt2".to_string();
-    /// let cache = Cache::new().unwrap();
+    /// let cache = Cache::new("/tmp/".into());
     /// let cache = cache.repo(Repo::new(model_id, RepoType::Model));
     /// ```
     pub fn model(&self, model_id: String) -> CacheRepo {
@@ -66,7 +66,7 @@ impl Cache {
     /// ```
     /// # use hf_hub::{Cache, Repo, RepoType};
     /// # let model_id = "gpt2".to_string();
-    /// let cache = Cache::new().unwrap();
+    /// let cache = Cache::new("/tmp/".into());
     /// let cache = cache.repo(Repo::new(model_id, RepoType::Dataset));
     /// ```
     pub fn dataset(&self, model_id: String) -> CacheRepo {
@@ -77,7 +77,7 @@ impl Cache {
     /// ```
     /// # use hf_hub::{Cache, Repo, RepoType};
     /// # let model_id = "gpt2".to_string();
-    /// let cache = Cache::new().unwrap();
+    /// let cache = Cache::new("/tmp/".into());
     /// let cache = cache.repo(Repo::new(model_id, RepoType::Space));
     /// ```
     pub fn space(&self, model_id: String) -> CacheRepo {

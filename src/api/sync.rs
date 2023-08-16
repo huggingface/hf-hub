@@ -692,6 +692,7 @@ mod tests {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
             .with_progress(false)
+            .with_token(None)
             .with_cache_dir(tmp.path.clone())
             .build()
             .unwrap();
