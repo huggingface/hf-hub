@@ -110,7 +110,7 @@ impl ApiBuilder {
         let cache = Cache::default();
         let token_filename = cache.token_path();
         if !token_filename.exists() {
-            log::info!("Token file not found {path:?}");
+            log::info!("Token file not found {token_filename:?}");
         }
         let token = match std::fs::read_to_string(token_filename) {
             Ok(token_content) => {
@@ -420,7 +420,7 @@ impl ApiRepo {
     /// let api = Api::new().unwrap();
     /// let local_filename = api.model("gpt2".to_string()).get("model.safetensors").unwrap();
     pub fn get(&self, filename: &str) -> Result<PathBuf, ApiError> {
-        if let Some(path) = self.api.cache.get(&self.repo, filename) {
+        if let Some(path) = self.api.cache.repo(self.repo.clone()).get(filename) {
             Ok(path)
         } else {
             self.download(filename)
@@ -440,7 +440,11 @@ impl ApiRepo {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url)?;
 
-        let blob_path = self.api.cache.blob_path(&self.repo, &metadata.etag);
+        let blob_path = self
+            .api
+            .cache
+            .repo(self.repo.clone())
+            .blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
         let progressbar = if self.api.progress {
@@ -470,14 +474,16 @@ impl ApiRepo {
         let mut pointer_path = self
             .api
             .cache
-            .pointer_path(&self.repo, &metadata.commit_hash);
+            .repo(self.repo.clone())
+            .pointer_path(&metadata.commit_hash);
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
         symlink_or_rename(&blob_path, &pointer_path)?;
         self.api
             .cache
-            .create_ref(&self.repo, &metadata.commit_hash)?;
+            .repo(self.repo.clone())
+            .create_ref(&metadata.commit_hash)?;
 
         Ok(pointer_path)
     }
@@ -562,7 +568,8 @@ mod tests {
         // Make sure the file is now seeable without connection
         let cache_path = api
             .cache
-            .get(&Repo::new(model_id, RepoType::Model), "config.json")
+            .repo(Repo::new(model_id, RepoType::Model))
+            .get("config.json")
             .unwrap();
         assert_eq!(cache_path, downloaded_path);
     }
@@ -685,6 +692,7 @@ mod tests {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
             .with_progress(false)
+            .with_token(None)
             .with_cache_dir(tmp.path.clone())
             .build()
             .unwrap();
