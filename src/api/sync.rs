@@ -241,7 +241,7 @@ fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
     let rel_src = make_relative(src, dst);
     #[cfg(target_os = "windows")]
     {
-        if let Err(err) = std::os::windows::fs::symlink_file(rel_src.clone(), dst) {
+        if let Err(err) = std::os::windows::fs::symlink_file(rel_src, dst) {
             std::fs::rename(src, dst)?;
         }
     }
