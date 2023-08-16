@@ -244,28 +244,13 @@ fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
     let src = make_relative(src, dst);
     #[cfg(target_os = "windows")]
     {
-        let result_symlink = std::os::windows::fs::symlink_file(src, dst);
-        match result_symlink {
-            Ok(_) => {}
-            Err(err) => {
-                if err.raw_os_error() == Some(1314) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::PermissionDenied,
-                        "Cant create symlink. You need to run this command as administrator, or enable developer mode.",
-                    ));
-                } else {
-                    return Err(err);
-                }
-            }
+        if let Err(err) = std::os::windows::fs::symlink_file(src, dst) {
+            std::fs::rename(src, dst)?;
         }
     }
 
-
     #[cfg(target_family = "unix")]
     std::os::unix::fs::symlink(src, dst)?;
-
-    #[cfg(not(any(target_family = "unix", target_os = "windows")))]
-    std::fs::rename(src, dst)?;
 
     Ok(())
 }
