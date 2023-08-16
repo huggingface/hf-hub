@@ -37,15 +37,84 @@ impl Cache {
         &self.path
     }
 
+    pub(crate) fn token_path(&self) -> PathBuf {
+        let mut path = self.path.clone();
+        // Remove `"hub"`
+        path.pop();
+        path.push("token");
+        path
+    }
+
+    /// Creates a new handle [`CacheRepo`] which contains operations
+    /// on a particular [`Repo`]
+    pub fn repo(&self, repo: Repo) -> CacheRepo {
+        CacheRepo::new(self.clone(), repo)
+    }
+
+    /// Simple wrapper over
+    /// ```
+    /// # use hf_hub::{Cache, Repo, RepoType};
+    /// # let model_id = "gpt2".to_string();
+    /// let cache = Cache::new().unwrap();
+    /// let cache = cache.repo(Repo::new(model_id, RepoType::Model));
+    /// ```
+    pub fn model(&self, model_id: String) -> CacheRepo {
+        self.repo(Repo::new(model_id, RepoType::Model))
+    }
+
+    /// Simple wrapper over
+    /// ```
+    /// # use hf_hub::{Cache, Repo, RepoType};
+    /// # let model_id = "gpt2".to_string();
+    /// let cache = Cache::new().unwrap();
+    /// let cache = cache.repo(Repo::new(model_id, RepoType::Dataset));
+    /// ```
+    pub fn dataset(&self, model_id: String) -> CacheRepo {
+        self.repo(Repo::new(model_id, RepoType::Dataset))
+    }
+
+    /// Simple wrapper over
+    /// ```
+    /// # use hf_hub::{Cache, Repo, RepoType};
+    /// # let model_id = "gpt2".to_string();
+    /// let cache = Cache::new().unwrap();
+    /// let cache = cache.repo(Repo::new(model_id, RepoType::Space));
+    /// ```
+    pub fn space(&self, model_id: String) -> CacheRepo {
+        self.repo(Repo::new(model_id, RepoType::Space))
+    }
+
+    pub(crate) fn temp_path(&self) -> PathBuf {
+        let mut path = self.path();
+        path.push("tmp");
+        std::fs::create_dir_all(&path).ok();
+
+        let s: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+        path.push(s);
+        path.to_path_buf()
+    }
+}
+
+/// Shorthand for accessing things within a particular repo
+pub struct CacheRepo {
+    cache: Cache,
+    repo: Repo,
+}
+
+impl CacheRepo {
+    fn new(cache: Cache, repo: Repo) -> Self {
+        Self { cache, repo }
+    }
     /// This will get the location of the file within the cache for the remote
     /// `filename`. Will return `None` if file is not already present in cache.
-    pub fn get(&self, repo: &Repo, filename: &str) -> Option<PathBuf> {
-        let mut commit_path = self.path.clone();
-        commit_path.push(repo.folder_name());
-        commit_path.push("refs");
-        commit_path.push(repo.revision());
+    pub fn get(&self, filename: &str) -> Option<PathBuf> {
+        let commit_path = self.ref_path();
         let commit_hash = std::fs::read_to_string(commit_path).ok()?;
-        let mut pointer_path = self.pointer_path(repo, &commit_hash);
+        let mut pointer_path = self.pointer_path(&commit_hash);
         pointer_path.push(filename);
         if pointer_path.exists() {
             Some(pointer_path)
@@ -54,13 +123,23 @@ impl Cache {
         }
     }
 
+    fn path(&self) -> PathBuf {
+        let mut ref_path = self.cache.path.clone();
+        ref_path.push(self.repo.folder_name());
+        ref_path
+    }
+
+    fn ref_path(&self) -> PathBuf {
+        let mut ref_path = self.path();
+        ref_path.push("refs");
+        ref_path.push(self.repo.revision());
+        ref_path
+    }
+
     /// Creates a reference in the cache directory that points branches to the correct
     /// commits within the blobs.
-    pub fn create_ref(&self, repo: &Repo, commit_hash: &str) -> Result<(), std::io::Error> {
-        let mut ref_path = self.path.clone();
-        ref_path.push(repo.folder_name());
-        ref_path.push("refs");
-        ref_path.push(repo.revision());
+    pub fn create_ref(&self, commit_hash: &str) -> Result<(), std::io::Error> {
+        let ref_path = self.ref_path();
         // Needs to be done like this because revision might contain `/` creating subfolders here.
         std::fs::create_dir_all(ref_path.parent().unwrap())?;
         let mut file1 = std::fs::OpenOptions::new()
@@ -72,41 +151,25 @@ impl Cache {
     }
 
     #[cfg(feature = "online")]
-    pub(crate) fn blob_path(&self, repo: &Repo, etag: &str) -> PathBuf {
-        let mut blob_path = self.path.clone();
-        blob_path.push(repo.folder_name());
+    pub(crate) fn blob_path(&self, etag: &str) -> PathBuf {
+        let mut blob_path = self.path();
         blob_path.push("blobs");
         blob_path.push(etag);
         blob_path
     }
 
-    pub(crate) fn pointer_path(&self, repo: &Repo, commit_hash: &str) -> PathBuf {
-        let mut pointer_path = self.path.clone();
-        pointer_path.push(repo.folder_name());
+    pub(crate) fn pointer_path(&self, commit_hash: &str) -> PathBuf {
+        let mut pointer_path = self.path();
         pointer_path.push("snapshots");
         pointer_path.push(commit_hash);
         pointer_path
     }
 
     pub(crate) fn token_path(&self) -> PathBuf {
-        let mut path = self.path.clone();
+        let mut path = self.path();
         // Remove `"hub"`
         path.pop();
         path.push("token");
-        path
-    }
-
-    pub(crate) fn temp_path(&self) -> PathBuf {
-        let mut path = self.path.clone();
-        path.push("tmp");
-        std::fs::create_dir_all(&path).ok();
-
-        let s: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(7)
-            .map(char::from)
-            .collect();
-        path.push(s);
         path
     }
 }
@@ -128,7 +191,7 @@ impl Default for Cache {
 }
 
 /// The representation of a repo on the hub.
-#[allow(dead_code)] // Repo type unused in offline mode
+#[derive(Clone)]
 pub struct Repo {
     repo_id: String,
     repo_type: RepoType,

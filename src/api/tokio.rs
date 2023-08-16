@@ -98,7 +98,7 @@ impl ApiBuilder {
         let cache = Cache::default();
         let token_filename = cache.token_path();
         if !token_filename.exists() {
-            log::info!("Token file not found {path:?}");
+            log::info!("Token file not found {token_filename:?}");
         }
         let token = match std::fs::read_to_string(token_filename) {
             Ok(token_content) => {
@@ -506,7 +506,7 @@ impl ApiRepo {
     /// let local_filename = api.model("gpt2".to_string()).get("model.safetensors").await.unwrap();
     /// # })
     pub async fn get(&self, filename: &str) -> Result<PathBuf, ApiError> {
-        if let Some(path) = self.api.cache.get(&self.repo, filename) {
+        if let Some(path) = self.api.cache.repo(self.repo.clone()).get(filename) {
             Ok(path)
         } else {
             self.download(filename).await
@@ -525,11 +525,11 @@ impl ApiRepo {
     /// # })
     /// ```
     pub async fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
-        let repo = &self.repo;
         let url = self.url(filename);
         let metadata = self.api.metadata(&url).await?;
+        let cache = self.api.cache.repo(self.repo.clone());
 
-        let blob_path = self.api.cache.blob_path(repo, &metadata.etag);
+        let blob_path = cache.blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
         let progressbar = if self.api.progress {
@@ -558,12 +558,12 @@ impl ApiRepo {
 
         tokio::fs::rename(&tmp_filename, &blob_path).await?;
 
-        let mut pointer_path = self.api.cache.pointer_path(repo, &metadata.commit_hash);
+        let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
         symlink_or_rename(&blob_path, &pointer_path)?;
-        self.api.cache.create_ref(repo, &metadata.commit_hash)?;
+        cache.create_ref(&metadata.commit_hash)?;
 
         Ok(pointer_path)
     }
@@ -651,7 +651,7 @@ mod tests {
         );
 
         // Make sure the file is now seeable without connection
-        let cache_path = api.cache.get(&repo, "config.json").unwrap();
+        let cache_path = api.cache.repo(repo.clone()).get("config.json").unwrap();
         assert_eq!(cache_path, downloaded_path);
     }
 
