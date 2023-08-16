@@ -85,7 +85,7 @@ impl Cache {
     }
 
     pub(crate) fn temp_path(&self) -> PathBuf {
-        let mut path = self.path();
+        let mut path = self.path().clone();
         path.push("tmp");
         std::fs::create_dir_all(&path).ok();
 
@@ -163,14 +163,6 @@ impl CacheRepo {
         pointer_path.push("snapshots");
         pointer_path.push(commit_hash);
         pointer_path
-    }
-
-    pub(crate) fn token_path(&self) -> PathBuf {
-        let mut path = self.path();
-        // Remove `"hub"`
-        path.pop();
-        path.push("token");
-        path
     }
 }
 
