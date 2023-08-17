@@ -590,7 +590,7 @@ mod tests {
         );
         let downloaded_path = api
             .repo(repo)
-            .download("wikitext-103-v1/wikitext-test.parquet")
+            .download("wikitext-103-v1/test/0000.parquet")
             .unwrap();
         assert!(downloaded_path.exists());
         let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
@@ -617,73 +617,69 @@ mod tests {
         assert_eq!(
             model_info,
             RepoInfo {
-                sha: "06ac3f4b846ef171cae5a48a35c3e85f2b44f636".to_string(),
                 siblings: vec![
                     Siblings {
-                        rfilename: ".gitattributes".to_string(),
+                        rfilename: ".gitattributes".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-test.parquet".to_string(),
+                        rfilename: "wikitext-103-raw-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string(),
+                        rfilename: "wikitext-103-raw-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string(),
+                        rfilename: "wikitext-103-raw-v1/train/0001.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/wikitext-validation.parquet".to_string(),
+                        rfilename: "wikitext-103-raw-v1/validation/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string(),
+                        rfilename: "wikitext-103-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string(),
+                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-test.parquet".to_string(),
+                        rfilename: "wikitext-103-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-train-00000-of-00002.parquet"
-                            .to_string(),
+                        rfilename: "wikitext-103-v1/train/0001.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-train-00001-of-00002.parquet"
-                            .to_string(),
+                        rfilename: "wikitext-103-v1/validation/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/wikitext-validation.parquet".to_string(),
+                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string(),
+                        rfilename: "wikitext-2-raw-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string(),
+                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string(),
+                        rfilename: "wikitext-2-raw-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-test.parquet".to_string(),
+                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-train.parquet".to_string(),
+                        rfilename: "wikitext-2-raw-v1/validation/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/wikitext-validation.parquet".to_string(),
+                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-test.parquet".to_string(),
+                        rfilename: "wikitext-2-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-train.parquet".to_string(),
+                        rfilename: "wikitext-2-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/wikitext-validation.parquet".to_string(),
+                        rfilename: "wikitext-2-v1/validation/0000.parquet".to_string()
                     }
                 ],
+                sha: "29104e21c58d6f33e93ee0d78dbf7141b40fe46c".to_string()
             }
         )
     }
