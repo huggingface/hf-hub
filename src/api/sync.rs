@@ -238,15 +238,16 @@ fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
         return Ok(());
     }
 
-    let src = make_relative(src, dst);
+    let rel_src = make_relative(src, dst);
     #[cfg(target_os = "windows")]
-    std::os::windows::fs::symlink_file(src, dst)?;
+    {
+        if std::os::windows::fs::symlink_file(rel_src, dst).is_err() {
+            std::fs::rename(src, dst)?;
+        }
+    }
 
     #[cfg(target_family = "unix")]
-    std::os::unix::fs::symlink(src, dst)?;
-
-    #[cfg(not(any(target_family = "unix", target_os = "windows")))]
-    std::fs::rename(src, dst)?;
+    std::os::unix::fs::symlink(rel_src, dst)?;
 
     Ok(())
 }
