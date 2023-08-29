@@ -625,13 +625,22 @@ mod tests {
                         rfilename: "wikitext-103-raw-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
+                        rfilename: "wikitext-103-raw-v1/test/index.duckdb".to_string()
+                    },
+                    Siblings {
                         rfilename: "wikitext-103-raw-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-raw-v1/train/0001.parquet".to_string()
                     },
                     Siblings {
+                        rfilename: "wikitext-103-raw-v1/train/index.duckdb".to_string()
+                    },
+                    Siblings {
                         rfilename: "wikitext-103-raw-v1/validation/0000.parquet".to_string()
+                    },
+                    Siblings {
+                        rfilename: "wikitext-103-raw-v1/validation/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/test/0000.parquet".to_string()
@@ -644,6 +653,9 @@ mod tests {
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/train/0001.parquet".to_string()
+                    },
+                    Siblings {
+                        rfilename: "wikitext-103-v1/train/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/validation/0000.parquet".to_string()
@@ -673,13 +685,22 @@ mod tests {
                         rfilename: "wikitext-2-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
+                        rfilename: "wikitext-2-v1/test/index.duckdb".to_string()
+                    },
+                    Siblings {
                         rfilename: "wikitext-2-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
+                        rfilename: "wikitext-2-v1/train/index.duckdb".to_string()
+                    },
+                    Siblings {
                         rfilename: "wikitext-2-v1/validation/0000.parquet".to_string()
+                    },
+                    Siblings {
+                        rfilename: "wikitext-2-v1/validation/index.duckdb".to_string()
                     }
                 ],
-                sha: "29104e21c58d6f33e93ee0d78dbf7141b40fe46c".to_string()
+                sha: "bdbf428cb993bfb50707792cf34f813d31df7355".to_string()
             }
         )
     }
