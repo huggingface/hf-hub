@@ -14,7 +14,7 @@ use super::RepoInfo;
 use std::num::ParseIntError;
 use std::path::{PathBuf};
 use thiserror::Error;
-use ureq::{Agent, Request};
+use ureq::{Agent, Error, Request};
 use crate::api::universal::Universal;
 
 /// Current version (used in user-agent)
@@ -215,57 +215,77 @@ impl Api {
     }
 
     fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
-        let response = self
+        let response_result = self
             .no_redirect_client
             .get(url)
             .set(RANGE, "bytes=0-0")
-            .call()
-            .map_err(Box::new)?;
-        // let headers = response.headers();
-        let header_commit = "x-repo-commit";
-        let header_linked_etag = "x-linked-etag";
-        let header_etag = "etag";
+            .call();
 
-        let etag = match response.header(header_linked_etag) {
-            Some(etag) => etag,
-            None => response
-                .header(header_etag)
-                .ok_or(ApiError::MissingHeader(header_etag))?,
-        };
-        // Cleaning extra quotes
-        let etag = etag.to_string().replace('"', "");
-        let commit_hash = response
-            .header(header_commit)
-            .ok_or(ApiError::MissingHeader(header_commit))?
-            .to_string();
+        match response_result {
+            Ok(response) => {
+                // let headers = response.headers();
+                let header_commit = "x-repo-commit";
+                let header_linked_etag = "x-linked-etag";
+                let header_etag = "etag";
 
-        // The response was redirected o S3 most likely which will
-        // know about the size of the file
-        let status = response.status();
-        let is_redirection = (300..400).contains(&status);
-        let response = if is_redirection {
-            self.client
-                .get(response.header(LOCATION).unwrap())
-                .set(RANGE, "bytes=0-0")
-                .call()
-                .map_err(Box::new)?
-        } else {
-            response
-        };
-        let content_range = response
-            .header(CONTENT_RANGE)
-            .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?;
+                let etag = match response.header(header_linked_etag) {
+                    Some(etag) => etag,
+                    None => response
+                        .header(header_etag)
+                        .ok_or(ApiError::MissingHeader(header_etag))?,
+                };
+                // Cleaning extra quotes
+                let etag = etag.to_string().replace('"', "");
+                let commit_hash = response
+                    .header(header_commit)
+                    .ok_or(ApiError::MissingHeader(header_commit))?
+                    .to_string();
 
-        let size = content_range
-            .split('/')
-            .last()
-            .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
-            .parse()?;
-        Ok(Metadata {
-            commit_hash,
-            etag,
-            size,
-        })
+                // The response was redirected o S3 most likely which will
+                // know about the size of the file
+                let status = response.status();
+                let is_redirection = (300..400).contains(&status);
+                let response = if is_redirection {
+                    self.client
+                        .get(response.header(LOCATION).unwrap())
+                        .set(RANGE, "bytes=0-0")
+                        .call()
+                        .map_err(Box::new)?
+                } else {
+                    response
+                };
+                let content_range = response
+                    .header(CONTENT_RANGE)
+                    .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?;
+
+                let size = content_range
+                    .split('/')
+                    .last()
+                    .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
+                    .parse()?;
+                Ok(Metadata {
+                    commit_hash,
+                    etag,
+                    size,
+                })
+            }
+            Err(e) => {
+                match e {
+                    Error::Status(code, _) => {
+                        if code == 401 {
+                            log::error!("You dont have access to this url {}, please check your token file or ask grant access", url);
+                        }
+                        return Err(ApiError::RequestError(Box::new(e)));
+
+                    }
+                    Error::Transport(_) => {
+                        return Err(ApiError::RequestError(Box::new(e)));
+                    }
+                }
+
+            }
+        }
+
     }
 
     fn download_tempfile(
@@ -390,7 +410,6 @@ impl ApiRepo {
     pub fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url)?;
-
         let blob_path = self
             .api
             .cache

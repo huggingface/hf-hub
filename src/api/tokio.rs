@@ -11,7 +11,7 @@ use reqwest::{
     Client, Error as ReqwestError, RequestBuilder,
 };
 use std::num::ParseIntError;
-use std::path::{Component, Path, PathBuf};
+use std::path::{PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
