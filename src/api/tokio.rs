@@ -16,6 +16,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
+use crate::api::universal::Universal;
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -513,7 +514,7 @@ impl ApiRepo {
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
-        symlink_or_rename(&blob_path, &pointer_path)?;
+        Universal::symlink_or_rename(&blob_path, &pointer_path)?;
         cache.create_ref(&metadata.commit_hash)?;
 
         Ok(pointer_path)
