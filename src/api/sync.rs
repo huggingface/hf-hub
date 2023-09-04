@@ -275,11 +275,11 @@ impl Api {
                         if code == 401 {
                             log::error!("You dont have access to this url {}, please check your token file or ask grant access", url);
                         }
-                        return Err(ApiError::RequestError(Box::new(e)));
+                        Err(ApiError::RequestError(Box::new(e)))
 
                     }
                     Error::Transport(_) => {
-                        return Err(ApiError::RequestError(Box::new(e)));
+                        Err(ApiError::RequestError(Box::new(e)))
                     }
                 }
 
