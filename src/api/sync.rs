@@ -440,12 +440,9 @@ impl ApiRepo {
     pub fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url)?;
+        let cache = self.api.cache.repo(self.repo.clone());
 
-        let blob_path = self
-            .api
-            .cache
-            .repo(self.repo.clone())
-            .blob_path(&metadata.etag);
+        let blob_path = cache.blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
         let progressbar = if self.api.progress {
@@ -472,19 +469,12 @@ impl ApiRepo {
 
         std::fs::rename(tmp_filename, &blob_path)?;
 
-        let mut pointer_path = self
-            .api
-            .cache
-            .repo(self.repo.clone())
-            .pointer_path(&metadata.commit_hash);
+        let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
         symlink_or_rename(&blob_path, &pointer_path)?;
-        self.api
-            .cache
-            .repo(self.repo.clone())
-            .create_ref(&metadata.commit_hash)?;
+        cache.create_ref(&metadata.commit_hash)?;
 
         Ok(pointer_path)
     }
