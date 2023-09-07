@@ -531,33 +531,35 @@ impl ApiRepo {
         let cache = self.api.cache.repo(self.repo.clone());
 
         let blob_path = cache.blob_path(&metadata.etag);
-        std::fs::create_dir_all(blob_path.parent().unwrap())?;
+        if !blob_path.exists() {
+            std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
-        let progressbar = if self.api.progress {
-            let progress = ProgressBar::new(metadata.size as u64);
-            progress.set_style(
-                ProgressStyle::with_template(
-                    "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
-                )
-                .unwrap(), // .progress_chars("━ "),
-            );
-            let maxlength = 30;
-            let message = if filename.len() > maxlength {
-                format!("..{}", &filename[filename.len() - maxlength..])
+            let progressbar = if self.api.progress {
+                let progress = ProgressBar::new(metadata.size as u64);
+                progress.set_style(
+                    ProgressStyle::with_template(
+                        "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
+                    )
+                    .unwrap(), // .progress_chars("━ "),
+                );
+                let maxlength = 30;
+                let message = if filename.len() > maxlength {
+                    format!("..{}", &filename[filename.len() - maxlength..])
+                } else {
+                    filename.to_string()
+                };
+                progress.set_message(message);
+                Some(progress)
             } else {
-                filename.to_string()
+                None
             };
-            progress.set_message(message);
-            Some(progress)
-        } else {
-            None
-        };
 
-        let tmp_filename = self
-            .download_tempfile(&url, metadata.size, progressbar)
-            .await?;
+            let tmp_filename = self
+                .download_tempfile(&url, metadata.size, progressbar)
+                .await?;
 
-        tokio::fs::rename(&tmp_filename, &blob_path).await?;
+            tokio::fs::rename(&tmp_filename, &blob_path).await?;
+        }
 
         let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
         pointer_path.push(filename);
