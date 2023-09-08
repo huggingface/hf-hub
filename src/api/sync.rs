@@ -598,6 +598,42 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_family = "unix")]
+    fn corruption() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+
+        let model_id = "julien-c/dummy-unknown".to_string();
+        let downloaded_path = api.model(model_id.clone()).download("config.json").unwrap();
+        assert!(downloaded_path.exists());
+
+        // corrupt the file
+        std::fs::write(&downloaded_path, "corrupted").unwrap();
+        // remove the symlink
+        std::fs::remove_file(&downloaded_path).unwrap();
+        // Get should recreate the symlink, but the corrupted blob should be reused
+        let cached_path = api.model(model_id.clone()).get("config.json").unwrap();
+
+        assert_eq!(cached_path, downloaded_path);
+        assert_eq!(std::fs::read_to_string(&cached_path).unwrap(), "corrupted");
+
+        // Download should overwrite the blob, and thus it should not be corrupted anymore
+        let downloaded_path = api.model(model_id.clone()).download("config.json").unwrap();
+
+        assert_eq!(cached_path, downloaded_path);
+
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
+        );
+    }
+
+    #[test]
     fn dataset() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
