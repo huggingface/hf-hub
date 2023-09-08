@@ -424,8 +424,65 @@ impl ApiRepo {
         if let Some(path) = self.api.cache.repo(self.repo.clone()).get(filename) {
             Ok(path)
         } else {
-            self.download(filename)
+            self.create_blob_pointer(filename)
         }
+    }
+
+    /// Force download a blob, even if it is already present locally.
+    fn download_blob(
+        &self,
+        filename: &str,
+        url: &str,
+        blob_path: &PathBuf,
+        size: usize,
+    ) -> Result<(), ApiError> {
+        std::fs::create_dir_all(blob_path.parent().unwrap())?;
+
+        let progressbar = if self.api.progress {
+            let progress = ProgressBar::new(size as u64);
+            progress.set_style(
+                ProgressStyle::with_template(
+                    "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
+                )
+                .unwrap(), // .progress_chars("━ "),
+            );
+            let maxlength = 30;
+            let message = if filename.len() > maxlength {
+                format!("..{}", &filename[filename.len() - maxlength..])
+            } else {
+                filename.to_string()
+            };
+            progress.set_message(message);
+            Some(progress)
+        } else {
+            None
+        };
+
+        let tmp_filename = self.api.download_tempfile(&url, progressbar)?;
+
+        std::fs::rename(tmp_filename, &blob_path)?;
+
+        Ok(())
+    }
+
+    /// Creates the ref to the commit_hash and symlinks/moves the blob, downloading it if necessary.
+    fn create_blob_pointer(&self, filename: &str) -> Result<PathBuf, ApiError> {
+        let url = self.url(filename);
+        let metadata = self.api.metadata(&url)?;
+        let cache = self.api.cache.repo(self.repo.clone());
+        let blob_path = cache.blob_path(&metadata.etag);
+        if !blob_path.exists() {
+            self.download_blob(filename, &url, &blob_path, metadata.size)?;
+        }
+
+        let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
+        pointer_path.push(filename);
+        std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
+
+        symlink_or_rename(&blob_path, &pointer_path)?;
+        cache.create_ref(&metadata.commit_hash)?;
+
+        Ok(pointer_path)
     }
 
     /// Downloads a remote file (if not already present) into the cache directory
@@ -441,35 +498,8 @@ impl ApiRepo {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url)?;
         let cache = self.api.cache.repo(self.repo.clone());
-
         let blob_path = cache.blob_path(&metadata.etag);
-        if !blob_path.exists() {
-            std::fs::create_dir_all(blob_path.parent().unwrap())?;
-
-            let progressbar = if self.api.progress {
-                let progress = ProgressBar::new(metadata.size as u64);
-                progress.set_style(
-                    ProgressStyle::with_template(
-                        "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
-                    )
-                    .unwrap(), // .progress_chars("━ "),
-                );
-                let maxlength = 30;
-                let message = if filename.len() > maxlength {
-                    format!("..{}", &filename[filename.len() - maxlength..])
-                } else {
-                    filename.to_string()
-                };
-                progress.set_message(message);
-                Some(progress)
-            } else {
-                None
-            };
-
-            let tmp_filename = self.api.download_tempfile(&url, progressbar)?;
-
-            std::fs::rename(tmp_filename, &blob_path)?;
-        }
+        self.download_blob(filename, &url, &blob_path, metadata.size)?;
 
         let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
         pointer_path.push(filename);
