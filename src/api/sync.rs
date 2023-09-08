@@ -485,10 +485,8 @@ impl ApiRepo {
         Ok(pointer_path)
     }
 
-    /// Downloads a remote file (if not already present) into the cache directory
-    /// to be used locally.
-    /// This functions require internet access to verify if new versions of the file
-    /// exist, even if a file is already on disk at location.
+    /// Downloads a remote file into the cache directory to be used locally.
+    /// If the file is already present it will be overwritten.
     /// ```no_run
     /// # use hf_hub::api::sync::Api;
     /// let api = Api::new().unwrap();
