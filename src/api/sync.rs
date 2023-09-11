@@ -714,6 +714,34 @@ mod tests {
     }
 
     #[test]
+    fn simple_with_retries() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .with_retries(3)
+            .build()
+            .unwrap();
+
+        let model_id = "julien-c/dummy-unknown".to_string();
+        let downloaded_path = api.model(model_id.clone()).download("config.json").unwrap();
+        assert!(downloaded_path.exists());
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
+        );
+
+        // Make sure the file is now seeable without connection
+        let cache_path = api
+            .cache
+            .repo(Repo::new(model_id, RepoType::Model))
+            .get("config.json")
+            .unwrap();
+        assert_eq!(cache_path, downloaded_path);
+    }
+
+    #[test]
     fn dataset() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
