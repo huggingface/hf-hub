@@ -91,6 +91,7 @@ pub struct ApiBuilder {
     cache: Cache,
     url_template: String,
     token: Option<String>,
+    max_retries: usize,
     progress: bool,
 }
 
@@ -124,6 +125,7 @@ impl ApiBuilder {
             Err(_) => None,
         };
 
+        let max_retries = 0;
         let progress = true;
 
         Self {
@@ -131,6 +133,7 @@ impl ApiBuilder {
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
+            max_retries,
             progress,
         }
     }
@@ -150,6 +153,12 @@ impl ApiBuilder {
     /// Sets the token to be used in the API
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
+        self
+    }
+
+    /// Sets the number of times the API will retry to download a file
+    pub fn with_retries(mut self, max_retries: usize) -> Self {
+        self.max_retries = max_retries;
         self
     }
 
@@ -175,6 +184,7 @@ impl ApiBuilder {
             client,
 
             no_redirect_client,
+            max_retries: self.max_retries,
             progress: self.progress,
         })
     }
@@ -197,6 +207,7 @@ pub struct Api {
     cache: Cache,
     client: HeaderAgent,
     no_redirect_client: HeaderAgent,
+    max_retries: usize,
     progress: bool,
 }
 
