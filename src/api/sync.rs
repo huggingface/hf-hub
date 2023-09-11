@@ -1,5 +1,6 @@
 use crate::{Cache, Repo, RepoType};
 use indicatif::{ProgressBar, ProgressStyle};
+use rand::Rng;
 use std::collections::HashMap;
 // use reqwest::{
 //     blocking::Agent,
@@ -15,6 +16,8 @@ use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 use ureq::{Agent, Request};
+
+mod reader;
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -263,6 +266,14 @@ fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+fn jitter() -> usize {
+    rand::thread_rng().gen_range(0..=500)
+}
+
+fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
+    (base_wait_time + n.pow(2) + jitter()).min(max)
+}
+
 impl Api {
     /// Creates a default Api, for Api options See [`ApiBuilder`]
     pub fn new() -> Result<Self, ApiError> {
@@ -339,6 +350,27 @@ impl Api {
         // Create the file and set everything properly
         let mut file = std::fs::File::create(&filename)?;
 
+        if self.max_retries > 0 {
+            let mut i = 0;
+            let mut current = 0;
+            let mut res = self.download_from(url, &mut current, &mut file);
+            while let Err(dlerr) = res {
+                let wait_time = exponential_backoff(300, i, 10_000);
+                std::thread::sleep(std::time::Duration::from_millis(wait_time as u64));
+
+                res = self.download_from(url, &mut current, &mut file);
+                i += 1;
+                if i > self.max_retries {
+                    return Err(ApiError::TooManyRetries(dlerr.into()));
+                }
+            }
+            res?;
+            if let Some(p) = progressbar {
+                p.finish()
+            }
+            return Ok(filename);
+        }
+
         let response = self.client.get(url).call().map_err(Box::new)?;
 
         let mut reader = response.into_reader();
@@ -352,6 +384,25 @@ impl Api {
             p.finish()
         }
         Ok(filename)
+    }
+
+    fn download_from(
+        &self,
+        url: &str,
+        current: &mut usize,
+        file: &mut std::fs::File,
+    ) -> Result<(), ApiError> {
+        let range = format!("bytes={current}-");
+        let response = self
+            .client
+            .get(url)
+            .set(RANGE, &range)
+            .call()
+            .map_err(Box::new)?;
+        let reader = response.into_reader();
+        let mut reader = reader::ResumableReader::new(reader, current);
+        std::io::copy(&mut reader, file)?;
+        Ok(())
     }
 
     /// Creates a new handle [`ApiRepo`] which contains operations
