@@ -96,7 +96,6 @@ impl ApiBuilder {
     /// ```
     pub fn new() -> Self {
         let cache = Cache::default();
-        let token_filename = cache.token_path();
         let token = cache.token();
 
         let progress = true;
