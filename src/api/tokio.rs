@@ -661,11 +661,11 @@ mod tests {
         let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
         assert_eq!(
             val[..],
-            hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
+            hex!("d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66")
         );
 
         // Make sure the file is now seeable without connection
-        let cache_path = api.cache.repo(repo).get("config.json").unwrap();
+        let cache_path = api.cache.repo(repo).get("tokenizer.json").unwrap();
         assert_eq!(cache_path, downloaded_path);
     }
 
