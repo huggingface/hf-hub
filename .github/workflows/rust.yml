@@ -32,7 +32,7 @@ jobs:
         run: cargo test --all-features --verbose
 
       - name: Run Tests (no ssl)
-        run: cargo test --no-default-features --verbose
+        run: cargo test --no-default-features --verbose --lib
 
       - name: Run Audit
         # RUSTSEC-2021-0145 is criterion so only within benchmarks
