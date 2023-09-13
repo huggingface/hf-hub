@@ -45,6 +45,26 @@ impl Cache {
         path
     }
 
+    /// Returns the token value if it exists in the cache
+    /// Use `huggingface-cli login` to set it up.
+    pub fn token(&self) -> Option<String> {
+        let token_filename = self.token_path();
+        if !token_filename.exists() {
+            log::info!("Token file not found {token_filename:?}");
+        }
+        match std::fs::read_to_string(token_filename) {
+            Ok(token_content) => {
+                let token_content = token_content.trim();
+                if !token_content.is_empty() {
+                    Some(token_content.to_string())
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        }
+    }
+
     /// Creates a new handle [`CacheRepo`] which contains operations
     /// on a particular [`Repo`]
     pub fn repo(&self, repo: Repo) -> CacheRepo {
