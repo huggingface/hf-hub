@@ -97,20 +97,7 @@ impl ApiBuilder {
     pub fn new() -> Self {
         let cache = Cache::default();
         let token_filename = cache.token_path();
-        if !token_filename.exists() {
-            log::info!("Token file not found {token_filename:?}");
-        }
-        let token = match std::fs::read_to_string(token_filename) {
-            Ok(token_content) => {
-                let token_content = token_content.trim();
-                if !token_content.is_empty() {
-                    Some(token_content.to_string())
-                } else {
-                    None
-                }
-            }
-            Err(_) => None,
-        };
+        let token = cache.token();
 
         let progress = true;
 
@@ -653,6 +640,33 @@ mod tests {
 
         // Make sure the file is now seeable without connection
         let cache_path = api.cache.repo(repo.clone()).get("config.json").unwrap();
+        assert_eq!(cache_path, downloaded_path);
+    }
+
+    #[tokio::test]
+    async fn revision() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let model_id = "BAAI/bge-base-en".to_string();
+        let repo = Repo::with_revision(model_id.clone(), RepoType::Model, "refs/pr/2".to_string());
+        let downloaded_path = api
+            .repo(repo.clone())
+            .download("tokenizer.json")
+            .await
+            .unwrap();
+        assert!(downloaded_path.exists());
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
+        );
+
+        // Make sure the file is now seeable without connection
+        let cache_path = api.cache.repo(repo).get("config.json").unwrap();
         assert_eq!(cache_path, downloaded_path);
     }
 
