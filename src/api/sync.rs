@@ -14,7 +14,8 @@ use super::RepoInfo;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
-use ureq::{Agent, Request};
+use ureq::{Agent, Request, Proxy};
+use std::env;
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -41,7 +42,7 @@ impl HeaderAgent {
         Self { agent, headers }
     }
 
-    fn get(&self, url: &str) -> ureq::Request {
+    fn get(&self, url: &str) -> Request {
         let mut request = self.agent.get(url);
         for (header, value) in &self.headers {
             request = request.set(header, value);
@@ -166,8 +167,14 @@ impl ApiBuilder {
     /// Consumes the builder and buids the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
-        let client = HeaderAgent::new(ureq::builder().build(), headers.clone());
-        let no_redirect_client = HeaderAgent::new(ureq::builder().redirects(0).build(), headers);
+
+        let builder =  || if let Ok(proxy) = env::var("http_proxy") {
+            ureq::builder().proxy(Proxy::new(proxy).unwrap())
+        } else {
+            ureq::builder()
+        };
+        let client = HeaderAgent::new(builder().build(), headers.clone());
+        let no_redirect_client = HeaderAgent::new(builder().redirects(0).build(), headers);
         Ok(Api {
             endpoint: self.endpoint,
             url_template: self.url_template,

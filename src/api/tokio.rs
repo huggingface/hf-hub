@@ -2,20 +2,17 @@ use super::RepoInfo;
 use crate::{Cache, Repo, RepoType};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
-use reqwest::{
-    header::{
-        HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
-        CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
-    },
-    redirect::Policy,
-    Client, Error as ReqwestError, RequestBuilder,
-};
+use reqwest::{header::{
+    HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
+    CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
+}, redirect::Policy, Client, Error as ReqwestError, RequestBuilder, Proxy, ClientBuilder};
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
+use std::env;
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -161,8 +158,15 @@ impl ApiBuilder {
     /// Consumes the builder and buids the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
-        let client = Client::builder().default_headers(headers.clone()).build()?;
-        let no_redirect_client = Client::builder()
+
+        let builder = || -> Result<ClientBuilder, ApiError> {if let Ok(proxy) = env::var("http_proxy") {
+            Ok(Client::builder().proxy(Proxy::http(proxy)?))
+        } else {
+            Ok(Client::builder())
+        }};
+
+        let client = builder()?.default_headers(headers.clone()).build()?;
+        let no_redirect_client = builder()?
             .redirect(Policy::none())
             .default_headers(headers)
             .build()?;
