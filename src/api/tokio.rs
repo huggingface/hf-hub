@@ -101,7 +101,7 @@ impl ApiBuilder {
 
     /// From a given cache
     /// ```
-    /// use hf_hub::api::tokio::ApiBuilder;
+    /// use hf_hub::{api::tokio::ApiBuilder, Cache};
     /// let path = std::path::PathBuf::from("/tmp");
     /// let cache = Cache::new(path);
     /// let api = ApiBuilder::from_cache(cache).build().unwrap();

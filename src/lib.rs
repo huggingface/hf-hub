@@ -37,7 +37,8 @@ impl Cache {
         &self.path
     }
 
-    pub(crate) fn token_path(&self) -> PathBuf {
+    /// Returns the location of the token file
+    pub fn token_path(&self) -> PathBuf {
         let mut path = self.path.clone();
         // Remove `"hub"`
         path.pop();
