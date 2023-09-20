@@ -12,9 +12,10 @@ use std::collections::HashMap;
 // };
 use super::RepoInfo;
 use std::num::ParseIntError;
-use std::path::{Component, Path, PathBuf};
+use std::path::{PathBuf};
 use thiserror::Error;
-use ureq::{Agent, Request};
+use ureq::{Agent, Error, Request};
+use crate::api::universal::Universal;
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -197,57 +198,6 @@ pub struct Api {
     progress: bool,
 }
 
-fn make_relative(src: &Path, dst: &Path) -> PathBuf {
-    let path = src;
-    let base = dst;
-
-    if path.is_absolute() != base.is_absolute() {
-        panic!("This function is made to look at absolute paths only");
-    }
-    let mut ita = path.components();
-    let mut itb = base.components();
-
-    loop {
-        match (ita.next(), itb.next()) {
-            (Some(a), Some(b)) if a == b => (),
-            (some_a, _) => {
-                // Ignoring b, because 1 component is the filename
-                // for which we don't need to go back up for relative
-                // filename to work.
-                let mut new_path = PathBuf::new();
-                for _ in itb {
-                    new_path.push(Component::ParentDir);
-                }
-                if let Some(a) = some_a {
-                    new_path.push(a);
-                    for comp in ita {
-                        new_path.push(comp);
-                    }
-                }
-                return new_path;
-            }
-        }
-    }
-}
-
-fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
-    if dst.exists() {
-        return Ok(());
-    }
-
-    let rel_src = make_relative(src, dst);
-    #[cfg(target_os = "windows")]
-    {
-        if std::os::windows::fs::symlink_file(rel_src, dst).is_err() {
-            std::fs::rename(src, dst)?;
-        }
-    }
-
-    #[cfg(target_family = "unix")]
-    std::os::unix::fs::symlink(rel_src, dst)?;
-
-    Ok(())
-}
 
 impl Api {
     /// Creates a default Api, for Api options See [`ApiBuilder`]
@@ -262,57 +212,77 @@ impl Api {
     }
 
     fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
-        let response = self
+        let response_result = self
             .no_redirect_client
             .get(url)
             .set(RANGE, "bytes=0-0")
-            .call()
-            .map_err(Box::new)?;
-        // let headers = response.headers();
-        let header_commit = "x-repo-commit";
-        let header_linked_etag = "x-linked-etag";
-        let header_etag = "etag";
+            .call();
 
-        let etag = match response.header(header_linked_etag) {
-            Some(etag) => etag,
-            None => response
-                .header(header_etag)
-                .ok_or(ApiError::MissingHeader(header_etag))?,
-        };
-        // Cleaning extra quotes
-        let etag = etag.to_string().replace('"', "");
-        let commit_hash = response
-            .header(header_commit)
-            .ok_or(ApiError::MissingHeader(header_commit))?
-            .to_string();
+        match response_result {
+            Ok(response) => {
+                // let headers = response.headers();
+                let header_commit = "x-repo-commit";
+                let header_linked_etag = "x-linked-etag";
+                let header_etag = "etag";
 
-        // The response was redirected o S3 most likely which will
-        // know about the size of the file
-        let status = response.status();
-        let is_redirection = (300..400).contains(&status);
-        let response = if is_redirection {
-            self.client
-                .get(response.header(LOCATION).unwrap())
-                .set(RANGE, "bytes=0-0")
-                .call()
-                .map_err(Box::new)?
-        } else {
-            response
-        };
-        let content_range = response
-            .header(CONTENT_RANGE)
-            .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?;
+                let etag = match response.header(header_linked_etag) {
+                    Some(etag) => etag,
+                    None => response
+                        .header(header_etag)
+                        .ok_or(ApiError::MissingHeader(header_etag))?,
+                };
+                // Cleaning extra quotes
+                let etag = etag.to_string().replace('"', "");
+                let commit_hash = response
+                    .header(header_commit)
+                    .ok_or(ApiError::MissingHeader(header_commit))?
+                    .to_string();
 
-        let size = content_range
-            .split('/')
-            .last()
-            .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
-            .parse()?;
-        Ok(Metadata {
-            commit_hash,
-            etag,
-            size,
-        })
+                // The response was redirected o S3 most likely which will
+                // know about the size of the file
+                let status = response.status();
+                let is_redirection = (300..400).contains(&status);
+                let response = if is_redirection {
+                    self.client
+                        .get(response.header(LOCATION).unwrap())
+                        .set(RANGE, "bytes=0-0")
+                        .call()
+                        .map_err(Box::new)?
+                } else {
+                    response
+                };
+                let content_range = response
+                    .header(CONTENT_RANGE)
+                    .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?;
+
+                let size = content_range
+                    .split('/')
+                    .last()
+                    .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
+                    .parse()?;
+                Ok(Metadata {
+                    commit_hash,
+                    etag,
+                    size,
+                })
+            }
+            Err(e) => {
+                match e {
+                    Error::Status(code, _) => {
+                        if code == 401 {
+                            log::error!("You dont have access to this url {}, please check your token file or ask grant access", url);
+                        }
+                        Err(ApiError::RequestError(Box::new(e)))
+
+                    }
+                    Error::Transport(_) => {
+                        Err(ApiError::RequestError(Box::new(e)))
+                    }
+                }
+
+            }
+        }
+
     }
 
     fn download_tempfile(
@@ -437,7 +407,6 @@ impl ApiRepo {
     pub fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url)?;
-
         let blob_path = self
             .api
             .cache
@@ -477,7 +446,7 @@ impl ApiRepo {
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
-        symlink_or_rename(&blob_path, &pointer_path)?;
+        Universal::symlink_or_rename(&blob_path, &pointer_path)?;
         self.api
             .cache
             .repo(self.repo.clone())

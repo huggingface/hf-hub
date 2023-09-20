@@ -7,6 +7,9 @@ pub mod tokio;
 /// The synchronous version of the API
 pub mod sync;
 
+/// Common library for sync/tokio versions
+pub mod universal;
+
 /// Siblings are simplified file descriptions of remote files on the hub
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Siblings {
