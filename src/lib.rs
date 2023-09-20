@@ -1,5 +1,6 @@
 #![deny(missing_docs)]
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
+#[cfg(feature = "online")]
 use rand::{distributions::Alphanumeric, Rng};
 use std::io::Write;
 use std::path::PathBuf;
@@ -105,6 +106,7 @@ impl Cache {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
 
+    #[cfg(feature = "online")]
     pub(crate) fn temp_path(&self) -> PathBuf {
         let mut path = self.path().clone();
         path.push("tmp");
