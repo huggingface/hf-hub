@@ -11,8 +11,6 @@ use std::str::FromStr;
 use thiserror::Error;
 use ureq::{Agent, AgentBuilder, Request};
 
-mod reader;
-
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
@@ -415,13 +413,12 @@ impl Api {
 
         if self.max_retries > 0 {
             let mut i = 0;
-            let mut current = 0;
-            let mut res = self.download_from(url, &mut current, &mut file);
+            let mut res = self.download_from(url, 0u64, &mut file);
             while let Err(dlerr) = res {
                 let wait_time = exponential_backoff(300, i, 10_000);
                 std::thread::sleep(std::time::Duration::from_millis(wait_time as u64));
 
-                res = self.download_from(url, &mut current, &mut file);
+                res = self.download_from(url, file.stream_position()?, &mut file);
                 i += 1;
                 if i > self.max_retries {
                     return Err(ApiError::TooManyRetries(dlerr.into()));
@@ -452,7 +449,7 @@ impl Api {
     fn download_from(
         &self,
         url: &str,
-        current: &mut usize,
+        current: u64,
         file: &mut std::fs::File,
     ) -> Result<(), ApiError> {
         let range = format!("bytes={current}-");
@@ -462,8 +459,7 @@ impl Api {
             .set(RANGE, &range)
             .call()
             .map_err(Box::new)?;
-        let reader = response.into_reader();
-        let mut reader = reader::ResumableReader::new(reader, current);
+        let mut reader = response.into_reader();
         std::io::copy(&mut reader, file)?;
         Ok(())
     }
