@@ -806,7 +806,7 @@ mod tests {
                         rfilename: "wikitext-2-v1/validation/index.duckdb".to_string()
                     }
                 ],
-                sha: "bdbf428cb993bfb50707792cf34f813d31df7355".to_string()
+                sha: "f23dc6c07c427c9908f56bdb9829b0a767578ee5".to_string()
             }
         )
     }
