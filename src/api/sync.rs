@@ -163,8 +163,16 @@ impl ApiBuilder {
     /// Consumes the builder and buids the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
-        let client = HeaderAgent::new(ureq::builder().build(), headers.clone());
-        let no_redirect_client = HeaderAgent::new(ureq::builder().redirects(0).build(), headers);
+
+        let agent = ureq::builder().try_proxy_from_env(true).build();
+        let client = HeaderAgent::new(agent, headers.clone());
+
+        let no_redirect_agent = ureq::builder()
+            .try_proxy_from_env(true)
+            .redirects(0)
+            .build();
+        let no_redirect_client = HeaderAgent::new(no_redirect_agent, headers);
+
         Ok(Api {
             endpoint: self.endpoint,
             url_template: self.url_template,
