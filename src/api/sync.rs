@@ -429,32 +429,22 @@ impl ApiRepo {
         if let Some(path) = self.api.cache.repo(self.repo.clone()).get(filename) {
             Ok(path)
         } else {
-            self.download(filename)
+            self.create_blob_pointer(filename)
         }
     }
 
-    /// Downloads a remote file (if not already present) into the cache directory
-    /// to be used locally.
-    /// This functions require internet access to verify if new versions of the file
-    /// exist, even if a file is already on disk at location.
-    /// ```no_run
-    /// # use hf_hub::api::sync::Api;
-    /// let api = Api::new().unwrap();
-    /// let local_filename = api.model("gpt2".to_string()).download("model.safetensors").unwrap();
-    /// ```
-    pub fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
-        let url = self.url(filename);
-        let metadata = self.api.metadata(&url)?;
-
-        let blob_path = self
-            .api
-            .cache
-            .repo(self.repo.clone())
-            .blob_path(&metadata.etag);
+    /// Force download a blob, even if it is already present locally.
+    fn download_blob(
+        &self,
+        filename: &str,
+        url: &str,
+        blob_path: &PathBuf,
+        size: usize,
+    ) -> Result<(), ApiError> {
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
         let progressbar = if self.api.progress {
-            let progress = ProgressBar::new(metadata.size as u64);
+            let progress = ProgressBar::new(size as u64);
             progress.set_style(
                 ProgressStyle::with_template(
                     "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
@@ -477,19 +467,49 @@ impl ApiRepo {
 
         std::fs::rename(tmp_filename, &blob_path)?;
 
-        let mut pointer_path = self
-            .api
-            .cache
-            .repo(self.repo.clone())
-            .pointer_path(&metadata.commit_hash);
+        Ok(())
+    }
+
+    /// Creates the ref to the commit_hash and symlinks/moves the blob, downloading it if necessary.
+    fn create_blob_pointer(&self, filename: &str) -> Result<PathBuf, ApiError> {
+        let url = self.url(filename);
+        let metadata = self.api.metadata(&url)?;
+        let cache = self.api.cache.repo(self.repo.clone());
+        let blob_path = cache.blob_path(&metadata.etag);
+        if !blob_path.exists() {
+            self.download_blob(filename, &url, &blob_path, metadata.size)?;
+        }
+
+        let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
         symlink_or_rename(&blob_path, &pointer_path)?;
-        self.api
-            .cache
-            .repo(self.repo.clone())
-            .create_ref(&metadata.commit_hash)?;
+        cache.create_ref(&metadata.commit_hash)?;
+
+        Ok(pointer_path)
+    }
+
+    /// Downloads a remote file into the cache directory to be used locally.
+    /// If the file is already present it will be overwritten.
+    /// ```no_run
+    /// # use hf_hub::api::sync::Api;
+    /// let api = Api::new().unwrap();
+    /// let local_filename = api.model("gpt2".to_string()).download("model.safetensors").unwrap();
+    /// ```
+    pub fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
+        let url = self.url(filename);
+        let metadata = self.api.metadata(&url)?;
+        let cache = self.api.cache.repo(self.repo.clone());
+        let blob_path = cache.blob_path(&metadata.etag);
+        self.download_blob(filename, &url, &blob_path, metadata.size)?;
+
+        let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
+        pointer_path.push(filename);
+        std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
+
+        symlink_or_rename(&blob_path, &pointer_path)?;
+        cache.create_ref(&metadata.commit_hash)?;
 
         Ok(pointer_path)
     }
@@ -578,6 +598,42 @@ mod tests {
             .get("config.json")
             .unwrap();
         assert_eq!(cache_path, downloaded_path);
+    }
+
+    #[test]
+    #[cfg(target_family = "unix")]
+    fn corruption() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+
+        let model_id = "julien-c/dummy-unknown".to_string();
+        let downloaded_path = api.model(model_id.clone()).download("config.json").unwrap();
+        assert!(downloaded_path.exists());
+
+        // corrupt the file
+        std::fs::write(&downloaded_path, "corrupted").unwrap();
+        // remove the symlink
+        std::fs::remove_file(&downloaded_path).unwrap();
+        // Get should recreate the symlink, but the corrupted blob should be reused
+        let cached_path = api.model(model_id.clone()).get("config.json").unwrap();
+
+        assert_eq!(cached_path, downloaded_path);
+        assert_eq!(std::fs::read_to_string(&cached_path).unwrap(), "corrupted");
+
+        // Download should overwrite the blob, and thus it should not be corrupted anymore
+        let downloaded_path = api.model(model_id.clone()).download("config.json").unwrap();
+
+        assert_eq!(cached_path, downloaded_path);
+
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
+        );
     }
 
     #[test]
