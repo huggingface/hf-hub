@@ -1,6 +1,15 @@
-use crate::{Cache, Repo, RepoType};
-use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
+use std::env;
+use std::env::VarError;
+use std::num::ParseIntError;
+use std::path::{Component, Path, PathBuf};
+
+use indicatif::{ProgressBar, ProgressStyle};
+use thiserror::Error;
+use ureq::{Agent, Request};
+
+use crate::{Cache, Repo, RepoType};
+
 // use reqwest::{
 //     blocking::Agent,
 //     header::{
@@ -11,10 +20,6 @@ use std::collections::HashMap;
 //     Error as ReqwestError,
 // };
 use super::RepoInfo;
-use std::num::ParseIntError;
-use std::path::{Component, Path, PathBuf};
-use thiserror::Error;
-use ureq::{Agent, Request};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -83,6 +88,10 @@ pub enum ApiError {
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
+
+    /// parse HF_ENDPOINT env variable Error
+    #[error("parse HF_ENDPOINT env variable error: {0}")]
+    ParseHFEndpointError(#[from] VarError),
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -144,6 +153,12 @@ impl ApiBuilder {
         self
     }
 
+    /// Set hf endpoint or mirror endpoint like https://huggingface.co
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = endpoint.into();
+        self
+    }
+
     /// Sets the token to be used in the API
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
@@ -172,9 +187,13 @@ impl ApiBuilder {
             .redirects(0)
             .build();
         let no_redirect_client = HeaderAgent::new(no_redirect_agent, headers);
-
+        let endpoint = env::var_os("HF_ENDPOINT")
+            .map(|x| x.into_string())
+            .transpose()
+            .map_err(|e| VarError::NotUnicode(e))?
+            .unwrap_or(self.endpoint);
         Ok(Api {
-            endpoint: self.endpoint,
+            endpoint,
             url_template: self.url_template,
             cache: self.cache,
             client,
@@ -521,13 +540,15 @@ impl ApiRepo {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::api::Siblings;
-    use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
+
+    use crate::api::Siblings;
+    use crate::RepoType;
+
+    use super::*;
 
     struct TempDir {
         path: PathBuf,
