@@ -1,21 +1,26 @@
-use super::RepoInfo;
-use crate::{Cache, Repo, RepoType};
-use indicatif::{ProgressBar, ProgressStyle};
-use rand::Rng;
-use reqwest::{
-    header::{
-        HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
-        CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
-    },
-    redirect::Policy,
-    Client, Error as ReqwestError, RequestBuilder,
-};
+use std::env;
+use std::env::VarError;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+
+use indicatif::{ProgressBar, ProgressStyle};
+use rand::Rng;
+use reqwest::{
+    Client,
+    Error as ReqwestError,
+    header::{
+        AUTHORIZATION, CONTENT_RANGE, HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue,
+        LOCATION, RANGE, ToStrError, USER_AGENT,
+    }, redirect::Policy, RequestBuilder,
+};
 use thiserror::Error;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
+
+use crate::{Cache, Repo, RepoType};
+
+use super::RepoInfo;
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -64,6 +69,10 @@ pub enum ApiError {
     /// Semaphore cannot be acquired
     #[error("Acquire: {0}")]
     AcquireError(#[from] AcquireError),
+
+    /// parse HF_ENDPOINT env variable Error
+    #[error("parse HF_ENDPOINT env variable error: {0}")]
+    ParseHFEndpointError(#[from] VarError),
     // /// Semaphore cannot be acquired
     // #[error("Invalid Response: {0:?}")]
     // InvalidResponse(Response),
@@ -124,7 +133,13 @@ impl ApiBuilder {
         }
     }
 
-    /// Wether to show a progressbar
+    /// Set hf endpoint or mirror endpoint like https://huggingface.co
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = endpoint.into();
+        self
+    }
+
+    /// Whether to show a progressbar
     pub fn with_progress(mut self, progress: bool) -> Self {
         self.progress = progress;
         self
@@ -163,8 +178,13 @@ impl ApiBuilder {
             .redirect(Policy::none())
             .default_headers(headers)
             .build()?;
+        let endpoint = env::var_os("HF_ENDPOINT")
+            .map(|x| x.into_string())
+            .transpose()
+            .map_err(|e| VarError::NotUnicode(e))?
+            .unwrap_or(self.endpoint);
         Ok(Api {
-            endpoint: self.endpoint,
+            endpoint,
             url_template: self.url_template,
             cache: self.cache,
             client,
@@ -598,13 +618,15 @@ impl ApiRepo {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::api::Siblings;
-    use crate::RepoType;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
+
+    use crate::api::Siblings;
+    use crate::RepoType;
+
+    use super::*;
 
     struct TempDir {
         path: PathBuf,
