@@ -160,7 +160,7 @@ impl ApiBuilder {
         let headers = self.build_headers()?;
         let client = Client::builder().default_headers(headers.clone()).build()?;
 
-        // Policy: follow redirects until the host of the next url is different
+        // Policy: only follow relative redirects
         // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
         let relative_redirect_policy = Policy::custom(|attempt| {
             // Follow redirects up to a maximum of 10.
@@ -169,11 +169,12 @@ impl ApiBuilder {
             }
 
             if let Some(last) = attempt.previous().last() {
-                // If the host is not the same, stop redirecting
-                if attempt.url().host() != last.host() {
+                // If the url is not relative
+                if last.make_relative(attempt.url()).is_none() {
                     return attempt.stop();
                 }
             }
+
             // Follow redirect
             attempt.follow()
         });
@@ -721,6 +722,28 @@ mod tests {
         assert_eq!(
             val[..],
             hex!("59ce09415ad8aa45a9e34f88cec2548aeb9de9a73fcda9f6b33a86a065f32b90")
+        )
+    }
+
+    #[tokio::test]
+    async fn models() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = Repo::with_revision(
+            "BAAI/bGe-reRanker-Base".to_string(),
+            RepoType::Model,
+            "refs/pr/5".to_string(),
+        );
+        let downloaded_path = api.repo(repo).download("tokenizer.json").await.unwrap();
+        assert!(downloaded_path.exists());
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E")
         )
     }
 

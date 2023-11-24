@@ -1,4 +1,5 @@
 use super::RepoInfo;
+use crate::api::sync::ApiError::InvalidHeader;
 use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -271,8 +272,6 @@ impl Api {
             .call()
             .map_err(Box::new)?;
 
-        // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
-
         // Closure to check if status code is a redirection
         let should_redirect = |status_code: u16| {
             matches!(
@@ -285,20 +284,28 @@ impl Api {
             )
         };
 
-        // Follow redirects until host does not match if the first host
-        let first_uri = Uri::from_str(response.get_url()).unwrap();
+        // Follow redirects until `host.is_some()` i.e. only follow relative redirects
+        // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
         let response = loop {
-            // Check status
+            // Check if redirect
             if should_redirect(response.status()) {
-                // Get header value
+                // Get redirect location
                 if let Some(location) = response.header("Location") {
-                    let url = Uri::from_str(location).unwrap();
-                    // Match hosts
-                    if url.host() == first_uri.host() {
+                    // Parse location
+                    let uri = Uri::from_str(location).map_err(|_| InvalidHeader("location"))?;
+
+                    // Check if relative i.e. host is none
+                    if uri.host().is_none() {
+                        // Merge relative path with url
+                        let mut parts = Uri::from_str(url).unwrap().into_parts();
+                        parts.path_and_query = uri.into_parts().path_and_query;
+                        // Final uri
+                        let redirect_uri = Uri::from_parts(parts).unwrap();
+
                         // Follow redirect
                         response = self
                             .no_redirect_client
-                            .get(response.get_url())
+                            .get(&redirect_uri.to_string())
                             .set(RANGE, "bytes=0-0")
                             .call()
                             .map_err(Box::new)?;
@@ -635,6 +642,28 @@ mod tests {
         assert_eq!(
             val[..],
             hex!("59ce09415ad8aa45a9e34f88cec2548aeb9de9a73fcda9f6b33a86a065f32b90")
+        )
+    }
+
+    #[test]
+    fn models() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = Repo::with_revision(
+            "BAAI/bGe-reRanker-Base".to_string(),
+            RepoType::Model,
+            "refs/pr/5".to_string(),
+        );
+        let downloaded_path = api.repo(repo).download("tokenizer.json").unwrap();
+        assert!(downloaded_path.exists());
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E")
         )
     }
 
