@@ -159,8 +159,27 @@ impl ApiBuilder {
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
         let client = Client::builder().default_headers(headers.clone()).build()?;
-        let no_redirect_client = Client::builder()
-            .redirect(Policy::none())
+
+        // Policy: follow redirects until the host of the next url is different
+        // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
+        let relative_redirect_policy = Policy::custom(|attempt| {
+            // Follow redirects up to a maximum of 10.
+            if attempt.previous().len() > 10 {
+                return attempt.error("too many redirects");
+            }
+
+            if let Some(last) = attempt.previous().last() {
+                // If the host is not the same, stop redirecting
+                if attempt.url().host() != last.host() {
+                    return attempt.stop();
+                }
+            }
+            // Follow redirect
+            attempt.follow()
+        });
+
+        let relative_redirect_client = Client::builder()
+            .redirect(relative_redirect_policy)
             .default_headers(headers)
             .build()?;
         Ok(Api {
@@ -168,8 +187,7 @@ impl ApiBuilder {
             url_template: self.url_template,
             cache: self.cache,
             client,
-
-            no_redirect_client,
+            relative_redirect_client,
             max_files: self.max_files,
             chunk_size: self.chunk_size,
             parallel_failures: self.parallel_failures,
@@ -195,7 +213,7 @@ pub struct Api {
     url_template: String,
     cache: Cache,
     client: Client,
-    no_redirect_client: Client,
+    relative_redirect_client: Client,
     max_files: usize,
     chunk_size: usize,
     parallel_failures: usize,
@@ -277,7 +295,7 @@ impl Api {
 
     async fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let response = self
-            .no_redirect_client
+            .relative_redirect_client
             .get(url)
             .header(RANGE, "bytes=0-0")
             .send()
@@ -536,7 +554,7 @@ impl ApiRepo {
                 ProgressStyle::with_template(
                     "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
                 )
-                .unwrap(), // .progress_chars("━ "),
+                    .unwrap(), // .progress_chars("━ "),
             );
             let maxlength = 30;
             let message = if filename.len() > maxlength {
@@ -804,9 +822,9 @@ mod tests {
                     },
                     Siblings {
                         rfilename: "wikitext-2-v1/validation/index.duckdb".to_string()
-                    }
+                    },
                 ],
-                sha: "f23dc6c07c427c9908f56bdb9829b0a767578ee5".to_string()
+                sha: "3acdf8c72a4dd61d76f34d7b54ee2a5b088ea3b1".to_string(),
             }
         )
     }
@@ -841,6 +859,7 @@ mod tests {
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
                 "config": {},
+                "createdAt": "2022-03-02T23:29:05.000Z",
                 "disabled": false,
                 "downloads": 0,
                 "gated": false,

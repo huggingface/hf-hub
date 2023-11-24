@@ -1,18 +1,11 @@
+use super::RepoInfo;
 use crate::{Cache, Repo, RepoType};
+use http::{StatusCode, Uri};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
-// use reqwest::{
-//     blocking::Agent,
-//     header::{
-//         HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
-//         CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
-//     },
-//     redirect::Policy,
-//     Error as ReqwestError,
-// };
-use super::RepoInfo;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
 use thiserror::Error;
 use ureq::{Agent, Request};
 
@@ -26,6 +19,7 @@ const CONTENT_RANGE: &str = "Content-Range";
 const LOCATION: &str = "Location";
 const USER_AGENT: &str = "User-Agent";
 const AUTHORIZATION: &str = "Authorization";
+
 type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
 
@@ -270,12 +264,51 @@ impl Api {
     }
 
     fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
-        let response = self
+        let mut response = self
             .no_redirect_client
             .get(url)
             .set(RANGE, "bytes=0-0")
             .call()
             .map_err(Box::new)?;
+
+        // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
+
+        // Closure to check if status code is a redirection
+        let should_redirect = |status_code: u16| {
+            matches!(
+                StatusCode::from_u16(status_code).unwrap(),
+                StatusCode::MOVED_PERMANENTLY
+                    | StatusCode::FOUND
+                    | StatusCode::SEE_OTHER
+                    | StatusCode::TEMPORARY_REDIRECT
+                    | StatusCode::PERMANENT_REDIRECT
+            )
+        };
+
+        // Follow redirects until host does not match if the first host
+        let first_uri = Uri::from_str(response.get_url()).unwrap();
+        let response = loop {
+            // Check status
+            if should_redirect(response.status()) {
+                // Get header value
+                if let Some(location) = response.header("Location") {
+                    let url = Uri::from_str(location).unwrap();
+                    // Match hosts
+                    if url.host() == first_uri.host() {
+                        // Follow redirect
+                        response = self
+                            .no_redirect_client
+                            .get(response.get_url())
+                            .set(RANGE, "bytes=0-0")
+                            .call()
+                            .map_err(Box::new)?;
+                        continue;
+                    }
+                };
+            }
+            break response;
+        };
+
         // let headers = response.headers();
         let header_commit = "x-repo-commit";
         let header_linked_etag = "x-linked-etag";
@@ -459,7 +492,7 @@ impl ApiRepo {
                 ProgressStyle::with_template(
                     "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
                 )
-                .unwrap(), // .progress_chars("━ "),
+                    .unwrap(), // .progress_chars("━ "),
             );
             let maxlength = 30;
             let message = if filename.len() > maxlength {
@@ -703,9 +736,9 @@ mod tests {
                     },
                     Siblings {
                         rfilename: "wikitext-2-v1/validation/index.duckdb".to_string()
-                    }
+                    },
                 ],
-                sha: "f23dc6c07c427c9908f56bdb9829b0a767578ee5".to_string()
+                sha: "3acdf8c72a4dd61d76f34d7b54ee2a5b088ea3b1".to_string(),
             }
         )
     }
@@ -738,6 +771,7 @@ mod tests {
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
                 "config": {},
+                "createdAt": "2022-03-02T23:29:05.000Z",
                 "disabled": false,
                 "downloads": 0,
                 "gated": false,
