@@ -1,18 +1,12 @@
+use super::RepoInfo;
+use crate::api::sync::ApiError::InvalidHeader;
 use crate::{Cache, Repo, RepoType};
+use http::{StatusCode, Uri};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
-// use reqwest::{
-//     blocking::Agent,
-//     header::{
-//         HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
-//         CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
-//     },
-//     redirect::Policy,
-//     Error as ReqwestError,
-// };
-use super::RepoInfo;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
 use thiserror::Error;
 use ureq::{Agent, Request};
 
@@ -26,6 +20,7 @@ const CONTENT_RANGE: &str = "Content-Range";
 const LOCATION: &str = "Location";
 const USER_AGENT: &str = "User-Agent";
 const AUTHORIZATION: &str = "Authorization";
+
 type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
 
@@ -270,12 +265,57 @@ impl Api {
     }
 
     fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
-        let response = self
+        let mut response = self
             .no_redirect_client
             .get(url)
             .set(RANGE, "bytes=0-0")
             .call()
             .map_err(Box::new)?;
+
+        // Closure to check if status code is a redirection
+        let should_redirect = |status_code: u16| {
+            matches!(
+                StatusCode::from_u16(status_code).unwrap(),
+                StatusCode::MOVED_PERMANENTLY
+                    | StatusCode::FOUND
+                    | StatusCode::SEE_OTHER
+                    | StatusCode::TEMPORARY_REDIRECT
+                    | StatusCode::PERMANENT_REDIRECT
+            )
+        };
+
+        // Follow redirects until `host.is_some()` i.e. only follow relative redirects
+        // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
+        let response = loop {
+            // Check if redirect
+            if should_redirect(response.status()) {
+                // Get redirect location
+                if let Some(location) = response.header("Location") {
+                    // Parse location
+                    let uri = Uri::from_str(location).map_err(|_| InvalidHeader("location"))?;
+
+                    // Check if relative i.e. host is none
+                    if uri.host().is_none() {
+                        // Merge relative path with url
+                        let mut parts = Uri::from_str(url).unwrap().into_parts();
+                        parts.path_and_query = uri.into_parts().path_and_query;
+                        // Final uri
+                        let redirect_uri = Uri::from_parts(parts).unwrap();
+
+                        // Follow redirect
+                        response = self
+                            .no_redirect_client
+                            .get(&redirect_uri.to_string())
+                            .set(RANGE, "bytes=0-0")
+                            .call()
+                            .map_err(Box::new)?;
+                        continue;
+                    }
+                };
+            }
+            break response;
+        };
+
         // let headers = response.headers();
         let header_commit = "x-repo-commit";
         let header_linked_etag = "x-linked-etag";
@@ -459,7 +499,7 @@ impl ApiRepo {
                 ProgressStyle::with_template(
                     "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
                 )
-                .unwrap(), // .progress_chars("━ "),
+                    .unwrap(), // .progress_chars("━ "),
             );
             let maxlength = 30;
             let message = if filename.len() > maxlength {
@@ -606,6 +646,28 @@ mod tests {
     }
 
     #[test]
+    fn models() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = Repo::with_revision(
+            "BAAI/bGe-reRanker-Base".to_string(),
+            RepoType::Model,
+            "refs/pr/5".to_string(),
+        );
+        let downloaded_path = api.repo(repo).download("tokenizer.json").unwrap();
+        assert!(downloaded_path.exists());
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E")
+        )
+    }
+
+    #[test]
     fn info() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
@@ -703,9 +765,9 @@ mod tests {
                     },
                     Siblings {
                         rfilename: "wikitext-2-v1/validation/index.duckdb".to_string()
-                    }
+                    },
                 ],
-                sha: "f23dc6c07c427c9908f56bdb9829b0a767578ee5".to_string()
+                sha: "3acdf8c72a4dd61d76f34d7b54ee2a5b088ea3b1".to_string(),
             }
         )
     }
@@ -738,6 +800,7 @@ mod tests {
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
                 "config": {},
+                "createdAt": "2022-03-02T23:29:05.000Z",
                 "disabled": false,
                 "downloads": 0,
                 "gated": false,
