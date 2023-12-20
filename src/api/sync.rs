@@ -541,7 +541,12 @@ impl ApiRepo {
     /// api.model("gpt2".to_string()).info();
     /// ```
     pub fn info(&self) -> Result<RepoInfo, ApiError> {
-        Ok(self.info_request().call().map_err(Box::new)?.into_json()?)
+        Ok(self
+            .info_request()
+            .query("blobs", "true")
+            .call()
+            .map_err(Box::new)?
+            .into_json()?)
     }
 
     /// Get the raw [`ureq::Request`] with the url and method already set
@@ -686,85 +691,112 @@ mod tests {
             RepoInfo {
                 siblings: vec![
                     Siblings {
-                        rfilename: ".gitattributes".to_string()
+                        rfilename: ".gitattributes".to_string(),
+                        size: 1832,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/test/0000.parquet".to_string()
+                        rfilename: "wikitext-103-raw-v1/test/0000.parquet".to_string(),
+                        size: 732610,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/test/index.duckdb".to_string()
+                        rfilename: "wikitext-103-raw-v1/test/index.duckdb".to_string(),
+                        size: 2109440,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/train/0000.parquet".to_string()
+                        rfilename: "wikitext-103-raw-v1/train/0000.parquet".to_string(),
+                        size: 287495563,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/train/0001.parquet".to_string()
+                        rfilename: "wikitext-103-raw-v1/train/0001.parquet".to_string(),
+                        size: 26572957,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/train/index.duckdb".to_string()
+                        rfilename: "wikitext-103-raw-v1/train/index.duckdb".to_string(),
+                        size: 901001216,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/validation/0000.parquet".to_string()
+                        rfilename: "wikitext-103-raw-v1/validation/0000.parquet".to_string(),
+                        size: 657209,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/validation/index.duckdb".to_string()
+                        rfilename: "wikitext-103-raw-v1/validation/index.duckdb".to_string(),
+                        size: 2109440,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/test/0000.parquet".to_string()
+                        rfilename: "wikitext-103-v1/test/0000.parquet".to_string(),
+                        size: 721735,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string()
+                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string(),
+                        size: 2109440,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/train/0000.parquet".to_string()
+                        rfilename: "wikitext-103-v1/train/0000.parquet".to_string(),
+                        size: 286018500,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/train/0001.parquet".to_string()
+                        rfilename: "wikitext-103-v1/train/0001.parquet".to_string(),
+                        size: 25684679,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/train/index.duckdb".to_string()
+                        rfilename: "wikitext-103-v1/train/index.duckdb".to_string(),
+                        size: 866922496,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/validation/0000.parquet".to_string()
+                        rfilename: "wikitext-103-v1/validation/0000.parquet".to_string(),
+                        size: 655106,
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string()
+                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string(),
+                        size: 2633728,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/test/0000.parquet".to_string()
+                        rfilename: "wikitext-2-raw-v1/test/0000.parquet".to_string(),
+                        size: 732610,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string()
+                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string(),
+                        size: 2109440,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/train/0000.parquet".to_string()
+                        rfilename: "wikitext-2-raw-v1/train/0000.parquet".to_string(),
+                        size: 6357543,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string()
+                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string(),
+                        size: 13643776,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/validation/0000.parquet".to_string()
+                        rfilename: "wikitext-2-raw-v1/validation/0000.parquet".to_string(),
+                        size: 657209,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string()
+                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string(),
+                        size: 2109440,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/test/0000.parquet".to_string()
+                        rfilename: "wikitext-2-v1/test/0000.parquet".to_string(),
+                        size: 685430,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/test/index.duckdb".to_string()
+                        rfilename: "wikitext-2-v1/test/index.duckdb".to_string(),
+                        size: 2895872,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/train/0000.parquet".to_string()
+                        rfilename: "wikitext-2-v1/train/0000.parquet".to_string(),
+                        size: 6068114,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/train/index.duckdb".to_string()
+                        rfilename: "wikitext-2-v1/train/index.duckdb".to_string(),
+                        size: 12857344,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/validation/0000.parquet".to_string()
+                        rfilename: "wikitext-2-v1/validation/0000.parquet".to_string(),
+                        size: 617738,
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/validation/index.duckdb".to_string()
+                        rfilename: "wikitext-2-v1/validation/index.duckdb".to_string(),
+                        size: 2109440,
                     },
                 ],
                 sha: "3acdf8c72a4dd61d76f34d7b54ee2a5b088ea3b1".to_string(),
