@@ -12,6 +12,8 @@ pub mod sync;
 pub struct Siblings {
     /// The path within the repo.
     pub rfilename: String,
+    /// The size in bytes of the file
+    pub size: usize,
 }
 
 /// The description of the repo given by the hub
