@@ -569,7 +569,6 @@ mod tests {
     use crate::api::Siblings;
     use crate::RepoType;
     use hex_literal::hex;
-    use log::warn;
     use rand::{distributions::Alphanumeric, Rng};
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
