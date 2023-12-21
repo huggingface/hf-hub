@@ -95,7 +95,6 @@ impl ApiBuilder {
     /// use hf_hub::api::tokio::ApiBuilder;
     /// let api = ApiBuilder::new().build().unwrap();
     /// ```
-    #[must_use]
     pub fn new() -> Self {
         let cache = Cache::default();
         Self::from_cache(cache)
@@ -108,7 +107,6 @@ impl ApiBuilder {
     /// let cache = Cache::new(path);
     /// let api = ApiBuilder::from_cache(cache).build().unwrap();
     /// ```
-    #[must_use]
     pub fn from_cache(cache: Cache) -> Self {
         let token = cache.token();
 
@@ -128,21 +126,18 @@ impl ApiBuilder {
     }
 
     /// Wether to show a progressbar
-    #[must_use]
     pub fn with_progress(mut self, progress: bool) -> Self {
         self.progress = progress;
         self
     }
 
     /// Changes the location of the cache directory. Defaults is `~/.cache/huggingface/`.
-    #[must_use]
     pub fn with_cache_dir(mut self, cache_dir: PathBuf) -> Self {
         self.cache = Cache::new(cache_dir);
         self
     }
 
     /// Sets the token to be used in the API
-    #[must_use]
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
@@ -232,7 +227,10 @@ fn make_relative(src: &Path, dst: &Path) -> PathBuf {
     let path = src;
     let base = dst;
 
-    assert!(path.is_absolute() == base.is_absolute(), "This function is made to look at absolute paths only");
+    assert!(
+        path.is_absolute() == base.is_absolute(),
+        "This function is made to look at absolute paths only"
+    );
     let mut ita = path.components();
     let mut itb = base.components();
 
@@ -294,7 +292,6 @@ impl Api {
 
     /// Get the underlying api client
     /// Allows for lower level access
-    #[must_use]
     pub fn client(&self) -> &Client {
         &self.client
     }
@@ -357,7 +354,6 @@ impl Api {
 
     /// Creates a new handle [`ApiRepo`] which contains operations
     /// on a particular [`Repo`]
-    #[must_use]
     pub fn repo(&self, repo: Repo) -> ApiRepo {
         ApiRepo::new(self.clone(), repo)
     }
@@ -369,7 +365,6 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Model));
     /// ```
-    #[must_use]
     pub fn model(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Model))
     }
@@ -381,7 +376,6 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Dataset));
     /// ```
-    #[must_use]
     pub fn dataset(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Dataset))
     }
@@ -393,7 +387,6 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Space));
     /// ```
-    #[must_use]
     pub fn space(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
@@ -420,7 +413,6 @@ impl ApiRepo {
     /// let url = api.model("gpt2".to_string()).url("model.safetensors");
     /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
     /// ```
-    #[must_use]
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
         let revision = &self.repo.url_revision();

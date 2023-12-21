@@ -29,19 +29,16 @@ pub struct Cache {
 
 impl Cache {
     /// Creates a new cache object location
-    #[must_use]
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
 
     /// Creates a new cache object location
-    #[must_use]
     pub fn path(&self) -> &PathBuf {
         &self.path
     }
 
     /// Returns the location of the token file
-    #[must_use]
     pub fn token_path(&self) -> PathBuf {
         let mut path = self.path.clone();
         // Remove `"hub"`
@@ -52,7 +49,6 @@ impl Cache {
 
     /// Returns the token value if it exists in the cache
     /// Use `huggingface-cli login` to set it up.
-    #[must_use]
     pub fn token(&self) -> Option<String> {
         let token_filename = self.token_path();
         if !token_filename.exists() {
@@ -73,7 +69,6 @@ impl Cache {
 
     /// Creates a new handle [`CacheRepo`] which contains operations
     /// on a particular [`Repo`]
-    #[must_use]
     pub fn repo(&self, repo: Repo) -> CacheRepo {
         CacheRepo::new(self.clone(), repo)
     }
@@ -85,7 +80,6 @@ impl Cache {
     /// let cache = Cache::new("/tmp/".into());
     /// let cache = cache.repo(Repo::new(model_id, RepoType::Model));
     /// ```
-    #[must_use]
     pub fn model(&self, model_id: String) -> CacheRepo {
         self.repo(Repo::new(model_id, RepoType::Model))
     }
@@ -97,7 +91,6 @@ impl Cache {
     /// let cache = Cache::new("/tmp/".into());
     /// let cache = cache.repo(Repo::new(model_id, RepoType::Dataset));
     /// ```
-    #[must_use]
     pub fn dataset(&self, model_id: String) -> CacheRepo {
         self.repo(Repo::new(model_id, RepoType::Dataset))
     }
@@ -109,7 +102,6 @@ impl Cache {
     /// let cache = Cache::new("/tmp/".into());
     /// let cache = cache.repo(Repo::new(model_id, RepoType::Space));
     /// ```
-    #[must_use]
     pub fn space(&self, model_id: String) -> CacheRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
@@ -143,7 +135,6 @@ impl CacheRepo {
     }
     /// This will get the location of the file within the cache for the remote
     /// `filename`. Will return `None` if file is not already present in cache.
-    #[must_use]
     pub fn get(&self, filename: &str) -> Option<PathBuf> {
         let commit_path = self.ref_path();
         let commit_hash = std::fs::read_to_string(commit_path).ok()?;
@@ -225,13 +216,11 @@ pub struct Repo {
 
 impl Repo {
     /// Repo with the default branch ("main").
-    #[must_use]
     pub fn new(repo_id: String, repo_type: RepoType) -> Self {
         Self::with_revision(repo_id, repo_type, "main".to_string())
     }
 
     /// fully qualified Repo
-    #[must_use]
     pub fn with_revision(repo_id: String, repo_type: RepoType, revision: String) -> Self {
         Self {
             repo_id,
@@ -241,25 +230,21 @@ impl Repo {
     }
 
     /// Shortcut for [`Repo::new`] with [`RepoType::Model`]
-    #[must_use]
     pub fn model(repo_id: String) -> Self {
         Self::new(repo_id, RepoType::Model)
     }
 
     /// Shortcut for [`Repo::new`] with [`RepoType::Dataset`]
-    #[must_use]
     pub fn dataset(repo_id: String) -> Self {
         Self::new(repo_id, RepoType::Dataset)
     }
 
     /// Shortcut for [`Repo::new`] with [`RepoType::Space`]
-    #[must_use]
     pub fn space(repo_id: String) -> Self {
         Self::new(repo_id, RepoType::Space)
     }
 
     /// The normalized folder nameof the repo within the cache directory
-    #[must_use]
     pub fn folder_name(&self) -> String {
         let prefix = match self.repo_type {
             RepoType::Model => "models",
@@ -270,14 +255,12 @@ impl Repo {
     }
 
     /// The revision
-    #[must_use]
     pub fn revision(&self) -> &str {
         &self.revision
     }
 
     /// The actual URL part of the repo
     #[cfg(feature = "online")]
-    #[must_use]
     pub fn url(&self) -> String {
         match self.repo_type {
             RepoType::Model => self.repo_id.to_string(),
@@ -292,14 +275,12 @@ impl Repo {
 
     /// Revision needs to be url escaped before being used in a URL
     #[cfg(feature = "online")]
-    #[must_use]
     pub fn url_revision(&self) -> String {
         self.revision.replace('/', "%2F")
     }
 
     /// Used to compute the repo's url part when accessing the metadata of the repo
     #[cfg(feature = "online")]
-    #[must_use]
     pub fn api_url(&self) -> String {
         let prefix = match self.repo_type {
             RepoType::Model => "models",
