@@ -70,6 +70,7 @@ pub enum ApiError {
 }
 
 /// Helper to create [`Api`] with all the options.
+#[derive(Debug)]
 pub struct ApiBuilder {
     endpoint: String,
     cache: Cache,
@@ -94,6 +95,7 @@ impl ApiBuilder {
     /// use hf_hub::api::tokio::ApiBuilder;
     /// let api = ApiBuilder::new().build().unwrap();
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         let cache = Cache::default();
         Self::from_cache(cache)
@@ -106,6 +108,7 @@ impl ApiBuilder {
     /// let cache = Cache::new(path);
     /// let api = ApiBuilder::from_cache(cache).build().unwrap();
     /// ```
+    #[must_use]
     pub fn from_cache(cache: Cache) -> Self {
         let token = cache.token();
 
@@ -125,18 +128,21 @@ impl ApiBuilder {
     }
 
     /// Wether to show a progressbar
+    #[must_use]
     pub fn with_progress(mut self, progress: bool) -> Self {
         self.progress = progress;
         self
     }
 
     /// Changes the location of the cache directory. Defaults is `~/.cache/huggingface/`.
+    #[must_use]
     pub fn with_cache_dir(mut self, cache_dir: PathBuf) -> Self {
         self.cache = Cache::new(cache_dir);
         self
     }
 
     /// Sets the token to be used in the API
+    #[must_use]
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
@@ -155,7 +161,7 @@ impl ApiBuilder {
         Ok(headers)
     }
 
-    /// Consumes the builder and buids the final [`Api`]
+    /// Consumes the builder and builds the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
         let client = Client::builder().default_headers(headers.clone()).build()?;
@@ -205,10 +211,10 @@ struct Metadata {
     size: usize,
 }
 
-/// The actual Api used to interacto with the hub.
+/// The actual Api used to interact with the hub.
 /// You can inspect repos with [`Api::info`]
 /// or download files with [`Api::download`]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Api {
     endpoint: String,
     url_template: String,
@@ -226,9 +232,7 @@ fn make_relative(src: &Path, dst: &Path) -> PathBuf {
     let path = src;
     let base = dst;
 
-    if path.is_absolute() != base.is_absolute() {
-        panic!("This function is made to look at absolute paths only");
-    }
+    assert!(path.is_absolute() == base.is_absolute(), "This function is made to look at absolute paths only");
     let mut ita = path.components();
     let mut itb = base.components();
 
@@ -290,6 +294,7 @@ impl Api {
 
     /// Get the underlying api client
     /// Allows for lower level access
+    #[must_use]
     pub fn client(&self) -> &Client {
         &self.client
     }
@@ -352,6 +357,7 @@ impl Api {
 
     /// Creates a new handle [`ApiRepo`] which contains operations
     /// on a particular [`Repo`]
+    #[must_use]
     pub fn repo(&self, repo: Repo) -> ApiRepo {
         ApiRepo::new(self.clone(), repo)
     }
@@ -363,6 +369,7 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Model));
     /// ```
+    #[must_use]
     pub fn model(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Model))
     }
@@ -374,6 +381,7 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Dataset));
     /// ```
+    #[must_use]
     pub fn dataset(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Dataset))
     }
@@ -385,12 +393,14 @@ impl Api {
     /// let api = Api::new().unwrap();
     /// let api = api.repo(Repo::new(model_id, RepoType::Space));
     /// ```
+    #[must_use]
     pub fn space(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
 }
 
 /// Shorthand for accessing things within a particular repo
+#[derive(Debug)]
 pub struct ApiRepo {
     api: Api,
     repo: Repo,
@@ -410,6 +420,7 @@ impl ApiRepo {
     /// let url = api.model("gpt2".to_string()).url("model.safetensors");
     /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
     /// ```
+    #[must_use]
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
         let revision = &self.repo.url_revision();
@@ -484,7 +495,7 @@ impl ApiRepo {
         let results: Result<(), ApiError> = results.into_iter().flatten().collect();
         results?;
         if let Some(p) = progressbar {
-            p.finish()
+            p.finish();
         }
         Ok(filename)
     }
@@ -645,7 +656,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            std::fs::remove_dir_all(&self.path).unwrap()
+            std::fs::remove_dir_all(&self.path).unwrap();
         }
     }
 
@@ -722,7 +733,7 @@ mod tests {
         assert_eq!(
             val[..],
             hex!("59ce09415ad8aa45a9e34f88cec2548aeb9de9a73fcda9f6b33a86a065f32b90")
-        )
+        );
     }
 
     #[tokio::test]
@@ -744,7 +755,7 @@ mod tests {
         assert_eq!(
             val[..],
             hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E")
-        )
+        );
     }
 
     #[tokio::test]
@@ -849,7 +860,7 @@ mod tests {
                 ],
                 sha: "3acdf8c72a4dd61d76f34d7b54ee2a5b088ea3b1".to_string(),
             }
-        )
+        );
     }
 
     #[tokio::test]
