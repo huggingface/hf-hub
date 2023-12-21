@@ -227,8 +227,9 @@ fn make_relative(src: &Path, dst: &Path) -> PathBuf {
     let path = src;
     let base = dst;
 
-    assert!(
-        path.is_absolute() == base.is_absolute(),
+    assert_eq!(
+        path.is_absolute(),
+        base.is_absolute(),
         "This function is made to look at absolute paths only"
     );
     let mut ita = path.components();
