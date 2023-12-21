@@ -22,7 +22,7 @@ pub enum RepoType {
 }
 
 /// A local struct used to fetch information from the cache folder.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Cache {
     path: PathBuf,
 }
@@ -57,10 +57,10 @@ impl Cache {
         match std::fs::read_to_string(token_filename) {
             Ok(token_content) => {
                 let token_content = token_content.trim();
-                if !token_content.is_empty() {
-                    Some(token_content.to_string())
-                } else {
+                if token_content.is_empty() {
                     None
+                } else {
+                    Some(token_content.to_string())
                 }
             }
             Err(_) => None,
@@ -123,6 +123,7 @@ impl Cache {
 }
 
 /// Shorthand for accessing things within a particular repo
+#[derive(Debug)]
 pub struct CacheRepo {
     cache: Cache,
     repo: Repo,
@@ -165,11 +166,11 @@ impl CacheRepo {
         let ref_path = self.ref_path();
         // Needs to be done like this because revision might contain `/` creating subfolders here.
         std::fs::create_dir_all(ref_path.parent().unwrap())?;
-        let mut file1 = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .open(&ref_path)?;
-        file1.write_all(commit_hash.trim().as_bytes())?;
+        file.write_all(commit_hash.trim().as_bytes())?;
         Ok(())
     }
 
@@ -206,7 +207,7 @@ impl Default for Cache {
 }
 
 /// The representation of a repo on the hub.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Repo {
     repo_id: String,
     repo_type: RepoType,
