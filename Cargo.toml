@@ -25,7 +25,7 @@ It aims to be compatible with [huggingface_hub](https://github.com/huggingface/h
 dirs = "5.0.1"
 http = { version = "1.0.0", optional = true }
 rand = { version = "0.8.5", optional = true }
-reqwest = { version = "0.11.18", optional = true, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.11.18", optional = true, features = ["json", "rustls-tls"], default-features = false }
 serde = { version = "1.0.171", features = ["derive"], optional = true }
 serde_json = { version = "1.0.103", optional = true }
 indicatif = { version = "0.17.5", optional = true }
