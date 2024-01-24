@@ -38,7 +38,7 @@ log = "0.4.19"
 
 [features]
 default = ["online"]
-online = ["dep:ureq", "dep:native-tls", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:thiserror", "dep:http"]
+online = ["dep:ureq", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:thiserror", "dep:http"]
 tokio = ["dep:reqwest", "dep:tokio", "tokio/rt-multi-thread", "dep:futures", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
 
 [dev-dependencies]
