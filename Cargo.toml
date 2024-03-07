@@ -33,7 +33,7 @@ num_cpus = { version = "1.15.0", optional = true }
 tokio = { version = "1.29.1", optional = true, features = ["fs", "macros"] }
 futures = { version = "0.3.28", optional = true }
 thiserror = { version = "1.0.43", optional = true }
-ureq = { version = "2.8.0", optional = true, features = ["native-tls", "json", "socks-proxy"] }
+ureq = { version = "2.9.1", optional = true, features = ["native-tls", "json", "socks-proxy","proxy-from-env"] }
 native-tls = { version = "0.2.11", optional = true }
 log = "0.4.19"
 
