@@ -25,7 +25,7 @@ type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
 
 /// Simple wrapper over [`ureq::Agent`] to include default headers
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct HeaderAgent {
     agent: Agent,
     headers: HeaderMap,
@@ -81,6 +81,7 @@ pub enum ApiError {
 }
 
 /// Helper to create [`Api`] with all the options.
+#[derive(Debug)]
 pub struct ApiBuilder {
     endpoint: String,
     cache: Cache,
@@ -145,19 +146,19 @@ impl ApiBuilder {
         self
     }
 
-    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
+    fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
         headers.insert(USER_AGENT, user_agent);
         if let Some(token) = &self.token {
             headers.insert(AUTHORIZATION, format!("Bearer {token}"));
         }
-        Ok(headers)
+        headers
     }
 
     /// Consumes the builder and buids the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
-        let headers = self.build_headers()?;
+        let headers = self.build_headers();
 
         let agent = ureq::builder().try_proxy_from_env(true).build();
         let client = HeaderAgent::new(agent, headers.clone());
@@ -190,7 +191,7 @@ struct Metadata {
 /// The actual Api used to interacto with the hub.
 /// You can inspect repos with [`Api::info`]
 /// or download files with [`Api::download`]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Api {
     endpoint: String,
     url_template: String,
@@ -204,9 +205,11 @@ fn make_relative(src: &Path, dst: &Path) -> PathBuf {
     let path = src;
     let base = dst;
 
-    if path.is_absolute() != base.is_absolute() {
-        panic!("This function is made to look at absolute paths only");
-    }
+    assert_eq!(
+        path.is_absolute(),
+        base.is_absolute(),
+        "This function is made to look at absolute paths only"
+    );
     let mut ita = path.components();
     let mut itb = base.components();
 
@@ -383,7 +386,7 @@ impl Api {
         std::io::copy(&mut reader, &mut file)?;
 
         if let Some(p) = progressbar {
-            p.finish()
+            p.finish();
         }
         Ok(filename)
     }
@@ -429,6 +432,7 @@ impl Api {
 }
 
 /// Shorthand for accessing things within a particular repo
+#[derive(Debug)]
 pub struct ApiRepo {
     api: Api,
     repo: Repo,
@@ -642,7 +646,7 @@ mod tests {
         assert_eq!(
             val[..],
             hex!("59ce09415ad8aa45a9e34f88cec2548aeb9de9a73fcda9f6b33a86a065f32b90")
-        )
+        );
     }
 
     #[test]
@@ -664,7 +668,7 @@ mod tests {
         assert_eq!(
             val[..],
             hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E")
-        )
+        );
     }
 
     #[test]
@@ -769,7 +773,7 @@ mod tests {
                 ],
                 sha: "3acdf8c72a4dd61d76f34d7b54ee2a5b088ea3b1".to_string(),
             }
-        )
+        );
     }
 
     #[test]

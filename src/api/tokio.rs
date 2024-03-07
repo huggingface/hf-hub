@@ -70,6 +70,7 @@ pub enum ApiError {
 }
 
 /// Helper to create [`Api`] with all the options.
+#[derive(Debug)]
 pub struct ApiBuilder {
     endpoint: String,
     cache: Cache,
@@ -155,7 +156,7 @@ impl ApiBuilder {
         Ok(headers)
     }
 
-    /// Consumes the builder and buids the final [`Api`]
+    /// Consumes the builder and builds the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
         let client = Client::builder().default_headers(headers.clone()).build()?;
@@ -205,10 +206,10 @@ struct Metadata {
     size: usize,
 }
 
-/// The actual Api used to interacto with the hub.
+/// The actual Api used to interact with the hub.
 /// You can inspect repos with [`Api::info`]
 /// or download files with [`Api::download`]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Api {
     endpoint: String,
     url_template: String,
@@ -226,9 +227,11 @@ fn make_relative(src: &Path, dst: &Path) -> PathBuf {
     let path = src;
     let base = dst;
 
-    if path.is_absolute() != base.is_absolute() {
-        panic!("This function is made to look at absolute paths only");
-    }
+    assert_eq!(
+        path.is_absolute(),
+        base.is_absolute(),
+        "This function is made to look at absolute paths only"
+    );
     let mut ita = path.components();
     let mut itb = base.components();
 
@@ -391,6 +394,7 @@ impl Api {
 }
 
 /// Shorthand for accessing things within a particular repo
+#[derive(Debug)]
 pub struct ApiRepo {
     api: Api,
     repo: Repo,
@@ -484,7 +488,7 @@ impl ApiRepo {
         let results: Result<(), ApiError> = results.into_iter().flatten().collect();
         results?;
         if let Some(p) = progressbar {
-            p.finish()
+            p.finish();
         }
         Ok(filename)
     }
@@ -645,7 +649,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            std::fs::remove_dir_all(&self.path).unwrap()
+            std::fs::remove_dir_all(&self.path).unwrap();
         }
     }
 
@@ -722,7 +726,7 @@ mod tests {
         assert_eq!(
             val[..],
             hex!("59ce09415ad8aa45a9e34f88cec2548aeb9de9a73fcda9f6b33a86a065f32b90")
-        )
+        );
     }
 
     #[tokio::test]
@@ -744,7 +748,7 @@ mod tests {
         assert_eq!(
             val[..],
             hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E")
-        )
+        );
     }
 
     #[tokio::test]
@@ -849,7 +853,7 @@ mod tests {
                 ],
                 sha: "3acdf8c72a4dd61d76f34d7b54ee2a5b088ea3b1".to_string(),
             }
-        )
+        );
     }
 
     #[tokio::test]
