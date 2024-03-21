@@ -119,8 +119,13 @@ impl ApiBuilder {
 
         let progress = true;
 
+        let endpoint = match std::env::var("HF_ENDPOINT") {
+            Ok(v) => v,
+            Err(_) => "https://huggingface.co".to_string(),
+        };
+
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint,
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
@@ -860,5 +865,16 @@ mod tests {
                 "tags": ["pytorch", "region:us"],
             })
         );
+    }
+
+    #[test]
+    fn endpoint() {
+        std::env::remove_var("HF_ENDPOINT");
+        let api = ApiBuilder::new().build().unwrap();
+        assert_eq!(api.endpoint, "https://huggingface.co".to_string());
+        let fake_endpoint = "https://fake_endpoint.com".to_string();
+        std::env::set_var("HF_ENDPOINT", &fake_endpoint);
+        let api = ApiBuilder::new().build().unwrap();
+        assert_eq!(api.endpoint, fake_endpoint);
     }
 }
