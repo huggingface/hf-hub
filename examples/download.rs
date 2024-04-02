@@ -1,4 +1,10 @@
-#[cfg(not(feature = "tokio"))]
+#[cfg(not(feature = "ureq"))]
+#[cfg(not(feature="tokio"))]
+fn main() {
+}
+
+#[cfg(feature = "ureq")]
+#[cfg(not(feature="tokio"))]
 fn main() {
     let api = hf_hub::api::sync::Api::new().unwrap();
 
