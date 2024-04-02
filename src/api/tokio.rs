@@ -725,7 +725,7 @@ mod tests {
         let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
         assert_eq!(
             val[..],
-            hex!("59ce09415ad8aa45a9e34f88cec2548aeb9de9a73fcda9f6b33a86a065f32b90")
+            hex!("ABDFC9F83B1103B502924072460D4C92F277C9B49C313CEF3E48CFCF7428E125")
         );
     }
 
@@ -776,28 +776,16 @@ mod tests {
                         rfilename: "wikitext-103-raw-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/test/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-103-raw-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-raw-v1/train/0001.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/train/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-103-raw-v1/validation/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/validation/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-103-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/train/0000.parquet".to_string()
@@ -806,52 +794,28 @@ mod tests {
                         rfilename: "wikitext-103-v1/train/0001.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/train/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-103-v1/validation/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-2-raw-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-2-raw-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-2-raw-v1/validation/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-2-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/test/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-2-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/train/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-2-v1/validation/0000.parquet".to_string()
                     },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/validation/index.duckdb".to_string()
-                    },
                 ],
-                sha: "3acdf8c72a4dd61d76f34d7b54ee2a5b088ea3b1".to_string(),
+                sha: "0c96c950e87e0cde5b9f99bb0cc5cf0a0a0dbcca".to_string(),
             }
         );
     }
@@ -885,7 +849,6 @@ mod tests {
             json!({
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
-                "config": {},
                 "createdAt": "2022-03-02T23:29:05.000Z",
                 "disabled": false,
                 "downloads": 0,
