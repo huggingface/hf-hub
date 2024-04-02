@@ -166,6 +166,7 @@ impl CacheRepo {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&ref_path)?;
         file.write_all(commit_hash.trim().as_bytes())?;
         Ok(())
