@@ -5,6 +5,7 @@ use serde::Deserialize;
 pub mod tokio;
 
 /// The synchronous version of the API
+#[cfg(feature = "ureq")]
 pub mod sync;
 
 /// Siblings are simplified file descriptions of remote files on the hub
