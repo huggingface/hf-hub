@@ -623,9 +623,8 @@ impl ApiRepo {
 mod tests {
     use super::*;
     use crate::api::Siblings;
-    use crate::RepoType;
     use hex_literal::hex;
-    use rand::{distributions::Alphanumeric, Rng};
+    use rand::distributions::Alphanumeric;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 
