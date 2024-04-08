@@ -1,12 +1,12 @@
 #![deny(missing_docs)]
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
-#[cfg(any(feature="tokio", feature="ureq"))]
+#[cfg(any(feature = "tokio", feature = "ureq"))]
 use rand::{distributions::Alphanumeric, Rng};
 use std::io::Write;
 use std::path::PathBuf;
 
 /// The actual Api to interact with the hub.
-#[cfg(any(feature="tokio", feature="ureq"))]
+#[cfg(any(feature = "tokio", feature = "ureq"))]
 pub mod api;
 
 /// The type of repo to interact with
@@ -106,7 +106,7 @@ impl Cache {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
 
-    #[cfg(any(feature="tokio", feature="ureq"))]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub(crate) fn temp_path(&self) -> PathBuf {
         let mut path = self.path().clone();
         path.push("tmp");
@@ -175,8 +175,7 @@ impl CacheRepo {
         Ok(())
     }
 
-
-    #[cfg(any(feature="tokio", feature="ureq"))]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub(crate) fn blob_path(&self, etag: &str) -> PathBuf {
         let mut blob_path = self.path();
         blob_path.push("blobs");
@@ -262,7 +261,7 @@ impl Repo {
     }
 
     /// The actual URL part of the repo
-    #[cfg(any(feature="tokio", feature="ureq"))]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn url(&self) -> String {
         match self.repo_type {
             RepoType::Model => self.repo_id.to_string(),
@@ -276,13 +275,13 @@ impl Repo {
     }
 
     /// Revision needs to be url escaped before being used in a URL
-    #[cfg(any(feature="tokio", feature="ureq"))]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn url_revision(&self) -> String {
         self.revision.replace('/', "%2F")
     }
 
     /// Used to compute the repo's url part when accessing the metadata of the repo
-    #[cfg(any(feature="tokio", feature="ureq"))]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn api_url(&self) -> String {
         let prefix = match self.repo_type {
             RepoType::Model => "models",
