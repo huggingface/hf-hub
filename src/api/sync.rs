@@ -4,6 +4,10 @@ use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+#[cfg(feature="download-with-offset")]
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::io::{BufWriter, Write};
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
@@ -42,6 +46,33 @@ impl HeaderAgent {
             request = request.set(header, value);
         }
         request
+    }
+
+    /**
+     * return request and offset
+    */
+    fn get_with_offset(&self, url: &str, _save_path: &Path) -> (ureq::Request, u64) {
+        // Check if the file has been partially downloaded
+        #[cfg(feature="download-with-offset")]
+        let file_size = match Path::new(_save_path).metadata() {
+            Ok(metadata) => metadata.len(),
+            Err(_) => 0,
+        };
+        #[cfg(not(feature="download-with-offset"))]
+        let file_size = 0;
+
+        // Construct the Range request header
+        let range = format!("bytes={}-", file_size);
+
+        // Send an HTTP GET request with the Range header
+        let mut request = ureq::get(url);
+
+        for (header, value) in &self.headers {
+            request = request.set(header, value);
+        }
+        request = request.set(RANGE, &range);
+        (request, file_size)
+
     }
 }
 
@@ -255,6 +286,14 @@ fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+#[cfg(feature="download-with-offset")]
+fn hash_string_to_hex(input: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    input.hash(&mut hasher);
+    let hash_result = hasher.finish();
+    format!("{:x}", hash_result)
+}
+
 impl Api {
     /// Creates a default Api, for Api options See [`ApiBuilder`]
     pub fn new() -> Result<Self, ApiError> {
@@ -371,19 +410,44 @@ impl Api {
         url: &str,
         progressbar: Option<ProgressBar>,
     ) -> Result<PathBuf, ApiError> {
+        #[cfg(not(feature="download-with-offset"))]
         let filename = self.cache.temp_path();
+        #[cfg(feature="download-with-offset")]
+        let filename = {
+            let hash_str = hash_string_to_hex(url);
+            self.cache.fixed_path(&hash_str)
+        };
 
-        // Create the file and set everything properly
-        let mut file = std::fs::File::create(&filename)?;
+        //build request with offset
+        let (request,offset)=self.client.get_with_offset(url,&filename);
+        let response = request.call().map_err(Box::new)?;
 
-        let response = self.client.get(url).call().map_err(Box::new)?;
+        // Open or create the file for writing
+        let file = OpenOptions::new()
+            .append(true) // Append mode
+            .create(true) // Create the file if it does not exist
+            .open(&filename)?;
 
         let mut reader = response.into_reader();
         if let Some(p) = &progressbar {
+            p.set_position(offset);
             reader = Box::new(p.wrap_read(reader));
         }
-
-        std::io::copy(&mut reader, &mut file)?;
+        // Read the response body and write to the file
+        let mut file_writer = BufWriter::new(file);
+        let mut buffer = [0u8; 1024*8];
+        loop {
+            match reader.read(&mut buffer){
+                Ok(n) => {
+                    if n == 0 {
+                        break; // End of data reading
+                    }
+                    file_writer.write_all(&buffer[..n])?;
+                    file_writer.flush()?;
+                }
+                Err(e) => return Err(ApiError::IoError(e)),
+            };
+        }
 
         if let Some(p) = progressbar {
             p.finish();
