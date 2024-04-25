@@ -22,6 +22,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
 
+/// can use a mirror site to download
+const HF_ENDPOINT: Option<&str> = option_env!("HF_ENDPOINT");
+
 #[derive(Debug, Error)]
 /// All errors the API can throw
 pub enum ApiError {
@@ -113,7 +116,7 @@ impl ApiBuilder {
         let progress = true;
 
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint: HF_ENDPOINT.unwrap_or("https://huggingface.co").to_string(),
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
@@ -412,7 +415,8 @@ impl ApiRepo {
     /// # use hf_hub::api::tokio::Api;
     /// let api = Api::new().unwrap();
     /// let url = api.model("gpt2".to_string()).url("model.safetensors");
-    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
+    /// const HF_ENDPOINT: Option<&str> = option_env!("HF_ENDPOINT");
+    /// assert_eq!(url, format!("{}{}",HF_ENDPOINT.unwrap_or("https://huggingface.co"),"/gpt2/resolve/main/model.safetensors"));
     /// ```
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;

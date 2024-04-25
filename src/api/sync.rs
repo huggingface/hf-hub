@@ -3,7 +3,9 @@ use crate::api::sync::ApiError::InvalidHeader;
 use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
 use indicatif::{ProgressBar, ProgressStyle};
+use pget::download_with_custom_progress;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
@@ -14,6 +16,8 @@ use ureq::{Agent, Request};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
+/// can use a mirror site to download
+const HF_ENDPOINT: Option<&str> = option_env!("HF_ENDPOINT");
 
 const RANGE: &str = "Range";
 const CONTENT_RANGE: &str = "Content-Range";
@@ -80,6 +84,18 @@ pub enum ApiError {
     TooManyRetries(Box<ApiError>),
 }
 
+impl From<pget::common::error::DownloadError> for ApiError {
+    fn from(value: pget::common::error::DownloadError) -> Self {
+        match value {
+            pget::common::error::DownloadError::IOError(e) => ApiError::IoError(e),
+            other_error => {
+                let error_str = format!("{:?}", other_error);
+                ApiError::IoError(std::io::Error::new(ErrorKind::Other, error_str))
+            }
+        }
+    }
+}
+
 /// Helper to create [`Api`] with all the options.
 #[derive(Debug)]
 pub struct ApiBuilder {
@@ -120,7 +136,7 @@ impl ApiBuilder {
         let progress = true;
 
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint: HF_ENDPOINT.unwrap_or("https://huggingface.co").to_string(),
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
@@ -372,22 +388,7 @@ impl Api {
         progressbar: Option<ProgressBar>,
     ) -> Result<PathBuf, ApiError> {
         let filename = self.cache.temp_path();
-
-        // Create the file and set everything properly
-        let mut file = std::fs::File::create(&filename)?;
-
-        let response = self.client.get(url).call().map_err(Box::new)?;
-
-        let mut reader = response.into_reader();
-        if let Some(p) = &progressbar {
-            reader = Box::new(p.wrap_read(reader));
-        }
-
-        std::io::copy(&mut reader, &mut file)?;
-
-        if let Some(p) = progressbar {
-            p.finish();
-        }
+        download_with_custom_progress(url, num_cpus::get(), filename.clone(), progressbar, false)?;
         Ok(filename)
     }
 
@@ -450,7 +451,8 @@ impl ApiRepo {
     /// # use hf_hub::api::sync::Api;
     /// let api = Api::new().unwrap();
     /// let url = api.model("gpt2".to_string()).url("model.safetensors");
-    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
+    /// const HF_ENDPOINT: Option<&str> = option_env!("HF_ENDPOINT");
+    /// assert_eq!(url, format!("{}{}",HF_ENDPOINT.unwrap_or("https://huggingface.co"),"/gpt2/resolve/main/model.safetensors"));
     /// ```
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
