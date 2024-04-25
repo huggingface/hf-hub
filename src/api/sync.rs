@@ -3,11 +3,9 @@ use crate::api::sync::ApiError::InvalidHeader;
 use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
 use indicatif::{ProgressBar, ProgressStyle};
+use pget::download_with_custom_progress;
 use std::collections::HashMap;
-use std::fs::OpenOptions;
-#[cfg(feature="download-with-offset")]
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{BufWriter, Write};
+use std::io::ErrorKind;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
@@ -18,6 +16,8 @@ use ureq::{Agent, Request};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
+/// can use a mirror site to download
+const HF_ENDPOINT: Option<&str> = option_env!("HF_ENDPOINT");
 
 const RANGE: &str = "Range";
 const CONTENT_RANGE: &str = "Content-Range";
@@ -46,33 +46,6 @@ impl HeaderAgent {
             request = request.set(header, value);
         }
         request
-    }
-
-    /**
-     * return request and offset
-    */
-    fn get_with_offset(&self, url: &str, _save_path: &Path) -> (ureq::Request, u64) {
-        // Check if the file has been partially downloaded
-        #[cfg(feature="download-with-offset")]
-        let file_size = match Path::new(_save_path).metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(_) => 0,
-        };
-        #[cfg(not(feature="download-with-offset"))]
-        let file_size = 0;
-
-        // Construct the Range request header
-        let range = format!("bytes={}-", file_size);
-
-        // Send an HTTP GET request with the Range header
-        let mut request = ureq::get(url);
-
-        for (header, value) in &self.headers {
-            request = request.set(header, value);
-        }
-        request = request.set(RANGE, &range);
-        (request, file_size)
-
     }
 }
 
@@ -109,6 +82,18 @@ pub enum ApiError {
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
+}
+
+impl From<pget::common::error::DownloadError> for ApiError {
+    fn from(value: pget::common::error::DownloadError) -> Self {
+        match value {
+            pget::common::error::DownloadError::IOError(e) => ApiError::IoError(e),
+            other_error => {
+                let error_str = format!("{:?}", other_error);
+                ApiError::IoError(std::io::Error::new(ErrorKind::Other, error_str))
+            }
+        }
+    }
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -151,7 +136,7 @@ impl ApiBuilder {
         let progress = true;
 
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint: HF_ENDPOINT.unwrap_or("https://huggingface.co").to_string(),
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
@@ -286,14 +271,6 @@ fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-#[cfg(feature="download-with-offset")]
-fn hash_string_to_hex(input: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    input.hash(&mut hasher);
-    let hash_result = hasher.finish();
-    format!("{:x}", hash_result)
-}
-
 impl Api {
     /// Creates a default Api, for Api options See [`ApiBuilder`]
     pub fn new() -> Result<Self, ApiError> {
@@ -410,48 +387,8 @@ impl Api {
         url: &str,
         progressbar: Option<ProgressBar>,
     ) -> Result<PathBuf, ApiError> {
-        #[cfg(not(feature="download-with-offset"))]
         let filename = self.cache.temp_path();
-        #[cfg(feature="download-with-offset")]
-        let filename = {
-            let hash_str = hash_string_to_hex(url);
-            self.cache.fixed_path(&hash_str)
-        };
-
-        //build request with offset
-        let (request,offset)=self.client.get_with_offset(url,&filename);
-        let response = request.call().map_err(Box::new)?;
-
-        // Open or create the file for writing
-        let file = OpenOptions::new()
-            .append(true) // Append mode
-            .create(true) // Create the file if it does not exist
-            .open(&filename)?;
-
-        let mut reader = response.into_reader();
-        if let Some(p) = &progressbar {
-            p.set_position(offset);
-            reader = Box::new(p.wrap_read(reader));
-        }
-        // Read the response body and write to the file
-        let mut file_writer = BufWriter::new(file);
-        let mut buffer = [0u8; 1024*8];
-        loop {
-            match reader.read(&mut buffer){
-                Ok(n) => {
-                    if n == 0 {
-                        break; // End of data reading
-                    }
-                    file_writer.write_all(&buffer[..n])?;
-                    file_writer.flush()?;
-                }
-                Err(e) => return Err(ApiError::IoError(e)),
-            };
-        }
-
-        if let Some(p) = progressbar {
-            p.finish();
-        }
+        download_with_custom_progress(url, num_cpus::get(), filename.clone(), progressbar, false)?;
         Ok(filename)
     }
 
@@ -514,7 +451,8 @@ impl ApiRepo {
     /// # use hf_hub::api::sync::Api;
     /// let api = Api::new().unwrap();
     /// let url = api.model("gpt2".to_string()).url("model.safetensors");
-    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
+    /// const HF_ENDPOINT: Option<&str> = option_env!("HF_ENDPOINT");
+    /// assert_eq!(url, format!("{}{}",HF_ENDPOINT.unwrap_or("https://huggingface.co"),"/gpt2/resolve/main/model.safetensors"));
     /// ```
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;

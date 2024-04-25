@@ -120,15 +120,6 @@ impl Cache {
         path.push(s);
         path.to_path_buf()
     }
-
-    #[cfg(all(any(feature = "tokio", feature = "ureq"), feature="download-with-offset"))]
-    pub(crate) fn fixed_path(&self,filename:&dyn AsRef<std::path::Path>) -> PathBuf {
-        let mut path = self.path().clone();
-        path.push("tmp");
-        std::fs::create_dir_all(&path).ok();
-        path.push(filename);
-        path.to_path_buf()
-    }
 }
 
 /// Shorthand for accessing things within a particular repo
