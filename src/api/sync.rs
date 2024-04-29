@@ -146,6 +146,12 @@ impl ApiBuilder {
         self
     }
 
+    /// Sets the hub endpoint
+    pub fn with_endpoint(mut self, endpoint: String) -> Self {
+        self.endpoint = endpoint;
+        self
+    }
+
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
