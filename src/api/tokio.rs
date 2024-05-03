@@ -21,6 +21,8 @@ use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
+/// Huggingface endpoint
+const HF_ENDPOINT: &str = env!("HF_ENDPOINT");
 
 #[derive(Debug, Error)]
 /// All errors the API can throw
@@ -113,7 +115,7 @@ impl ApiBuilder {
         let progress = true;
 
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint: HF_ENDPOINT.to_string(),
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,

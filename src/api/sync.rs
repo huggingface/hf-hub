@@ -14,6 +14,8 @@ use ureq::{Agent, Request};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
+/// Huggingface endpoint
+const HF_ENDPOINT: &str = env!("HF_ENDPOINT");
 
 const RANGE: &str = "Range";
 const CONTENT_RANGE: &str = "Content-Range";
@@ -120,7 +122,7 @@ impl ApiBuilder {
         let progress = true;
 
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint: HF_ENDPOINT.to_string(),
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
