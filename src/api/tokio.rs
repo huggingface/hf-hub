@@ -86,7 +86,18 @@ pub struct ApiBuilder {
 
 impl Default for ApiBuilder {
     fn default() -> Self {
-        Self::new()
+        ApiBuilder {
+            endpoint: "https://huggingface.co".to_string(),
+            url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
+            cache: Cache::default(),
+            progress: true,
+            token: None,
+            // Async specific:
+            max_files: num_cpus::get(),
+            chunk_size: 10_000_000,
+            parallel_failures: 0,
+            max_retries: 0,
+        }
     }
 }
 
@@ -111,18 +122,10 @@ impl ApiBuilder {
     pub fn from_cache(cache: Cache) -> Self {
         let token = cache.token();
 
-        let progress = true;
-
         Self {
-            endpoint: "https://huggingface.co".to_string(),
-            url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
-            max_files: num_cpus::get(),
-            chunk_size: 10_000_000,
-            parallel_failures: 0,
-            max_retries: 0,
-            progress,
+            ..Self::default()
         }
     }
 
