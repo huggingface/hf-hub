@@ -73,14 +73,15 @@ pub enum ApiError {
 #[derive(Debug)]
 pub struct ApiBuilder {
     endpoint: String,
-    cache: Cache,
     url_template: String,
+    cache: Cache,
+    progress: bool,
     token: Option<String>,
+    // Async specific:
     max_files: usize,
     chunk_size: usize,
     parallel_failures: usize,
     max_retries: usize,
-    progress: bool,
 }
 
 impl Default for ApiBuilder {
@@ -185,16 +186,16 @@ impl ApiBuilder {
             .default_headers(headers)
             .build()?;
         Ok(Api {
+            client,
+            relative_redirect_client,
             endpoint: self.endpoint,
             url_template: self.url_template,
             cache: self.cache,
-            client,
-            relative_redirect_client,
+            progress: self.progress,
             max_files: self.max_files,
             chunk_size: self.chunk_size,
             parallel_failures: self.parallel_failures,
             max_retries: self.max_retries,
-            progress: self.progress,
         })
     }
 }
@@ -211,16 +212,17 @@ struct Metadata {
 /// or download files with [`Api::download`]
 #[derive(Clone, Debug)]
 pub struct Api {
+    client: Client,
+    relative_redirect_client: Client,
     endpoint: String,
     url_template: String,
     cache: Cache,
-    client: Client,
-    relative_redirect_client: Client,
+    progress: bool,
+    // Async specific:
     max_files: usize,
     chunk_size: usize,
     parallel_failures: usize,
     max_retries: usize,
-    progress: bool,
 }
 
 fn make_relative(src: &Path, dst: &Path) -> PathBuf {
