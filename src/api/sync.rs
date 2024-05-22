@@ -1,12 +1,13 @@
 use super::RepoInfo;
 use crate::api::sync::ApiError::InvalidHeader;
-use crate::{Cache, Repo, RepoType};
+use crate::{Cache, Repo, RepoType, SSLType};
 use http::{StatusCode, Uri};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
 use thiserror::Error;
 use ureq::{Agent, Request};
 
@@ -88,6 +89,7 @@ pub struct ApiBuilder {
     url_template: String,
     token: Option<String>,
     progress: bool,
+    ssl_type: SSLType,
 }
 
 impl Default for ApiBuilder {
@@ -125,6 +127,7 @@ impl ApiBuilder {
             cache,
             token,
             progress,
+            ssl_type: SSLType::RUSTLS,
         }
     }
 
@@ -146,6 +149,12 @@ impl ApiBuilder {
         self
     }
 
+    /// Sets the SSL type to be used for connections
+    pub fn with_ssl_type(mut self, ssl_type: SSLType) -> Self {
+        self.ssl_type = ssl_type;
+        self
+    }
+
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
@@ -160,14 +169,22 @@ impl ApiBuilder {
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers();
 
-        let agent = ureq::builder().try_proxy_from_env(true).build();
-        let client = HeaderAgent::new(agent, headers.clone());
+        let build_agent = |ssl_type: SSLType, redirect: bool| {
+            let mut builder = ureq::builder().try_proxy_from_env(true);
 
-        let no_redirect_agent = ureq::builder()
-            .try_proxy_from_env(true)
-            .redirects(0)
-            .build();
-        let no_redirect_client = HeaderAgent::new(no_redirect_agent, headers);
+            if !redirect {
+                builder = builder.redirects(0);
+            }
+
+            if let SSLType::NATIVE = ssl_type {
+                let tls_connector = native_tls::TlsConnector::new().unwrap();
+                builder = builder.tls_connector(Arc::new(tls_connector))
+            }
+            HeaderAgent::new(builder.build(), headers.clone())
+        };
+
+        let client = build_agent(self.ssl_type, true);
+        let no_redirect_client = build_agent(self.ssl_type, false);
 
         Ok(Api {
             endpoint: self.endpoint,
