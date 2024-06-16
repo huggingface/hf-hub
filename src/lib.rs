@@ -1,12 +1,12 @@
 #![deny(missing_docs)]
 #![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
-#[cfg(feature = "online")]
+#[cfg(any(feature = "tokio", feature = "ureq"))]
 use rand::{distributions::Alphanumeric, Rng};
 use std::io::Write;
 use std::path::PathBuf;
 
 /// The actual Api to interact with the hub.
-#[cfg(feature = "online")]
+#[cfg(any(feature = "tokio", feature = "ureq"))]
 pub mod api;
 
 /// The type of repo to interact with
@@ -22,7 +22,7 @@ pub enum RepoType {
 }
 
 /// A local struct used to fetch information from the cache folder.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Cache {
     path: PathBuf,
 }
@@ -57,10 +57,10 @@ impl Cache {
         match std::fs::read_to_string(token_filename) {
             Ok(token_content) => {
                 let token_content = token_content.trim();
-                if !token_content.is_empty() {
-                    Some(token_content.to_string())
-                } else {
+                if token_content.is_empty() {
                     None
+                } else {
+                    Some(token_content.to_string())
                 }
             }
             Err(_) => None,
@@ -106,7 +106,7 @@ impl Cache {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
 
-    #[cfg(feature = "online")]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub(crate) fn temp_path(&self) -> PathBuf {
         let mut path = self.path().clone();
         path.push("tmp");
@@ -123,6 +123,7 @@ impl Cache {
 }
 
 /// Shorthand for accessing things within a particular repo
+#[derive(Debug)]
 pub struct CacheRepo {
     cache: Cache,
     repo: Repo,
@@ -165,15 +166,16 @@ impl CacheRepo {
         let ref_path = self.ref_path();
         // Needs to be done like this because revision might contain `/` creating subfolders here.
         std::fs::create_dir_all(ref_path.parent().unwrap())?;
-        let mut file1 = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(&ref_path)?;
-        file1.write_all(commit_hash.trim().as_bytes())?;
+        file.write_all(commit_hash.trim().as_bytes())?;
         Ok(())
     }
 
-    #[cfg(feature = "online")]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub(crate) fn blob_path(&self, etag: &str) -> PathBuf {
         let mut blob_path = self.path();
         blob_path.push("blobs");
@@ -206,7 +208,7 @@ impl Default for Cache {
 }
 
 /// The representation of a repo on the hub.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Repo {
     repo_id: String,
     repo_type: RepoType,
@@ -259,7 +261,7 @@ impl Repo {
     }
 
     /// The actual URL part of the repo
-    #[cfg(feature = "online")]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn url(&self) -> String {
         match self.repo_type {
             RepoType::Model => self.repo_id.to_string(),
@@ -273,13 +275,13 @@ impl Repo {
     }
 
     /// Revision needs to be url escaped before being used in a URL
-    #[cfg(feature = "online")]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn url_revision(&self) -> String {
         self.revision.replace('/', "%2F")
     }
 
     /// Used to compute the repo's url part when accessing the metadata of the repo
-    #[cfg(feature = "online")]
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn api_url(&self) -> String {
         let prefix = match self.repo_type {
             RepoType::Model => "models",

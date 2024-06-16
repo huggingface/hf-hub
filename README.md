@@ -40,3 +40,9 @@ let _filename = repo.get("config.json").unwrap();
 
 // filename  is now the local location within hf cache of the config.json file
 ```
+
+# SSL/TLS
+
+When using the [`ureq`](https://github.com/algesten/ureq) feature, you will always use its default TLS backend which is [rustls](https://github.com/rustls/rustls).
+
+When using [`tokio`](https://github.com/tokio-rs/tokio), by default `default-tls` will be enabled, which means OpenSSL. If you want/need to use rustls, disable the default features and use `rustls-tls` in conjunction with `tokio`.

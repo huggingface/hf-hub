@@ -70,6 +70,7 @@ pub enum ApiError {
 }
 
 /// Helper to create [`Api`] with all the options.
+#[derive(Debug)]
 pub struct ApiBuilder {
     endpoint: String,
     cache: Cache,
@@ -155,7 +156,7 @@ impl ApiBuilder {
         Ok(headers)
     }
 
-    /// Consumes the builder and buids the final [`Api`]
+    /// Consumes the builder and builds the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
         let client = Client::builder().default_headers(headers.clone()).build()?;
@@ -205,10 +206,10 @@ struct Metadata {
     size: usize,
 }
 
-/// The actual Api used to interacto with the hub.
+/// The actual Api used to interact with the hub.
 /// You can inspect repos with [`Api::info`]
 /// or download files with [`Api::download`]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Api {
     endpoint: String,
     url_template: String,
@@ -226,9 +227,11 @@ fn make_relative(src: &Path, dst: &Path) -> PathBuf {
     let path = src;
     let base = dst;
 
-    if path.is_absolute() != base.is_absolute() {
-        panic!("This function is made to look at absolute paths only");
-    }
+    assert_eq!(
+        path.is_absolute(),
+        base.is_absolute(),
+        "This function is made to look at absolute paths only"
+    );
     let mut ita = path.components();
     let mut itb = base.components();
 
@@ -391,6 +394,7 @@ impl Api {
 }
 
 /// Shorthand for accessing things within a particular repo
+#[derive(Debug)]
 pub struct ApiRepo {
     api: Api,
     repo: Repo,
@@ -484,7 +488,7 @@ impl ApiRepo {
         let results: Result<(), ApiError> = results.into_iter().flatten().collect();
         results?;
         if let Some(p) = progressbar {
-            p.finish()
+            p.finish();
         }
         Ok(filename)
     }
@@ -619,9 +623,8 @@ impl ApiRepo {
 mod tests {
     use super::*;
     use crate::api::Siblings;
-    use crate::RepoType;
     use hex_literal::hex;
-    use rand::{distributions::Alphanumeric, Rng};
+    use rand::distributions::Alphanumeric;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 
@@ -645,7 +648,7 @@ mod tests {
 
     impl Drop for TempDir {
         fn drop(&mut self) {
-            std::fs::remove_dir_all(&self.path).unwrap()
+            std::fs::remove_dir_all(&self.path).unwrap();
         }
     }
 
@@ -721,8 +724,8 @@ mod tests {
         let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
         assert_eq!(
             val[..],
-            hex!("59ce09415ad8aa45a9e34f88cec2548aeb9de9a73fcda9f6b33a86a065f32b90")
-        )
+            hex!("ABDFC9F83B1103B502924072460D4C92F277C9B49C313CEF3E48CFCF7428E125")
+        );
     }
 
     #[tokio::test]
@@ -744,7 +747,7 @@ mod tests {
         assert_eq!(
             val[..],
             hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E")
-        )
+        );
     }
 
     #[tokio::test]
@@ -772,28 +775,16 @@ mod tests {
                         rfilename: "wikitext-103-raw-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/test/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-103-raw-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-raw-v1/train/0001.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/train/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-103-raw-v1/validation/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-raw-v1/validation/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-103-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/test/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-103-v1/train/0000.parquet".to_string()
@@ -802,54 +793,30 @@ mod tests {
                         rfilename: "wikitext-103-v1/train/0001.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-103-v1/train/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-103-v1/validation/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/validation/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-2-raw-v1/test/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/test/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-2-raw-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-raw-v1/train/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-2-raw-v1/validation/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-raw-v1/validation/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-2-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/test/index.duckdb".to_string()
                     },
                     Siblings {
                         rfilename: "wikitext-2-v1/train/0000.parquet".to_string()
                     },
                     Siblings {
-                        rfilename: "wikitext-2-v1/train/index.duckdb".to_string()
-                    },
-                    Siblings {
                         rfilename: "wikitext-2-v1/validation/0000.parquet".to_string()
                     },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/validation/index.duckdb".to_string()
-                    },
                 ],
-                sha: "3acdf8c72a4dd61d76f34d7b54ee2a5b088ea3b1".to_string(),
+                sha: "0c96c950e87e0cde5b9f99bb0cc5cf0a0a0dbcca".to_string(),
             }
-        )
+        );
     }
 
     #[tokio::test]
@@ -881,7 +848,6 @@ mod tests {
             json!({
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
-                "config": {},
                 "createdAt": "2022-03-02T23:29:05.000Z",
                 "disabled": false,
                 "downloads": 0,

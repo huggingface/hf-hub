@@ -7,12 +7,7 @@ license = "Apache-2.0"
 documentation = "https://docs.rs/hf-hub"
 repository = "https://github.com/huggingface/hf-hub"
 readme = "README.md"
-keywords = [
-    "huggingface",
-    "hf",
-    "hub",
-    "machine-learning"
-]
+keywords = ["huggingface", "hf", "hub", "machine-learning"]
 description = """
 This crates aims ease the interaction with [huggingface](https://huggingface.co/) 
 It aims to be compatible with [huggingface_hub](https://github.com/huggingface/huggingface_hub/) python package, but only implements a smaller subset of functions.
@@ -22,24 +17,55 @@ It aims to be compatible with [huggingface_hub](https://github.com/huggingface/h
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+futures = { version = "0.3.28", optional = true }
 dirs = "5.0.1"
 http = { version = "1.0.0", optional = true }
+indicatif = { version = "0.17.5", optional = true }
+log = "0.4.19"
+num_cpus = { version = "1.15.0", optional = true }
 rand = { version = "0.8.5", optional = true }
-reqwest = { version = "0.11.18", optional = true, features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12.2", optional = true, default-features = false, features = [
+  "json", "rustls-tls"
+] }
+rustls = { version = "0.23.4", optional = true }
 serde = { version = "1.0.171", features = ["derive"], optional = true }
 serde_json = { version = "1.0.103", optional = true }
-indicatif = { version = "0.17.5", optional = true }
-num_cpus = { version = "1.15.0", optional = true }
-tokio = { version = "1.29.1", optional = true, features = ["fs", "macros"] }
-futures = { version = "0.3.28", optional = true }
 thiserror = { version = "1.0.43", optional = true }
-ureq = { version = "2.8.0", optional = true, features = ["json", "socks-proxy"] }
-log = "0.4.19"
+tokio = { version = "1.29.1", optional = true, features = ["fs", "macros"] }
+ureq = { version = "2.8.0", optional = true, features = [
+  "json",
+  "socks-proxy",
+] }
 
 [features]
-default = ["online"]
-online = ["dep:ureq", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:thiserror", "dep:http"]
-tokio = ["dep:reqwest", "dep:tokio", "tokio/rt-multi-thread", "dep:futures", "dep:rand", "dep:serde", "dep:serde_json", "dep:indicatif", "dep:num_cpus", "dep:thiserror"]
+default = ["default-tls", "tokio", "ureq"]
+# These features are only relevant when used with the `tokio` feature, but this might change in the future.
+default-tls = ["dep:reqwest", "reqwest/default"]
+rustls-tls = ["dep:reqwest", "dep:rustls", "reqwest/rustls-tls"]
+tokio = [
+  "dep:futures",
+  "dep:indicatif",
+  "dep:num_cpus",
+  "dep:rand",
+  "dep:reqwest",
+  "reqwest/charset",
+  "reqwest/http2",
+  "reqwest/macos-system-configuration",
+  "dep:serde",
+  "dep:serde_json",
+  "dep:thiserror",
+  "dep:tokio",
+  "tokio/rt-multi-thread",
+]
+ureq = [
+  "dep:http",
+  "dep:indicatif",
+  "dep:rand",
+  "dep:serde",
+  "dep:serde_json",
+  "dep:thiserror",
+  "dep:ureq",
+]
 
 [dev-dependencies]
 hex-literal = "0.4.1"
