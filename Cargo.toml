@@ -25,7 +25,7 @@ log = "0.4.19"
 num_cpus = { version = "1.15.0", optional = true }
 rand = { version = "0.8.5", optional = true }
 reqwest = { version = "0.12.2", optional = true, default-features = false, features = [
-  "json", "rustls-tls"
+  "json"
 ] }
 rustls = { version = "0.23.4", optional = true }
 serde = { version = "1.0.171", features = ["derive"], optional = true }
