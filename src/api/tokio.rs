@@ -113,7 +113,7 @@ impl ApiBuilder {
         let progress = true;
 
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint: std::env::var("HF_ENDPOINT").unwrap_or("https://huggingface.co".into()),
             url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
@@ -412,7 +412,8 @@ impl ApiRepo {
     /// # use hf_hub::api::tokio::Api;
     /// let api = Api::new().unwrap();
     /// let url = api.model("gpt2".to_string()).url("model.safetensors");
-    /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
+    /// let endpoint = std::env::var("HF_ENDPOINT").unwrap_or("https://huggingface.co".into());
+    /// assert_eq!(url, format!("{}/gpt2/resolve/main/model.safetensors", endpoint));
     /// ```
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
@@ -814,7 +815,7 @@ mod tests {
                         rfilename: "wikitext-2-v1/validation/0000.parquet".to_string()
                     },
                 ],
-                sha: "0c96c950e87e0cde5b9f99bb0cc5cf0a0a0dbcca".to_string(),
+                sha: "3f68cd45302c7b4b532d933e71d9e6e54b1c7d5e".to_string(),
             }
         );
     }
