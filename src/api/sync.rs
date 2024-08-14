@@ -119,7 +119,8 @@ impl ApiBuilder {
 
         let progress = true;
 
-        let endpoint = std::env::var("HF_ENDPOINT").unwrap_or_else(|| "https://huggingface.co".to_owned());
+        let endpoint =
+            std::env::var("HF_ENDPOINT").unwrap_or_else(|_| "https://huggingface.co".to_owned());
 
         Self {
             endpoint,
