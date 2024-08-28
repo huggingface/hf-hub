@@ -24,6 +24,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Instal cargo audit
+        run: cargo install cargo-audit
+
       - name: Build
         run: cargo build --all-targets --verbose
 
