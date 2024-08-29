@@ -9,6 +9,16 @@ use std::path::PathBuf;
 #[cfg(any(feature = "tokio", feature = "ureq"))]
 pub mod api;
 
+/// Type of SSL to use for connections
+#[derive(Debug, Clone, Copy)]
+pub enum SSLType {
+    /// Use rustls crate for tls
+    RUSTLS,
+    /// Use native-tls crate for tls
+    NATIVE,
+}
+
+
 /// The type of repo to interact with
 #[derive(Debug, Clone, Copy)]
 pub enum RepoType {
