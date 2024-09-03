@@ -733,9 +733,9 @@ mod tests {
                     },
                     Siblings {
                         rfilename: "wikitext-2-v1/validation/0000.parquet".to_string()
-                    },
+                    }
                 ],
-                sha: "3f68cd45302c7b4b532d933e71d9e6e54b1c7d5e".to_string(),
+                sha: "3f68cd45302c7b4b532d933e71d9e6e54b1c7d5e".to_string()
             }
         );
     }
