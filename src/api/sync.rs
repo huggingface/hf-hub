@@ -84,15 +84,21 @@ pub enum ApiError {
 #[derive(Debug)]
 pub struct ApiBuilder {
     endpoint: String,
-    cache: Cache,
     url_template: String,
-    token: Option<String>,
+    cache: Cache,
     progress: bool,
+    token: Option<String>,
 }
 
 impl Default for ApiBuilder {
     fn default() -> Self {
-        Self::new()
+        Self {
+            endpoint: "https://huggingface.co".to_string(),
+            url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
+            cache: Cache::default(),
+            progress: true,
+            token: None,
+        }
     }
 }
 
@@ -117,14 +123,10 @@ impl ApiBuilder {
     pub fn from_cache(cache: Cache) -> Self {
         let token = cache.token();
 
-        let progress = true;
-
         Self {
-            endpoint: "https://huggingface.co".to_string(),
-            url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
-            progress,
+            ..Self::default()
         }
     }
 
@@ -170,12 +172,11 @@ impl ApiBuilder {
         let no_redirect_client = HeaderAgent::new(no_redirect_agent, headers);
 
         Ok(Api {
+            client,
+            no_redirect_client,
             endpoint: self.endpoint,
             url_template: self.url_template,
             cache: self.cache,
-            client,
-
-            no_redirect_client,
             progress: self.progress,
         })
     }
@@ -193,11 +194,11 @@ struct Metadata {
 /// or download files with [`Api::download`]
 #[derive(Clone, Debug)]
 pub struct Api {
+    client: HeaderAgent,
+    no_redirect_client: HeaderAgent,
     endpoint: String,
     url_template: String,
     cache: Cache,
-    client: HeaderAgent,
-    no_redirect_client: HeaderAgent,
     progress: bool,
 }
 
