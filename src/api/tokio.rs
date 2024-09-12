@@ -125,6 +125,12 @@ impl ApiBuilder {
         }
     }
 
+    /// Set endpoint example 'https://hf-mirror.com'
+    pub fn with_endpoint(mut self, endpoint: &str) -> Self {
+        self.endpoint = endpoint.to_string();
+        self
+    }
+
     /// Wether to show a progressbar
     pub fn with_progress(mut self, progress: bool) -> Self {
         self.progress = progress;
