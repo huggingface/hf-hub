@@ -1,12 +1,17 @@
-use super::RepoInfo;
+use super::{ProgressEvent, RepoInfo};
 use crate::api::sync::ApiError::InvalidHeader;
 use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt::Debug;
+use std::io::Read;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
+use std::rc::Rc;
 use std::str::FromStr;
+use std::time::Instant;
 use thiserror::Error;
 use ureq::{Agent, Request};
 
@@ -80,6 +85,74 @@ pub enum ApiError {
     TooManyRetries(Box<ApiError>),
 }
 
+type ProgressCallbackFunction = Rc<RefCell<Box<dyn FnMut(ProgressEvent)>>>;
+/// Stores the progress callback and additional data to produce [`super::ProgressEvent`]
+#[derive(Clone)]
+struct ProgressCallback {
+    callback: ProgressCallbackFunction,
+    start_time: Instant,
+    len: usize,
+    offset: usize,
+    url: String,
+}
+
+impl ProgressCallback {
+    fn wrap_read<R: Read>(self, read: R) -> ProgressCallbackIterator<R> {
+        ProgressCallbackIterator {
+            it: read,
+            progress: self,
+        }
+    }
+
+    fn inc(&mut self, delta: usize) {
+        if delta == 0 {
+            return;
+        }
+
+        self.offset += delta;
+
+        let elapsed_time = Instant::now() - self.start_time;
+
+        let progress = self.offset as f32 / self.len as f32;
+        let progress_100 = progress * 100.;
+
+        let remaing_percentage = 100. - progress_100;
+        let duration_unit = elapsed_time / progress_100 as u32;
+        let remaining_time = duration_unit * remaing_percentage as u32;
+
+        let event = ProgressEvent {
+            url: self.url.clone(),
+            percentage: progress,
+            elapsed_time,
+            remaining_time,
+        };
+        self.callback.borrow_mut()(event);
+    }
+}
+
+/// Wraps an iterator to forward to the callback its progress.
+struct ProgressCallbackIterator<T> {
+    it: T,
+    progress: ProgressCallback,
+}
+
+impl Debug for ProgressCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProgressCallbackContainer")
+            .field("callback", &"callback")
+            .field("start_time", &self.start_time)
+            .finish()
+    }
+}
+
+impl<R: Read> Read for ProgressCallbackIterator<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let inc = self.it.read(buf)?;
+        self.progress.inc(inc);
+        Ok(inc)
+    }
+}
+
 /// Helper to create [`Api`] with all the options.
 #[derive(Debug)]
 pub struct ApiBuilder {
@@ -88,6 +161,7 @@ pub struct ApiBuilder {
     url_template: String,
     token: Option<String>,
     progress: bool,
+    progress_callback: Option<ProgressCallback>,
 }
 
 impl Default for ApiBuilder {
@@ -118,6 +192,7 @@ impl ApiBuilder {
         let token = cache.token();
 
         let progress = true;
+        let progress_callback = None;
 
         Self {
             endpoint: "https://huggingface.co".to_string(),
@@ -125,12 +200,29 @@ impl ApiBuilder {
             cache,
             token,
             progress,
+            progress_callback,
         }
     }
 
     /// Wether to show a progressbar
     pub fn with_progress(mut self, progress: bool) -> Self {
         self.progress = progress;
+        self
+    }
+
+    /// Wether to emit progress events
+    pub fn with_progress_callback<F>(mut self, callback: F) -> Self
+    where
+        F: FnMut(ProgressEvent) + 'static,
+    {
+        let progress_callback = ProgressCallback {
+            callback: Rc::new(RefCell::new(Box::new(callback))),
+            start_time: Instant::now(),
+            len: 0,
+            offset: 0,
+            url: "".to_owned(),
+        };
+        self.progress_callback = Some(progress_callback);
         self
     }
 
@@ -177,6 +269,7 @@ impl ApiBuilder {
 
             no_redirect_client,
             progress: self.progress,
+            progress_callback: self.progress_callback,
         })
     }
 }
@@ -199,6 +292,7 @@ pub struct Api {
     client: HeaderAgent,
     no_redirect_client: HeaderAgent,
     progress: bool,
+    progress_callback: Option<ProgressCallback>,
 }
 
 fn make_relative(src: &Path, dst: &Path) -> PathBuf {
@@ -370,6 +464,7 @@ impl Api {
         &self,
         url: &str,
         progressbar: Option<ProgressBar>,
+        progress_callback: Option<ProgressCallback>,
     ) -> Result<PathBuf, ApiError> {
         let filename = self.cache.temp_path();
 
@@ -378,9 +473,13 @@ impl Api {
 
         let response = self.client.get(url).call().map_err(Box::new)?;
 
-        let mut reader = response.into_reader();
+        let mut reader: Box<dyn Read> = response.into_reader();
         if let Some(p) = &progressbar {
             reader = Box::new(p.wrap_read(reader));
+        }
+
+        if let Some(callback) = progress_callback {
+            reader = Box::new(callback.wrap_read(reader));
         }
 
         std::io::copy(&mut reader, &mut file)?;
@@ -517,7 +616,21 @@ impl ApiRepo {
             None
         };
 
-        let tmp_filename = self.api.download_tempfile(&url, progressbar)?;
+        let progress_callback = match &self.api.progress_callback {
+            Some(callback) => {
+                let mut callback = callback.clone();
+                callback.start_time = Instant::now();
+                callback.len = metadata.size;
+                callback.url = url.clone();
+
+                Some(callback)
+            }
+            None => None,
+        };
+
+        let tmp_filename = self
+            .api
+            .download_tempfile(&url, progressbar, progress_callback)?;
 
         std::fs::rename(tmp_filename, &blob_path)?;
 
@@ -565,6 +678,8 @@ impl ApiRepo {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use super::*;
     use crate::api::Siblings;
     use hex_literal::hex;
@@ -599,8 +714,15 @@ mod tests {
     #[test]
     fn simple() {
         let tmp = TempDir::new();
+        let check_progress = Rc::new(RefCell::new(false));
+        let check_progress_callback = check_progress.clone();
         let api = ApiBuilder::new()
             .with_progress(false)
+            .with_progress_callback(move |progress: ProgressEvent| {
+                if progress.percentage == 1. {
+                    *check_progress_callback.borrow_mut() = true;
+                }
+            })
             .with_cache_dir(tmp.path.clone())
             .build()
             .unwrap();
@@ -613,6 +735,9 @@ mod tests {
             val[..],
             hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
         );
+        
+        // Verify progress events have been produced
+        assert!(check_progress.take());
 
         // Make sure the file is now seeable without connection
         let cache_path = api
