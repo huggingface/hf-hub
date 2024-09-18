@@ -85,9 +85,18 @@ pub enum ApiError {
     TooManyRetries(Box<ApiError>),
 }
 
-type ProgressCallbackFunction = Rc<RefCell<Box<dyn FnMut(ProgressEvent)>>>;
-/// Stores the progress callback and additional data to produce [`super::ProgressEvent`]
 #[derive(Clone)]
+struct ProgressCallbackFunction(Rc<RefCell<dyn FnMut(ProgressEvent)>>);
+
+impl Debug for ProgressCallbackFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ProgressCallbackFunction")
+            .field(&"callback")
+            .finish()
+    }
+}
+
+/// Stores the progress callback and additional data to produce [`super::ProgressEvent`]
 struct ProgressCallback {
     callback: ProgressCallbackFunction,
     start_time: Instant,
@@ -126,7 +135,9 @@ impl ProgressCallback {
             elapsed_time,
             remaining_time,
         };
-        self.callback.borrow_mut()(event);
+        if let Ok(mut callback) = self.callback.0.try_borrow_mut() {
+            callback(event);
+        }
     }
 }
 
@@ -134,15 +145,6 @@ impl ProgressCallback {
 struct ProgressCallbackIterator<T> {
     it: T,
     progress: ProgressCallback,
-}
-
-impl Debug for ProgressCallback {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProgressCallbackContainer")
-            .field("callback", &"callback")
-            .field("start_time", &self.start_time)
-            .finish()
-    }
 }
 
 impl<R: Read> Read for ProgressCallbackIterator<R> {
@@ -161,7 +163,7 @@ pub struct ApiBuilder {
     url_template: String,
     token: Option<String>,
     progress: bool,
-    progress_callback: Option<ProgressCallback>,
+    progress_callback: Option<ProgressCallbackFunction>,
 }
 
 impl Default for ApiBuilder {
@@ -215,14 +217,7 @@ impl ApiBuilder {
     where
         F: FnMut(ProgressEvent) + 'static,
     {
-        let progress_callback = ProgressCallback {
-            callback: Rc::new(RefCell::new(Box::new(callback))),
-            start_time: Instant::now(),
-            len: 0,
-            offset: 0,
-            url: "".to_owned(),
-        };
-        self.progress_callback = Some(progress_callback);
+        self.progress_callback = Some(ProgressCallbackFunction(Rc::new(RefCell::new(callback))));
         self
     }
 
@@ -292,7 +287,7 @@ pub struct Api {
     client: HeaderAgent,
     no_redirect_client: HeaderAgent,
     progress: bool,
-    progress_callback: Option<ProgressCallback>,
+    progress_callback: Option<ProgressCallbackFunction>,
 }
 
 fn make_relative(src: &Path, dst: &Path) -> PathBuf {
@@ -618,12 +613,14 @@ impl ApiRepo {
 
         let progress_callback = match &self.api.progress_callback {
             Some(callback) => {
-                let mut callback = callback.clone();
-                callback.start_time = Instant::now();
-                callback.len = metadata.size;
-                callback.url = url.clone();
-
-                Some(callback)
+                let callback_wrapper = ProgressCallback {
+                    callback: callback.clone(),
+                    start_time: Instant::now(),
+                    len: metadata.size,
+                    offset: 0,
+                    url: url.clone(),
+                };
+                Some(callback_wrapper)
             }
             None => None,
         };
@@ -735,7 +732,7 @@ mod tests {
             val[..],
             hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
         );
-        
+
         // Verify progress events have been produced
         assert!(check_progress.take());
 
