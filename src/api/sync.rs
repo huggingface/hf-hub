@@ -115,7 +115,11 @@ impl ApiBuilder {
     /// let api = ApiBuilder::from_cache(cache).build().unwrap();
     /// ```
     pub fn from_cache(cache: Cache) -> Self {
-        let token = cache.token();
+        let token_env_key = "HF_TOKEN".to_string();
+        let token = match std::env::var(token_env_key).ok() {
+            Some(token) => Some(token),
+            None => cache.token(),
+        };
 
         let progress = true;
 
