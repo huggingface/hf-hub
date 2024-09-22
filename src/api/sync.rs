@@ -1,4 +1,4 @@
-use super::{ProgressEvent, RepoInfo};
+use super::{DownloadState, ProgressEvent, RepoInfo};
 use crate::api::sync::ApiError::InvalidHeader;
 use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
@@ -11,7 +11,6 @@ use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 use std::str::FromStr;
-use std::time::Instant;
 use thiserror::Error;
 use ureq::{Agent, Request};
 
@@ -99,10 +98,7 @@ impl Debug for ProgressCallbackFunction {
 /// Stores the progress callback and additional data to produce [`super::ProgressEvent`]
 struct ProgressCallback {
     callback: ProgressCallbackFunction,
-    start_time: Instant,
-    len: usize,
-    offset: usize,
-    url: String,
+    state: DownloadState,
 }
 
 impl ProgressCallback {
@@ -113,30 +109,11 @@ impl ProgressCallback {
         }
     }
 
-    fn inc(&mut self, delta: usize) {
-        if delta == 0 {
-            return;
-        }
-
-        self.offset += delta;
-
-        let elapsed_time = Instant::now() - self.start_time;
-
-        let progress = self.offset as f32 / self.len as f32;
-        let progress_100 = progress * 100.;
-
-        let remaing_percentage = 100. - progress_100;
-        let duration_unit = elapsed_time / progress_100 as u32;
-        let remaining_time = duration_unit * remaing_percentage as u32;
-
-        let event = ProgressEvent {
-            url: self.url.clone(),
-            percentage: progress,
-            elapsed_time,
-            remaining_time,
-        };
-        if let Ok(mut callback) = self.callback.0.try_borrow_mut() {
-            callback(event);
+    fn call(&mut self, delta: usize) {
+        if let Some(event) = self.state.update(delta) {
+            if let Ok(mut callback) = self.callback.0.try_borrow_mut() {
+                callback(event);
+            }
         }
     }
 }
@@ -150,7 +127,7 @@ struct ProgressCallbackIterator<T> {
 impl<R: Read> Read for ProgressCallbackIterator<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let inc = self.it.read(buf)?;
-        self.progress.inc(inc);
+        self.progress.call(inc);
         Ok(inc)
     }
 }
@@ -615,10 +592,7 @@ impl ApiRepo {
             Some(callback) => {
                 let callback_wrapper = ProgressCallback {
                     callback: callback.clone(),
-                    start_time: Instant::now(),
-                    len: metadata.size,
-                    offset: 0,
-                    url: url.clone(),
+                    state: DownloadState::new(metadata.size, url.clone()),
                 };
                 Some(callback_wrapper)
             }

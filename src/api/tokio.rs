@@ -1,4 +1,4 @@
-use super::{ProgressEvent, RepoInfo};
+use super::{DownloadState, ProgressEvent, RepoInfo};
 use crate::{Cache, Repo, RepoType};
 use futures::{future::BoxFuture, FutureExt};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -12,7 +12,7 @@ use reqwest::{
     Client, Error as ReqwestError, RequestBuilder,
 };
 use std::sync::Arc;
-use std::{fmt::Debug, num::ParseIntError, time::Instant};
+use std::{fmt::Debug, num::ParseIntError};
 use std::{
     future::Future,
     path::{Component, Path, PathBuf},
@@ -79,37 +79,14 @@ pub enum ApiError {
 /// Stores the progress callback and additional data to produce [`super::ProgressEvent`]
 struct ProgressCallback {
     callback: ProgressCallbackFunction,
-    start_time: Instant,
-    len: usize,
-    offset: usize,
-    url: String,
+    state: DownloadState,
 }
 
 impl ProgressCallback {
-    async fn inc(&mut self, delta: usize) {
-        if delta == 0 {
-            return;
+    async fn call(&mut self, delta: usize) {
+        if let Some(event) = self.state.update(delta) {
+            self.callback.0(event).await;
         }
-
-        self.offset += delta;
-
-        let elapsed_time = Instant::now() - self.start_time;
-
-        let progress = self.offset as f32 / self.len as f32;
-        let progress_100 = progress * 100.;
-
-        let remaing_percentage = 100. - progress_100;
-        let duration_unit = elapsed_time / progress_100 as u32;
-        let remaining_time = duration_unit * remaing_percentage as u32;
-
-        let event = ProgressEvent {
-            url: self.url.clone(),
-            percentage: progress,
-            elapsed_time,
-            remaining_time,
-        };
-
-        self.callback.0(event).await;
     }
 }
 
@@ -553,7 +530,7 @@ impl ApiRepo {
                     p.inc((stop - start) as u64);
                 }
                 if let Some(c) = progress_callback.as_ref() {
-                    c.lock().await.inc(stop - start).await;
+                    c.lock().await.call(stop - start).await;
                 }
                 chunk
             }));
@@ -654,10 +631,7 @@ impl ApiRepo {
             Some(callback) => {
                 let callback_wrapper = ProgressCallback {
                     callback: callback.clone(),
-                    start_time: Instant::now(),
-                    len: metadata.size,
-                    offset: 0,
-                    url: url.clone(),
+                    state: DownloadState::new(metadata.size, url.clone()),
                 };
                 Some(Arc::new(Mutex::new(callback_wrapper)))
             }
