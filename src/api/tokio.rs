@@ -1,5 +1,6 @@
-use super::RepoInfo;
+use super::{ProgressEvent, RepoInfo};
 use crate::{Cache, Repo, RepoType};
+use futures::{future::BoxFuture, FutureExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 use reqwest::{
@@ -10,12 +11,18 @@ use reqwest::{
     redirect::Policy,
     Client, Error as ReqwestError, RequestBuilder,
 };
-use std::num::ParseIntError;
-use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::{fmt::Debug, num::ParseIntError, time::Instant};
+use std::{
+    future::Future,
+    path::{Component, Path, PathBuf},
+};
 use thiserror::Error;
-use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
+use tokio::{
+    io::{AsyncSeekExt, AsyncWriteExt, SeekFrom},
+    sync::Mutex,
+};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -69,6 +76,56 @@ pub enum ApiError {
     // InvalidResponse(Response),
 }
 
+/// Stores the progress callback and additional data to produce [`super::ProgressEvent`]
+struct ProgressCallback {
+    callback: ProgressCallbackFunction,
+    start_time: Instant,
+    len: usize,
+    offset: usize,
+    url: String,
+}
+
+impl ProgressCallback {
+    async fn inc(&mut self, delta: usize) {
+        if delta == 0 {
+            return;
+        }
+
+        self.offset += delta;
+
+        let elapsed_time = Instant::now() - self.start_time;
+
+        let progress = self.offset as f32 / self.len as f32;
+        let progress_100 = progress * 100.;
+
+        let remaing_percentage = 100. - progress_100;
+        let duration_unit = elapsed_time / progress_100 as u32;
+        let remaining_time = duration_unit * remaing_percentage as u32;
+
+        let event = ProgressEvent {
+            url: self.url.clone(),
+            percentage: progress,
+            elapsed_time,
+            remaining_time,
+        };
+
+        self.callback.0(event).await;
+    }
+}
+
+#[derive(Clone)]
+struct ProgressCallbackFunction(
+    Arc<dyn 'static + Send + Sync + Fn(ProgressEvent) -> BoxFuture<'static, ()>>,
+);
+
+impl Debug for ProgressCallbackFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ProgressCallbackFunction")
+            .field(&"callback")
+            .finish()
+    }
+}
+
 /// Helper to create [`Api`] with all the options.
 #[derive(Debug)]
 pub struct ApiBuilder {
@@ -81,6 +138,7 @@ pub struct ApiBuilder {
     parallel_failures: usize,
     max_retries: usize,
     progress: bool,
+    progress_callback: Option<ProgressCallbackFunction>,
 }
 
 impl Default for ApiBuilder {
@@ -122,12 +180,24 @@ impl ApiBuilder {
             parallel_failures: 0,
             max_retries: 0,
             progress,
+            progress_callback: None,
         }
     }
 
     /// Wether to show a progressbar
     pub fn with_progress(mut self, progress: bool) -> Self {
         self.progress = progress;
+        self
+    }
+
+    /// Wether to emit progress events
+    pub fn with_progress_callback<F, Fut>(mut self, callback: F) -> Self
+    where
+        F: 'static + Send + Sync + Fn(ProgressEvent) -> Fut,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let x = move |event| callback(event).boxed();
+        self.progress_callback = Some(ProgressCallbackFunction(Arc::new(x)));
         self
     }
 
@@ -195,6 +265,7 @@ impl ApiBuilder {
             parallel_failures: self.parallel_failures,
             max_retries: self.max_retries,
             progress: self.progress,
+            progress_callback: self.progress_callback,
         })
     }
 }
@@ -221,6 +292,7 @@ pub struct Api {
     parallel_failures: usize,
     max_retries: usize,
     progress: bool,
+    progress_callback: Option<ProgressCallbackFunction>,
 }
 
 fn make_relative(src: &Path, dst: &Path) -> PathBuf {
@@ -430,6 +502,7 @@ impl ApiRepo {
         url: &str,
         length: usize,
         progressbar: Option<ProgressBar>,
+        progress_callback: Option<Arc<Mutex<ProgressCallback>>>,
     ) -> Result<PathBuf, ApiError> {
         let mut handles = vec![];
         let semaphore = Arc::new(Semaphore::new(self.api.max_files));
@@ -454,6 +527,7 @@ impl ApiRepo {
             let max_retries = self.api.max_retries;
             let parallel_failures_semaphore = parallel_failures_semaphore.clone();
             let progress = progressbar.clone();
+            let progress_callback = progress_callback.clone();
             handles.push(tokio::spawn(async move {
                 let mut chunk = Self::download_chunk(&client, &url, &filename, start, stop).await;
                 let mut i = 0;
@@ -477,6 +551,9 @@ impl ApiRepo {
                 drop(permit);
                 if let Some(p) = progress {
                     p.inc((stop - start) as u64);
+                }
+                if let Some(c) = progress_callback.as_ref() {
+                    c.lock().await.inc(stop - start).await;
                 }
                 chunk
             }));
@@ -573,8 +650,22 @@ impl ApiRepo {
             None
         };
 
+        let progress_callabck = match &self.api.progress_callback {
+            Some(callback) => {
+                let callback_wrapper = ProgressCallback {
+                    callback: callback.clone(),
+                    start_time: Instant::now(),
+                    len: metadata.size,
+                    offset: 0,
+                    url: url.clone(),
+                };
+                Some(Arc::new(Mutex::new(callback_wrapper)))
+            }
+            None => None,
+        };
+
         let tmp_filename = self
-            .download_tempfile(&url, metadata.size, progressbar)
+            .download_tempfile(&url, metadata.size, progressbar, progress_callabck)
             .await?;
 
         tokio::fs::rename(&tmp_filename, &blob_path).await?;
@@ -627,6 +718,7 @@ mod tests {
     use rand::distributions::Alphanumeric;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 
     struct TempDir {
         path: PathBuf,
@@ -654,9 +746,19 @@ mod tests {
 
     #[tokio::test]
     async fn simple() {
+        let check_progress = Arc::new(AtomicBool::new(false));
+        let check_progress_callback = check_progress.clone();
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
             .with_progress(false)
+            .with_progress_callback(move |progress| {
+                let check_progress = check_progress_callback.clone();
+                async move {
+                    if progress.percentage == 1. {
+                        check_progress.store(true, Relaxed);
+                    }
+                }
+            })
             .with_cache_dir(tmp.path.clone())
             .build()
             .unwrap();
@@ -669,6 +771,9 @@ mod tests {
             val[..],
             hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
         );
+
+        // Verify progress events have been produced
+        assert!(check_progress.load(Relaxed));
 
         // Make sure the file is now seeable without connection
         let cache_path = api.cache.repo(repo.clone()).get("config.json").unwrap();

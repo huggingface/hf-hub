@@ -89,7 +89,7 @@ pub enum ApiError {
 struct ProgressCallbackFunction(Rc<RefCell<dyn FnMut(ProgressEvent)>>);
 
 impl Debug for ProgressCallbackFunction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_tuple("ProgressCallbackFunction")
             .field(&"callback")
             .finish()
