@@ -1,3 +1,9 @@
+## temporary todo
+
+to run the test, do `RUST_LOG=trace HF_TOKEN=token_here HF_REPO=repo_here cargo run --example upload --release`
+
+## real readme here
+
 This crates aims to emulate and be compatible with the
 [huggingface_hub](https://github.com/huggingface/huggingface_hub/) python package.
 
@@ -18,14 +24,14 @@ However allowing new features or creating new features might be denied by lack o
 time. We're focusing on what we currently internally need. Hopefully that subset is already interesting
 to more users.
 
-
-# How to use 
+# How to use
 
 Add the dependency
 
 ```bash
 cargo add hf-hub  # --features tokio
 ```
+
 `tokio` feature will enable an async (and potentially faster) API.
 
 Use the crate:
