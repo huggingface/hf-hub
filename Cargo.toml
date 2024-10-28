@@ -27,7 +27,9 @@ rand = { version = "0.8.5", optional = true }
 reqwest = { version = "0.12.2", optional = true, default-features = false, features = [
   "json",
 ] }
-rustls = { version = "0.23.4", optional = true }
+rustls = { version = "0.23.4", optional = true, default-features = false, features = [
+  "ring",
+] }
 serde = { version = "1.0.171", features = ["derive"], optional = true }
 serde_json = { version = "1.0.103", optional = true }
 thiserror = { version = "1.0.43", optional = true }
