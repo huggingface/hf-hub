@@ -8,17 +8,15 @@
       url = "github:oxalica/rust-overlay";
     };
   };
-  outputs =
-    {
-      self,
-      crate2nix,
-      nixpkgs,
-      flake-utils,
-      rust-overlay,
-    }:
+  outputs = {
+    self,
+    crate2nix,
+    nixpkgs,
+    flake-utils,
+    rust-overlay,
+  }:
     flake-utils.lib.eachDefaultSystem (
-      system:
-      let
+      system: let
         cargoNix = crate2nix.tools.${system}.appliedCargoNix {
           name = "hf-hub";
           src = ./.;
@@ -30,10 +28,8 @@
           ];
         };
         hf-hub = cargoNix.rootCrate.build;
-      in
-      {
+      in {
         devShells = with pkgs; rec {
-
           default = pure;
 
           pure = mkShell {
@@ -43,19 +39,16 @@
           };
 
           impure = mkShell {
-            buildInputs =
-              [
-                openssl.dev
-                pkg-config
-                (rust-bin.stable.latest.default.override {
-                  extensions = [
-                    "rust-analyzer"
-                    "rust-src"
-                  ];
-                })
-              ];
-
-            inputsFrom = [  ];
+            buildInputs = [
+              openssl.dev
+              pkg-config
+              (rust-bin.stable.latest.default.override {
+                extensions = [
+                  "rust-analyzer"
+                  "rust-src"
+                ];
+              })
+            ];
 
             postShellHook = ''
               export PATH=$PATH:~/.cargo/bin
