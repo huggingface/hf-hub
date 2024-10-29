@@ -127,9 +127,23 @@ pub struct CommitOperationAdd {
     pub(crate) source: UploadSource,
 }
 
+/// Represents different sources for upload data.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::PathBuf;
+///
+/// let file_source = UploadSource::File(PathBuf::from("path/to/file.txt"));
+/// let bytes_source = UploadSource::Bytes(vec![1, 2, 3, 4]);
+/// let empty_source = UploadSource::Emptied;
+/// ```
 pub enum UploadSource {
+    /// Contains a file path from which to read the upload data
     File(PathBuf),
+    /// Contains the upload data directly as a byte vector
     Bytes(Vec<u8>),
+    /// Represents a state where the upload source has been consumed or cleared
     Emptied,
 }
 
