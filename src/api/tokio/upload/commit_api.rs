@@ -15,7 +15,7 @@ use tokio::fs::{read_to_string, File};
 use tokio::io::{self, AsyncRead, AsyncReadExt, BufReader};
 
 use crate::api::tokio::upload::lfs::lfs_upload;
-use crate::api::tokio::{ApiError, ApiRepo, ReqwestBadResponse};
+use crate::api::tokio::{ApiError, ApiRepo, HfBadResponse};
 
 use super::commit_info::{CommitInfo, InvalidHfIdError};
 
@@ -361,13 +361,7 @@ impl ApiRepo {
 
         // Pre-upload LFS files
         let additions = self
-            .preupload_lfs_files(
-                additions,
-                Some(create_pr),
-                Some(num_threads),
-                None,
-                self.api.endpoint.clone(),
-            )
+            .preupload_lfs_files(additions, Some(create_pr), Some(num_threads), None)
             .await
             .map_err(CommitError::Api)?;
 
@@ -461,7 +455,7 @@ impl ApiRepo {
             .send()
             .await
             .map_err(ApiError::from)?
-            .maybe_err()
+            .maybe_hf_err()
             .await
             .map_err(ApiError::from)?;
 
@@ -501,7 +495,6 @@ impl ApiRepo {
         create_pr: Option<bool>,
         num_threads: Option<usize>,
         gitignore_content: Option<String>,
-        endpoint: String,
     ) -> Result<Vec<CommitOperationAdd>, ApiError> {
         // Set default values
         let create_pr = create_pr.unwrap_or(false);
@@ -551,7 +544,7 @@ impl ApiRepo {
 
         // Upload LFS files
         let uploaded_lfs_files = self
-            .upload_lfs_files(new_lfs_additions_to_upload, num_threads, endpoint)
+            .upload_lfs_files(new_lfs_additions_to_upload, num_threads)
             .await?;
         Ok(small_files.into_iter().chain(uploaded_lfs_files).collect())
     }
@@ -593,7 +586,7 @@ impl ApiRepo {
                 .json(&payload)
                 .send()
                 .await?
-                .maybe_err()
+                .maybe_hf_err()
                 .await?
                 .json()
                 .await?;
@@ -637,7 +630,6 @@ impl ApiRepo {
         &self,
         additions: Vec<CommitOperationAdd>,
         num_threads: usize,
-        endpoint: String,
     ) -> Result<Vec<CommitOperationAdd>, ApiError> {
         // Step 1: Retrieve upload instructions from LFS batch endpoint
         let mut batch_objects = Vec::new();
@@ -700,6 +692,7 @@ impl ApiRepo {
         let s3_client = reqwest::Client::new();
 
         // Step 3: Upload files concurrently
+        let endpoint = self.api.endpoint.clone();
         let upload_futures: Vec<_> = filtered_actions
             .into_iter()
             .map(|batch_action| {

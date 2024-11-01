@@ -5,7 +5,7 @@ use std::{collections::HashMap, io::ErrorKind};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::{
-    api::tokio::{ApiError, ApiRepo, ReqwestBadResponse},
+    api::tokio::{ApiError, ApiRepo, HfBadResponse},
     RepoType,
 };
 
@@ -126,7 +126,7 @@ impl ApiRepo {
             .json(&payload)
             .send()
             .await?
-            .maybe_err()
+            .maybe_hf_err()
             .await?;
 
         let batch_info: BatchInfo = response.json().await?;
@@ -186,7 +186,7 @@ async fn upload_part(
         .body(data)
         .send()
         .await?
-        .maybe_err()
+        .maybe_hf_err()
         .await?;
 
     log::trace!("uploaded ({} bytes)", l);
@@ -225,7 +225,7 @@ async fn upload_multi_part(
         .json(&completion_payload)
         .send()
         .await?
-        .maybe_err()
+        .maybe_hf_err()
         .await?;
 
     log::trace!("completion response: {:?}", response.text().await?);
@@ -313,7 +313,7 @@ async fn upload_single_part(
         .body(body)
         .send()
         .await?
-        .maybe_err()
+        .maybe_hf_err()
         .await?;
 
     operation.source = UploadSource::Emptied;

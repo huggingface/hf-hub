@@ -1,6 +1,9 @@
 use std::time::Instant;
 
-use hf_hub::{api::tokio::ApiBuilder, Repo};
+use hf_hub::{
+    api::tokio::{ApiBuilder, ApiError},
+    Repo,
+};
 use rand::Rng;
 
 const ONE_MB: usize = 1024 * 1024;
@@ -8,14 +11,28 @@ const ONE_MB: usize = 1024 * 1024;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    let token =
-        std::env::var("HF_TOKEN").map_err(|_| format!("HF_TOKEN environment variable not set"))?;
+    let token = std::env::var("HF_TOKEN")
+        .map_err(|_| "HF_TOKEN environment variable not set".to_string())?;
     let hf_repo = std::env::var("HF_REPO")
-        .map_err(|_| format!("HF_REPO environment variable not set, e.g. apyh/gronk"))?;
+        .map_err(|_| "HF_REPO environment variable not set, e.g. apyh/gronk".to_string())?;
 
     let api = ApiBuilder::new().with_token(Some(token)).build()?;
     let repo = Repo::model(hf_repo);
     let api_repo = api.repo(repo);
+
+    let exists = api_repo.exists().await;
+    if !exists {
+        return Err(ApiError::GatedRepoError("repo does not exist".to_string()).into());
+    } else {
+        println!("repo exists!");
+    }
+
+    let is_writable = api_repo.is_writable().await;
+    if !is_writable {
+        return Err(ApiError::GatedRepoError("repo is not writable".to_string()).into());
+    } else {
+        println!("repo is writable!");
+    }
     let files = [
         (
             format!("im a tiny file {:?}", Instant::now())

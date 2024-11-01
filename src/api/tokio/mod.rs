@@ -1,6 +1,8 @@
 use super::RepoInfo;
 use crate::{Cache, Repo, RepoType};
+use http::StatusCode;
 use rand::Rng;
+use regex::Regex;
 use reqwest::{
     header::{
         HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
@@ -33,13 +35,14 @@ const NAME: &str = env!("CARGO_PKG_NAME");
 /// which can be useful for debugging and error reporting when HTTP requests fail.
 #[derive(Debug)]
 pub struct ReqwestErrorWithBody {
+    url: String,
     error: ReqwestError,
     body: Result<String, ReqwestError>,
 }
 
 impl Display for ReqwestErrorWithBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Request error:",)?;
+        writeln!(f, "Request error: {}", self.url)?;
         writeln!(f, "{}", self.error)?;
         match &self.body {
             Ok(body) => {
@@ -65,7 +68,7 @@ impl std::error::Error for ReqwestErrorWithBody {}
 /// # Examples
 ///
 /// ```
-/// use hf_hub::api::tokio::ReqwestBadResponse;
+/// use hf_hub::api::tokio::HfBadResponse;
 ///
 /// async fn example() -> Result<(), Box<dyn std::error::Error>> {
 ///     let response = reqwest::get("https://api.example.com/data").await?;
@@ -81,29 +84,75 @@ impl std::error::Error for ReqwestErrorWithBody {}
 /// # Error Handling
 ///
 /// - If the response status is successful (2xx), returns `Ok(Response)`
-/// - If the response status indicates an error (4xx, 5xx), returns `Err(ReqwestErrorWithBody)`
+/// - If the response status indicates an error (4xx, 5xx), returns `Err(ApiError)`
 ///   containing both the original error and the response body text
-pub trait ReqwestBadResponse {
+pub trait HfBadResponse {
     /// Checks if the response status code indicates an error, and if so, captures the response body
     /// along with the error details.
     ///
     /// Returns a Future that resolves to:
     /// - `Ok(Response)` if the status code is successful
-    /// - `Err(ReqwestErrorWithBody)` if the status code indicates an error
-    fn maybe_err(self) -> impl Future<Output = Result<Self, ReqwestErrorWithBody>>
+    /// - `Err(ApiError)` if the status code indicates an error
+    fn maybe_hf_err(self) -> impl Future<Output = Result<Self, ApiError>>
     where
         Self: Sized;
 }
 
-impl ReqwestBadResponse for reqwest::Response {
-    async fn maybe_err(self) -> Result<Self, ReqwestErrorWithBody>
+lazy_static::lazy_static! {
+    static ref REPO_API_REGEX: Regex = Regex::new(
+        r#"(?x)
+            # staging or production endpoint
+            ^https://[^/]+
+            (
+                # on /api/repo_type/repo_id
+                /api/(models|datasets|spaces)/(.+)
+                |
+                # or /repo_id/resolve/revision/...
+                /(.+)/resolve/(.+)
+            )
+        "#,
+    ).unwrap();
+}
+
+impl HfBadResponse for reqwest::Response {
+    async fn maybe_hf_err(self) -> Result<Self, ApiError>
     where
         Self: Sized,
     {
         let error = self.error_for_status_ref();
         if let Err(error) = error {
-            let body = self.text().await;
-            Err(ReqwestErrorWithBody { body, error })
+            let hf_error_code = self
+                .headers()
+                .get("X-Error-Code")
+                .and_then(|v| v.to_str().ok());
+            let hf_error_message = self
+                .headers()
+                .get("X-Error-Message")
+                .and_then(|v| v.to_str().ok());
+            let url = self.url().to_string();
+            Err(match (hf_error_code, hf_error_message) {
+                (Some("RevisionNotFound"), _) => ApiError::RevisionNotFoundError(url),
+                (Some("EntryNotFound"), _) => ApiError::EntryNotFoundError(url),
+                (Some("GatedRepo"), _) => ApiError::GatedRepoError(url),
+                (_, Some("Access to this resource is disabled.")) => {
+                    ApiError::DisabledRepoError(url)
+                }
+                // 401 is misleading as it is returned for:
+                //    - private and gated repos if user is not authenticated
+                //    - missing repos
+                // => for now, we process them as `RepoNotFound` anyway.
+                // See https://gist.github.com/Wauplin/46c27ad266b15998ce56a6603796f0b9
+                (Some("RepoNotFound"), _)
+                    if self.status() == StatusCode::UNAUTHORIZED
+                        && REPO_API_REGEX.is_match(&url) =>
+                {
+                    ApiError::RepositoryNotFoundError(url)
+                }
+                (_, _) => {
+                    let body = self.text().await;
+                    ApiError::RequestErrorWithBody(ReqwestErrorWithBody { url, body, error })
+                }
+            })
         } else {
             Ok(self)
         }
@@ -117,7 +166,7 @@ pub enum ApiError {
     #[error("Header {0} is missing")]
     MissingHeader(HeaderName),
 
-    /// The header exists, but the value is not conform to what the Api expects.
+    /// The header exists, but the value does not conform to what the Api expects.
     #[error("Header {0} is invalid")]
     InvalidHeader(HeaderName),
 
@@ -158,8 +207,28 @@ pub enum ApiError {
     AcquireError(#[from] AcquireError),
 
     /// Bad data from the API
-    #[error("Invalid Response: {0:?}")]
+    #[error("Invalid Response: {0}")]
     InvalidResponse(String),
+
+    /// Repo exists, but the revision / oid doesn't exist.
+    #[error("Revision Not Found for url: {0}")]
+    RevisionNotFoundError(String),
+
+    /// todo what is this?
+    #[error("Entry Not Found for url: {0}")]
+    EntryNotFoundError(String),
+
+    /// Repo is gated
+    #[error("Cannot access gated repo for url: {0}")]
+    GatedRepoError(String),
+
+    /// Repo is disabled
+    #[error("Cannot access repo - access to resource is disabled for url: {0}")]
+    DisabledRepoError(String),
+
+    /// Repo does not exist for the caller (could be private)
+    #[error("Repository Not Found for url: {0}")]
+    RepositoryNotFoundError(String),
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -228,7 +297,7 @@ impl ApiBuilder {
         self
     }
 
-    /// Sets the token to be used in the API
+    /// Sets the t to be used in the API
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
         self
