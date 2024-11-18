@@ -24,15 +24,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !exists {
         return Err(ApiError::GatedRepoError("repo does not exist".to_string()).into());
     } else {
-        println!("repo exists!");
+        log::info!("repo exists!");
     }
 
     let is_writable = api_repo.is_writable().await;
     if !is_writable {
         return Err(ApiError::GatedRepoError("repo is not writable".to_string()).into());
     } else {
-        println!("repo is writable!");
+        log::info!("repo is writable!");
     }
+
     let files = [
         (
             format!("im a tiny file {:?}", Instant::now())
@@ -76,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             false,
         )
         .await?;
-    log::info!("{:?}", res);
+    log::info!("commit result: {:?}", res);
     log::info!("Success!!");
     Ok(())
 }
