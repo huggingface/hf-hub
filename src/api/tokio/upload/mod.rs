@@ -1,9 +1,9 @@
 use super::ApiRepo;
-use commit_api::{CommitError, CommitOperationAdd};
+use commit_api::CommitOperationAdd;
 use commit_info::CommitInfo;
 use futures::future::join_all;
 
-pub use commit_api::UploadSource;
+pub use commit_api::{CommitError, UploadSource};
 
 mod commit_api;
 mod commit_info;

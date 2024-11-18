@@ -22,7 +22,7 @@ use tokio::sync::{AcquireError, TryAcquireError};
 mod download;
 mod repo_info;
 mod upload;
-pub use upload::UploadSource;
+pub use upload::{CommitError, UploadSource};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
