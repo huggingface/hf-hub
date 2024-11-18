@@ -1,410 +1,10 @@
-use super::RepoInfo;
-use crate::{Cache, Repo, RepoType};
+use super::{exponential_backoff, symlink_or_rename, ApiError, ApiRepo, RepoInfo};
 use indicatif::{ProgressBar, ProgressStyle};
-use rand::Rng;
-use reqwest::{
-    header::{
-        HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
-        CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
-    },
-    redirect::Policy,
-    Client, Error as ReqwestError, RequestBuilder,
-};
-use std::num::ParseIntError;
-use std::path::{Component, Path, PathBuf};
+use reqwest::{header::RANGE, RequestBuilder};
+use std::path::PathBuf;
 use std::sync::Arc;
-use thiserror::Error;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
-use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
-
-/// Current version (used in user-agent)
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Current name (used in user-agent)
-const NAME: &str = env!("CARGO_PKG_NAME");
-
-#[derive(Debug, Error)]
-/// All errors the API can throw
-pub enum ApiError {
-    /// Api expects certain header to be present in the results to derive some information
-    #[error("Header {0} is missing")]
-    MissingHeader(HeaderName),
-
-    /// The header exists, but the value is not conform to what the Api expects.
-    #[error("Header {0} is invalid")]
-    InvalidHeader(HeaderName),
-
-    /// The value cannot be used as a header during request header construction
-    #[error("Invalid header value {0}")]
-    InvalidHeaderValue(#[from] InvalidHeaderValue),
-
-    /// The header value is not valid utf-8
-    #[error("header value is not a string")]
-    ToStr(#[from] ToStrError),
-
-    /// Error in the request
-    #[error("request error: {0}")]
-    RequestError(#[from] ReqwestError),
-
-    /// Error parsing some range value
-    #[error("Cannot parse int")]
-    ParseIntError(#[from] ParseIntError),
-
-    /// I/O Error
-    #[error("I/O error {0}")]
-    IoError(#[from] std::io::Error),
-
-    /// We tried to download chunk too many times
-    #[error("Too many retries: {0}")]
-    TooManyRetries(Box<ApiError>),
-
-    /// Semaphore cannot be acquired
-    #[error("Try acquire: {0}")]
-    TryAcquireError(#[from] TryAcquireError),
-
-    /// Semaphore cannot be acquired
-    #[error("Acquire: {0}")]
-    AcquireError(#[from] AcquireError),
-    // /// Semaphore cannot be acquired
-    // #[error("Invalid Response: {0:?}")]
-    // InvalidResponse(Response),
-}
-
-/// Helper to create [`Api`] with all the options.
-#[derive(Debug)]
-pub struct ApiBuilder {
-    endpoint: String,
-    cache: Cache,
-    url_template: String,
-    token: Option<String>,
-    max_files: usize,
-    chunk_size: usize,
-    parallel_failures: usize,
-    max_retries: usize,
-    progress: bool,
-}
-
-impl Default for ApiBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ApiBuilder {
-    /// Default api builder
-    /// ```
-    /// use hf_hub::api::tokio::ApiBuilder;
-    /// let api = ApiBuilder::new().build().unwrap();
-    /// ```
-    pub fn new() -> Self {
-        let cache = Cache::default();
-        Self::from_cache(cache)
-    }
-
-    /// From a given cache
-    /// ```
-    /// use hf_hub::{api::tokio::ApiBuilder, Cache};
-    /// let path = std::path::PathBuf::from("/tmp");
-    /// let cache = Cache::new(path);
-    /// let api = ApiBuilder::from_cache(cache).build().unwrap();
-    /// ```
-    pub fn from_cache(cache: Cache) -> Self {
-        let token = cache.token();
-
-        let progress = true;
-
-        Self {
-            endpoint: "https://huggingface.co".to_string(),
-            url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
-            cache,
-            token,
-            max_files: num_cpus::get(),
-            chunk_size: 10_000_000,
-            parallel_failures: 0,
-            max_retries: 0,
-            progress,
-        }
-    }
-
-    /// Wether to show a progressbar
-    pub fn with_progress(mut self, progress: bool) -> Self {
-        self.progress = progress;
-        self
-    }
-
-    /// Changes the location of the cache directory. Defaults is `~/.cache/huggingface/`.
-    pub fn with_cache_dir(mut self, cache_dir: PathBuf) -> Self {
-        self.cache = Cache::new(cache_dir);
-        self
-    }
-
-    /// Sets the token to be used in the API
-    pub fn with_token(mut self, token: Option<String>) -> Self {
-        self.token = token;
-        self
-    }
-
-    fn build_headers(&self) -> Result<HeaderMap, ApiError> {
-        let mut headers = HeaderMap::new();
-        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
-        headers.insert(USER_AGENT, HeaderValue::from_str(&user_agent)?);
-        if let Some(token) = &self.token {
-            headers.insert(
-                AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {token}"))?,
-            );
-        }
-        Ok(headers)
-    }
-
-    /// Consumes the builder and builds the final [`Api`]
-    pub fn build(self) -> Result<Api, ApiError> {
-        let headers = self.build_headers()?;
-        let client = Client::builder().default_headers(headers.clone()).build()?;
-
-        // Policy: only follow relative redirects
-        // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
-        let relative_redirect_policy = Policy::custom(|attempt| {
-            // Follow redirects up to a maximum of 10.
-            if attempt.previous().len() > 10 {
-                return attempt.error("too many redirects");
-            }
-
-            if let Some(last) = attempt.previous().last() {
-                // If the url is not relative
-                if last.make_relative(attempt.url()).is_none() {
-                    return attempt.stop();
-                }
-            }
-
-            // Follow redirect
-            attempt.follow()
-        });
-
-        let relative_redirect_client = Client::builder()
-            .redirect(relative_redirect_policy)
-            .default_headers(headers)
-            .build()?;
-        Ok(Api {
-            endpoint: self.endpoint,
-            url_template: self.url_template,
-            cache: self.cache,
-            client,
-            relative_redirect_client,
-            max_files: self.max_files,
-            chunk_size: self.chunk_size,
-            parallel_failures: self.parallel_failures,
-            max_retries: self.max_retries,
-            progress: self.progress,
-        })
-    }
-}
-
-#[derive(Debug)]
-struct Metadata {
-    commit_hash: String,
-    etag: String,
-    size: usize,
-}
-
-/// The actual Api used to interact with the hub.
-/// You can inspect repos with [`Api::info`]
-/// or download files with [`Api::download`]
-#[derive(Clone, Debug)]
-pub struct Api {
-    endpoint: String,
-    url_template: String,
-    cache: Cache,
-    client: Client,
-    relative_redirect_client: Client,
-    max_files: usize,
-    chunk_size: usize,
-    parallel_failures: usize,
-    max_retries: usize,
-    progress: bool,
-}
-
-fn make_relative(src: &Path, dst: &Path) -> PathBuf {
-    let path = src;
-    let base = dst;
-
-    assert_eq!(
-        path.is_absolute(),
-        base.is_absolute(),
-        "This function is made to look at absolute paths only"
-    );
-    let mut ita = path.components();
-    let mut itb = base.components();
-
-    loop {
-        match (ita.next(), itb.next()) {
-            (Some(a), Some(b)) if a == b => (),
-            (some_a, _) => {
-                // Ignoring b, because 1 component is the filename
-                // for which we don't need to go back up for relative
-                // filename to work.
-                let mut new_path = PathBuf::new();
-                for _ in itb {
-                    new_path.push(Component::ParentDir);
-                }
-                if let Some(a) = some_a {
-                    new_path.push(a);
-                    for comp in ita {
-                        new_path.push(comp);
-                    }
-                }
-                return new_path;
-            }
-        }
-    }
-}
-
-fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
-    if dst.exists() {
-        return Ok(());
-    }
-
-    let rel_src = make_relative(src, dst);
-    #[cfg(target_os = "windows")]
-    {
-        if std::os::windows::fs::symlink_file(rel_src, dst).is_err() {
-            std::fs::rename(src, dst)?;
-        }
-    }
-
-    #[cfg(target_family = "unix")]
-    std::os::unix::fs::symlink(rel_src, dst)?;
-
-    Ok(())
-}
-
-fn jitter() -> usize {
-    rand::thread_rng().gen_range(0..=500)
-}
-
-fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
-    (base_wait_time + n.pow(2) + jitter()).min(max)
-}
-
-impl Api {
-    /// Creates a default Api, for Api options See [`ApiBuilder`]
-    pub fn new() -> Result<Self, ApiError> {
-        ApiBuilder::new().build()
-    }
-
-    /// Get the underlying api client
-    /// Allows for lower level access
-    pub fn client(&self) -> &Client {
-        &self.client
-    }
-
-    async fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
-        let response = self
-            .relative_redirect_client
-            .get(url)
-            .header(RANGE, "bytes=0-0")
-            .send()
-            .await?;
-        let response = response.error_for_status()?;
-        let headers = response.headers();
-        let header_commit = HeaderName::from_static("x-repo-commit");
-        let header_linked_etag = HeaderName::from_static("x-linked-etag");
-        let header_etag = HeaderName::from_static("etag");
-
-        let etag = match headers.get(&header_linked_etag) {
-            Some(etag) => etag,
-            None => headers
-                .get(&header_etag)
-                .ok_or(ApiError::MissingHeader(header_etag))?,
-        };
-        // Cleaning extra quotes
-        let etag = etag.to_str()?.to_string().replace('"', "");
-        let commit_hash = headers
-            .get(&header_commit)
-            .ok_or(ApiError::MissingHeader(header_commit))?
-            .to_str()?
-            .to_string();
-
-        // The response was redirected o S3 most likely which will
-        // know about the size of the file
-        let response = if response.status().is_redirection() {
-            self.client
-                .get(headers.get(LOCATION).unwrap().to_str()?.to_string())
-                .header(RANGE, "bytes=0-0")
-                .send()
-                .await?
-        } else {
-            response
-        };
-        let headers = response.headers();
-        let content_range = headers
-            .get(CONTENT_RANGE)
-            .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?
-            .to_str()?;
-
-        let size = content_range
-            .split('/')
-            .last()
-            .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
-            .parse()?;
-        Ok(Metadata {
-            commit_hash,
-            etag,
-            size,
-        })
-    }
-
-    /// Creates a new handle [`ApiRepo`] which contains operations
-    /// on a particular [`Repo`]
-    pub fn repo(&self, repo: Repo) -> ApiRepo {
-        ApiRepo::new(self.clone(), repo)
-    }
-
-    /// Simple wrapper over
-    /// ```
-    /// # use hf_hub::{api::tokio::Api, Repo, RepoType};
-    /// # let model_id = "gpt2".to_string();
-    /// let api = Api::new().unwrap();
-    /// let api = api.repo(Repo::new(model_id, RepoType::Model));
-    /// ```
-    pub fn model(&self, model_id: String) -> ApiRepo {
-        self.repo(Repo::new(model_id, RepoType::Model))
-    }
-
-    /// Simple wrapper over
-    /// ```
-    /// # use hf_hub::{api::tokio::Api, Repo, RepoType};
-    /// # let model_id = "gpt2".to_string();
-    /// let api = Api::new().unwrap();
-    /// let api = api.repo(Repo::new(model_id, RepoType::Dataset));
-    /// ```
-    pub fn dataset(&self, model_id: String) -> ApiRepo {
-        self.repo(Repo::new(model_id, RepoType::Dataset))
-    }
-
-    /// Simple wrapper over
-    /// ```
-    /// # use hf_hub::{api::tokio::Api, Repo, RepoType};
-    /// # let model_id = "gpt2".to_string();
-    /// let api = Api::new().unwrap();
-    /// let api = api.repo(Repo::new(model_id, RepoType::Space));
-    /// ```
-    pub fn space(&self, model_id: String) -> ApiRepo {
-        self.repo(Repo::new(model_id, RepoType::Space))
-    }
-}
-
-/// Shorthand for accessing things within a particular repo
-#[derive(Debug)]
-pub struct ApiRepo {
-    api: Api,
-    repo: Repo,
-}
-
-impl ApiRepo {
-    fn new(api: Api, repo: Repo) -> Self {
-        Self { api, repo }
-    }
-}
+use tokio::sync::Semaphore;
 
 impl ApiRepo {
     /// Get the fully qualified URL of the remote filename
@@ -414,15 +14,32 @@ impl ApiRepo {
     /// let url = api.model("gpt2".to_string()).url("model.safetensors");
     /// assert_eq!(url, "https://huggingface.co/gpt2/resolve/main/model.safetensors");
     /// ```
-    pub fn url(&self, filename: &str) -> String {
+    pub fn file_url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
         let revision = &self.repo.url_revision();
-        self.api
-            .url_template
-            .replace("{endpoint}", endpoint)
-            .replace("{repo_id}", &self.repo.url())
-            .replace("{revision}", revision)
-            .replace("{filename}", filename)
+        format!(
+            "{endpoint}/{}/resolve/{revision}/{filename}",
+            self.repo.url()
+        )
+        .replace("{endpoint}", endpoint)
+        .replace("{repo_id}", &self.repo.url())
+        .replace("{revision}", revision)
+        .replace("{filename}", filename)
+    }
+
+    /// Get the fully qualified URL for a preupload
+    /// ```
+    /// # use hf_hub::api::tokio::Api;
+    /// let api = Api::new().unwrap();
+    /// let url = api.model("gpt2".to_string()).url("model.safetensors");
+    /// assert_eq!(url, "https://huggingface.co/api/models/gpt2/model.safetensors/preupload/main");
+    /// ```
+    pub fn preupload_url(&self) -> String {
+        let endpoint = &self.api.endpoint;
+        let repo_id = self.repo.url();
+        let repo_type = self.repo.repo_type.to_string();
+        let revision = &self.repo.url_revision();
+        format!("{endpoint}/api/{repo_type}s/{repo_id}/preupload/{revision}")
     }
 
     async fn download_tempfile(
@@ -546,7 +163,7 @@ impl ApiRepo {
     /// # })
     /// ```
     pub async fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
-        let url = self.url(filename);
+        let url = self.file_url(filename);
         let metadata = self.api.metadata(&url).await?;
         let cache = self.api.cache.repo(self.repo.clone());
 
@@ -622,9 +239,12 @@ impl ApiRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::Siblings;
+    use crate::{
+        api::{tokio::ApiBuilder, Siblings},
+        Repo, RepoType,
+    };
     use hex_literal::hex;
-    use rand::distributions::Alphanumeric;
+    use rand::{distributions::Alphanumeric, Rng};
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 

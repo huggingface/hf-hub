@@ -4,6 +4,7 @@
 use rand::{distributions::Alphanumeric, Rng};
 use std::io::Write;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// The actual Api to interact with the hub.
 #[cfg(any(feature = "tokio", feature = "ureq"))]
@@ -19,6 +20,32 @@ pub enum RepoType {
     Dataset,
     /// This is a space, usually a demo showcashing a given model or dataset
     Space,
+}
+
+impl ToString for RepoType {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Dataset => "dataset".to_string(),
+            Self::Model => "model".to_string(),
+            Self::Space => "space".to_string(),
+        }
+    }
+}
+
+impl FromStr for RepoType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "dataset" => Ok(Self::Dataset),
+            "datasets" => Ok(Self::Dataset),
+            "model" => Ok(Self::Model),
+            "models" => Ok(Self::Model),
+            "space" => Ok(Self::Space),
+            "spaces" => Ok(Self::Space),
+            _ => Err(format!("Invalid repo type {s}.")),
+        }
+    }
 }
 
 /// A local struct used to fetch information from the cache folder.
