@@ -1,10 +1,11 @@
 use serde::Deserialize;
 
 /// The asynchronous version of the API
-#[cfg(feature = "tokio")]
+#[cfg(any(feature = "tokio", feature = "tokio-rustls"))]
 pub mod tokio;
 
 /// The synchronous version of the API
+#[cfg(feature = "online")]
 pub mod sync;
 
 /// Siblings are simplified file descriptions of remote files on the hub
