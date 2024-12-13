@@ -1,5 +1,5 @@
 use super::RepoInfo;
-use crate::{Cache, Repo, RepoType};
+use crate::{Cache, Repo, RepoType, SSLType};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 use reqwest::{
@@ -81,6 +81,7 @@ pub struct ApiBuilder {
     parallel_failures: usize,
     max_retries: usize,
     progress: bool,
+    ssl_type: SSLType
 }
 
 impl Default for ApiBuilder {
@@ -122,6 +123,7 @@ impl ApiBuilder {
             parallel_failures: 0,
             max_retries: 0,
             progress,
+            ssl_type: SSLType::RUSTLS
         }
     }
 
@@ -143,6 +145,12 @@ impl ApiBuilder {
         self
     }
 
+    /// Sets the SSL type to be used for connections
+    pub fn with_ssl_type(mut self, ssl_type: SSLType) -> Self {
+        self.ssl_type = ssl_type;
+        self
+    }
+
     fn build_headers(&self) -> Result<HeaderMap, ApiError> {
         let mut headers = HeaderMap::new();
         let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
@@ -159,8 +167,7 @@ impl ApiBuilder {
     /// Consumes the builder and builds the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
-        let client = Client::builder().default_headers(headers.clone()).build()?;
-
+        
         // Policy: only follow relative redirects
         // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
         let relative_redirect_policy = Policy::custom(|attempt| {
@@ -179,10 +186,15 @@ impl ApiBuilder {
             // Follow redirect
             attempt.follow()
         });
-
-        let relative_redirect_client = Client::builder()
+        
+        let client_builder = || match self.ssl_type {
+            SSLType::NATIVE => Client::builder().use_native_tls().default_headers(headers.clone()),
+            SSLType::RUSTLS => Client::builder().use_rustls_tls().default_headers(headers.clone())
+        };
+        
+        let client = client_builder().build()?;
+        let relative_redirect_client = client_builder()
             .redirect(relative_redirect_policy)
-            .default_headers(headers)
             .build()?;
         Ok(Api {
             endpoint: self.endpoint,
