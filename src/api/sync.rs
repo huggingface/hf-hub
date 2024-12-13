@@ -137,6 +137,12 @@ impl ApiBuilder {
         self
     }
 
+    /// Changes the endpoint of the API. Default is `https://huggingface.co`.
+    pub fn with_endpoint(mut self, endpoint: String) -> Self {
+        self.endpoint = endpoint;
+        self
+    }
+
     /// Changes the location of the cache directory. Defaults is `~/.cache/huggingface/`.
     pub fn with_cache_dir(mut self, cache_dir: PathBuf) -> Self {
         self.cache = Cache::new(cache_dir);
