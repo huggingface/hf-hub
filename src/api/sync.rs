@@ -10,6 +10,9 @@ use std::str::FromStr;
 use thiserror::Error;
 use ureq::{Agent, Request};
 
+#[cfg(feature = "native-tls")]
+use native_tls::TlsConnector;
+
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
@@ -163,13 +166,38 @@ impl ApiBuilder {
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers();
 
+        // Create the TLS connector when native-tls feature is enabled
+        #[cfg(feature = "native-tls")]
+        let agent = {
+            let tls = TlsConnector::new().unwrap();
+            ureq::builder()
+                .try_proxy_from_env(true)
+                .tls_connector(std::sync::Arc::new(tls))
+                .build()
+        };
+
+        #[cfg(not(feature = "native-tls"))]
         let agent = ureq::builder().try_proxy_from_env(true).build();
+
         let client = HeaderAgent::new(agent, headers.clone());
 
+        // Do the same for no_redirect_agent
+        #[cfg(feature = "native-tls")]
+        let no_redirect_agent = {
+            let tls = TlsConnector::new().unwrap();
+            ureq::builder()
+                .try_proxy_from_env(true)
+                .redirects(0)
+                .tls_connector(std::sync::Arc::new(tls))
+                .build()
+        };
+
+        #[cfg(not(feature = "native-tls"))]
         let no_redirect_agent = ureq::builder()
             .try_proxy_from_env(true)
             .redirects(0)
             .build();
+
         let no_redirect_client = HeaderAgent::new(no_redirect_agent, headers);
 
         Ok(Api {
@@ -177,7 +205,6 @@ impl ApiBuilder {
             url_template: self.url_template,
             cache: self.cache,
             client,
-
             no_redirect_client,
             progress: self.progress,
         })
