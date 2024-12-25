@@ -1,6 +1,8 @@
+use super::Progress as SyncProgress;
 use super::RepoInfo;
 use crate::{Cache, Repo, RepoType};
-use indicatif::{ProgressBar, ProgressStyle};
+use futures::StreamExt;
+use indicatif::ProgressBar;
 use rand::Rng;
 use reqwest::{
     header::{
@@ -21,6 +23,38 @@ use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
+
+/// This trait is used by users of the lib
+/// to implement custom behavior during file downloads
+pub trait Progress {
+    /// At the start of the download
+    /// The size is the total size in bytes of the file.
+    fn init(&mut self, size: usize, filename: &str)
+        -> impl std::future::Future<Output = ()> + Send;
+    /// This function is called whenever `size` bytes have been
+    /// downloaded in the temporary file
+    fn update(&mut self, size: usize) -> impl std::future::Future<Output = ()> + Send;
+    /// This is called at the end of the download
+    fn finish(&mut self) -> impl std::future::Future<Output = ()> + Send;
+}
+
+impl Progress for ProgressBar {
+    async fn init(&mut self, size: usize, filename: &str) {
+        <ProgressBar as SyncProgress>::init(self, size, filename);
+    }
+    async fn finish(&mut self) {
+        <ProgressBar as SyncProgress>::finish(self);
+    }
+    async fn update(&mut self, size: usize) {
+        <ProgressBar as SyncProgress>::update(self, size);
+    }
+}
+
+impl Progress for () {
+    async fn init(&mut self, _size: usize, _filename: &str) {}
+    async fn finish(&mut self) {}
+    async fn update(&mut self, _size: usize) {}
+}
 
 #[derive(Debug, Error)]
 /// All errors the API can throw
@@ -74,10 +108,9 @@ pub enum ApiError {
 pub struct ApiBuilder {
     endpoint: String,
     cache: Cache,
-    url_template: String,
     token: Option<String>,
     max_files: usize,
-    chunk_size: usize,
+    chunk_size: Option<usize>,
     parallel_failures: usize,
     max_retries: usize,
     progress: bool,
@@ -100,6 +133,23 @@ impl ApiBuilder {
         Self::from_cache(cache)
     }
 
+    /// High CPU download
+    ///
+    /// This may cause issues on regular desktops as it will saturate
+    /// CPUs by multiplexing the downloads.
+    /// However on high CPU machines on the cloud, this may help
+    /// saturate the bandwidth (>500MB/s) better.
+    /// ```
+    /// use hf_hub::api::tokio::ApiBuilder;
+    /// let api = ApiBuilder::high().build().unwrap();
+    /// ```
+    pub fn high() -> Self {
+        let cache = Cache::default();
+        Self::from_cache(cache)
+            .with_max_files(num_cpus::get())
+            .with_chunk_size(Some(10_000_000))
+    }
+
     /// From a given cache
     /// ```
     /// use hf_hub::{api::tokio::ApiBuilder, Cache};
@@ -114,11 +164,11 @@ impl ApiBuilder {
 
         Self {
             endpoint: "https://huggingface.co".to_string(),
-            url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
-            max_files: num_cpus::get(),
-            chunk_size: 10_000_000,
+            max_files: 1,
+            // chunk_size: 10_000_000,
+            chunk_size: None,
             parallel_failures: 0,
             max_retries: 0,
             progress,
@@ -130,7 +180,7 @@ impl ApiBuilder {
         self.progress = progress;
         self
     }
-    
+
     /// Changes the endpoint of the API. Default is `https://huggingface.co`.
     pub fn with_endpoint(mut self, endpoint: String) -> Self {
         self.endpoint = endpoint;
@@ -146,6 +196,18 @@ impl ApiBuilder {
     /// Sets the token to be used in the API
     pub fn with_token(mut self, token: Option<String>) -> Self {
         self.token = token;
+        self
+    }
+
+    /// Sets the number of open files
+    pub fn with_max_files(mut self, max_files: usize) -> Self {
+        self.max_files = max_files;
+        self
+    }
+
+    /// Sets the size of each chunk
+    pub fn with_chunk_size(mut self, chunk_size: Option<usize>) -> Self {
+        self.chunk_size = chunk_size;
         self
     }
 
@@ -192,7 +254,6 @@ impl ApiBuilder {
             .build()?;
         Ok(Api {
             endpoint: self.endpoint,
-            url_template: self.url_template,
             cache: self.cache,
             client,
             relative_redirect_client,
@@ -213,17 +274,15 @@ struct Metadata {
 }
 
 /// The actual Api used to interact with the hub.
-/// You can inspect repos with [`Api::info`]
-/// or download files with [`Api::download`]
+/// Use any repo with [`Api::repo`]
 #[derive(Clone, Debug)]
 pub struct Api {
     endpoint: String,
-    url_template: String,
     cache: Cache,
     client: Client,
     relative_redirect_client: Client,
     max_files: usize,
-    chunk_size: usize,
+    chunk_size: Option<usize>,
     parallel_failures: usize,
     max_retries: usize,
     progress: bool,
@@ -400,6 +459,8 @@ impl Api {
 }
 
 /// Shorthand for accessing things within a particular repo
+/// You can inspect repos with [`ApiRepo::info`]
+/// or download files with [`ApiRepo::download`]
 #[derive(Debug)]
 pub struct ApiRepo {
     api: Api,
@@ -423,19 +484,15 @@ impl ApiRepo {
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
         let revision = &self.repo.url_revision();
-        self.api
-            .url_template
-            .replace("{endpoint}", endpoint)
-            .replace("{repo_id}", &self.repo.url())
-            .replace("{revision}", revision)
-            .replace("{filename}", filename)
+        let repo_id = self.repo.url();
+        format!("{endpoint}/{repo_id}/resolve/{revision}/{filename}")
     }
 
-    async fn download_tempfile(
+    async fn download_tempfile<'a, P: Progress + Clone + Send + Sync + 'static>(
         &self,
         url: &str,
         length: usize,
-        progressbar: Option<ProgressBar>,
+        mut progressbar: P,
     ) -> Result<PathBuf, ApiError> {
         let mut handles = vec![];
         let semaphore = Arc::new(Semaphore::new(self.api.max_files));
@@ -448,7 +505,7 @@ impl ApiRepo {
             .set_len(length as u64)
             .await?;
 
-        let chunk_size = self.api.chunk_size;
+        let chunk_size = self.api.chunk_size.unwrap_or(length);
         for start in (0..length).step_by(chunk_size) {
             let url = url.to_string();
             let filename = filename.clone();
@@ -461,7 +518,9 @@ impl ApiRepo {
             let parallel_failures_semaphore = parallel_failures_semaphore.clone();
             let progress = progressbar.clone();
             handles.push(tokio::spawn(async move {
-                let mut chunk = Self::download_chunk(&client, &url, &filename, start, stop).await;
+                let mut chunk =
+                    Self::download_chunk(&client, &url, &filename, start, stop, progress.clone())
+                        .await;
                 let mut i = 0;
                 if parallel_failures > 0 {
                     while let Err(dlerr) = chunk {
@@ -472,7 +531,15 @@ impl ApiRepo {
                         tokio::time::sleep(tokio::time::Duration::from_millis(wait_time as u64))
                             .await;
 
-                        chunk = Self::download_chunk(&client, &url, &filename, start, stop).await;
+                        chunk = Self::download_chunk(
+                            &client,
+                            &url,
+                            &filename,
+                            start,
+                            stop,
+                            progress.clone(),
+                        )
+                        .await;
                         i += 1;
                         if i > max_retries {
                             return Err(ApiError::TooManyRetries(dlerr.into()));
@@ -481,9 +548,9 @@ impl ApiRepo {
                     }
                 }
                 drop(permit);
-                if let Some(p) = progress {
-                    p.inc((stop - start) as u64);
-                }
+                // if let Some(p) = progress {
+                // progress.update(stop - start).await;
+                // }
                 chunk
             }));
         }
@@ -493,19 +560,21 @@ impl ApiRepo {
             futures::future::join_all(handles).await;
         let results: Result<(), ApiError> = results.into_iter().flatten().collect();
         results?;
-        if let Some(p) = progressbar {
-            p.finish();
-        }
+        progressbar.finish().await;
         Ok(filename)
     }
 
-    async fn download_chunk(
+    async fn download_chunk<P>(
         client: &reqwest::Client,
         url: &str,
         filename: &PathBuf,
         start: usize,
         stop: usize,
-    ) -> Result<(), ApiError> {
+        mut progress: P,
+    ) -> Result<(), ApiError>
+    where
+        P: Progress,
+    {
         // Process each socket concurrently.
         let range = format!("bytes={start}-{stop}");
         let mut file = tokio::fs::OpenOptions::new()
@@ -519,8 +588,12 @@ impl ApiRepo {
             .send()
             .await?
             .error_for_status()?;
-        let content = response.bytes().await?;
-        file.write_all(&content).await?;
+        let mut byte_stream = response.bytes_stream();
+        while let Some(next) = byte_stream.next().await {
+            let next = next?;
+            file.write_all(&next).await?;
+            progress.update(next.len()).await;
+        }
         Ok(())
     }
 
@@ -552,6 +625,52 @@ impl ApiRepo {
     /// # })
     /// ```
     pub async fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
+        if self.api.progress {
+            self.download_with_progress(filename, ProgressBar::new(0))
+                .await
+        } else {
+            self.download_with_progress(filename, ()).await
+        }
+    }
+
+    /// This function is used to download a file with a custom progress function.
+    /// It uses the [`Progress`] trait and can be used in more complex use
+    /// cases like downloading a showing progress in a UI.
+    /// ```no_run
+    /// use hf_hub::api::tokio::{Api, Progress};
+    ///
+    /// #[derive(Clone)]
+    /// struct MyProgress{
+    ///     current: usize,
+    ///     total: usize
+    /// }
+    ///
+    /// impl Progress for MyProgress{
+    ///     async fn init(&mut self, size: usize, _filename: &str){
+    ///         self.total = size;
+    ///         self.current = 0;
+    ///     }
+    ///
+    ///     async fn update(&mut self, size: usize){
+    ///         self.current += size;
+    ///         println!("{}/{}", self.current, self.total)
+    ///     }
+    ///
+    ///     async fn finish(&mut self){
+    ///         println!("Done !");
+    ///     }
+    /// }
+    /// # tokio_test::block_on(async {
+    /// let api = Api::new().unwrap();
+    /// let progress = MyProgress{ current: 0, total : 0};
+    /// let local_filename = api.model("gpt2".to_string()).download_with_progress("model.safetensors", progress).await.unwrap();
+    /// # })
+    /// ```
+    pub async fn download_with_progress<P: Progress + Clone + Send + Sync + 'static>(
+        &self,
+        filename: &str,
+        mut progress: P,
+    ) -> Result<PathBuf, ApiError> {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url).await?;
         let cache = self.api.cache.repo(self.repo.clone());
@@ -559,28 +678,9 @@ impl ApiRepo {
         let blob_path = cache.blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
-        let progressbar = if self.api.progress {
-            let progress = ProgressBar::new(metadata.size as u64);
-            progress.set_style(
-                ProgressStyle::with_template(
-                    "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
-                )
-                    .unwrap(), // .progress_chars("━ "),
-            );
-            let maxlength = 30;
-            let message = if filename.len() > maxlength {
-                format!("..{}", &filename[filename.len() - maxlength..])
-            } else {
-                filename.to_string()
-            };
-            progress.set_message(message);
-            Some(progress)
-        } else {
-            None
-        };
-
+        progress.init(metadata.size, filename).await;
         let tmp_filename = self
-            .download_tempfile(&url, metadata.size, progressbar)
+            .download_tempfile(&url, metadata.size, progress)
             .await?;
 
         tokio::fs::rename(&tmp_filename, &blob_path).await?;

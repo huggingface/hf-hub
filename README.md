@@ -43,7 +43,7 @@ let _filename = repo.get("config.json").unwrap();
 
 # SSL/TLS
 
-This library uses its dependencies' default TLS implementations which are `rustls` for `ureq` (sync) and `native-tls` (openssl) for `tokio`.
+This library uses tokio default TLS implementations which is `native-tls` (openssl) for `tokio`.
 
 If you want control over the TLS backend you can remove the default features and only add the backend you are intending to use. 
 
