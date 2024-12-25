@@ -300,6 +300,8 @@ impl Repo {
 mod tests {
     use super::*;
 
+    /// Internal macro used to show cleaners errors
+    /// on the payloads received from the hub.
     #[macro_export]
     macro_rules! assert_no_diff {
         ($left: expr, $right: expr) => {
