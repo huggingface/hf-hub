@@ -629,6 +629,7 @@ impl ApiRepo {
 mod tests {
     use super::*;
     use crate::api::Siblings;
+    use crate::assert_no_diff;
     use hex_literal::hex;
     use rand::distributions::Alphanumeric;
     use serde_json::{json, Value};
@@ -849,7 +850,7 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(
+        assert_no_diff!(
             blobs_info,
             json!({
                 "_id": "621ffdc136468d709f17ddb4",
@@ -860,7 +861,7 @@ mod tests {
                 "gated": false,
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
-                "likes": 0,
+                "likes": 1,
                 "modelId": "mcpotato/42-eicar-street",
                 "private": false,
                 "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
