@@ -5,6 +5,7 @@ use http::{StatusCode, Uri};
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 use std::collections::HashMap;
+use std::io::Seek;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
