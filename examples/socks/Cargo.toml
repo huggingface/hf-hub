@@ -1,0 +1,11 @@
+[package]
+name = "socks"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hf-hub = { version = "0.4.0", path = "../.." }
+# Adding the `socks` features automatically adds it into
+# The reqwest built by hf-hub therefore enabling socks proxying.
+reqwest = { version = "0.12.9", features = ["socks"] }
+tokio = { version = "1.42.0", features = ["macros"] }
