@@ -1,5 +1,9 @@
 #![deny(missing_docs)]
-#![doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))]
+#![cfg_attr(feature="ureq", doc = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md")))]
+#![cfg_attr(
+    not(feature = "ureq"),
+    doc = "Documentation is meant to be compiled with default features (at least ureq)"
+)]
 #[cfg(any(feature = "tokio", feature = "ureq"))]
 use rand::{distributions::Alphanumeric, Rng};
 use std::io::Write;
@@ -295,6 +299,41 @@ impl Repo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Internal macro used to show cleaners errors
+    /// on the payloads received from the hub.
+    #[macro_export]
+    macro_rules! assert_no_diff {
+        ($left: expr, $right: expr) => {
+            let left = serde_json::to_string_pretty(&$left).unwrap();
+            let right = serde_json::to_string_pretty(&$right).unwrap();
+            if left != right {
+                use rand::Rng;
+                use std::io::Write;
+                use std::process::Command;
+                let rand_string: String = rand::thread_rng()
+                    .sample_iter(&rand::distributions::Alphanumeric)
+                    .take(6)
+                    .map(char::from)
+                    .collect();
+                let left_filename = format!("/tmp/left-{rand_string}.txt");
+                let mut file = std::fs::File::create(&left_filename).unwrap();
+                file.write_all(left.as_bytes()).unwrap();
+                let right_filename = format!("/tmp/right-{rand_string}.txt");
+                let mut file = std::fs::File::create(&right_filename).unwrap();
+                file.write_all(right.as_bytes()).unwrap();
+                let output = Command::new("diff")
+                    // Reverse order seems to be more appropriate for how we set up the tests.
+                    .args(["-U5", &right_filename, &left_filename])
+                    .output()
+                    .expect("Failed to diff")
+                    .stdout;
+                let diff = String::from_utf8(output).expect("Invalid utf-8 diff output");
+                // eprintln!("assertion `left == right` failed\n{diff}");
+                assert!(false, "{diff}")
+            };
+        };
+    }
 
     #[test]
     #[cfg(not(target_os = "windows"))]

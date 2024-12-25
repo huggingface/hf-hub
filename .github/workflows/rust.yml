@@ -13,18 +13,16 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - uses: ilammy/setup-nasm@v1
-
       - name: Install Rust Stable
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-          components: rustfmt, clippy, llvm-tools-preview
+          components: rustfmt, clippy
           override: true
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Instal cargo audit
+      - name: Install cargo audit
         run: cargo install cargo-audit
 
       - name: Build
@@ -37,8 +35,14 @@ jobs:
         run: cargo test --all-features --verbose
 
       - name: Run Tests (no ssl)
-        run: cargo test --no-default-features --verbose --lib
+        run: cargo test --no-default-features --verbose
+
+      - name: Run Tests (ssl cross)
+        run: |
+          cargo test --no-default-features --features ureq,native-tls
+          cargo test --no-default-features --features ureq,rustls-tls
+          cargo test --no-default-features --features tokio,native-tls
+          cargo test --no-default-features --features tokio,rustls-tls
 
       - name: Run Audit
-        # RUSTSEC-2021-0145 is criterion so only within benchmarks
         run: cargo audit -D warnings
