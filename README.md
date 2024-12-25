@@ -43,18 +43,6 @@ let _filename = repo.get("config.json").unwrap();
 
 # SSL/TLS
 
-This library uses its dependencies' default TLS implementations which are `rustls` for `ureq` (sync) and `native-tls` (openssl) for `tokio`.
-
-If you want control over the TLS backend you can remove the default features and only add the backend you are intending to use. 
-
-```bash
-cargo add hf-hub -no-default-features --features ureq,rustls-tls
-cargo add hf-hub -no-default-features --features ureq,native-tls
-cargo add hf-hub -no-default-features --features tokio,rustls-tls
-cargo add hf-hub -no-default-features --features tokio,native-tls
-```
-
-
 When using the [`ureq`](https://github.com/algesten/ureq) feature, you will always use its default TLS backend which is [rustls](https://github.com/rustls/rustls).
 
 When using [`tokio`](https://github.com/tokio-rs/tokio), by default `default-tls` will be enabled, which means OpenSSL. If you want/need to use rustls, disable the default features and use `rustls-tls` in conjunction with `tokio`.

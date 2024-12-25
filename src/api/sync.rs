@@ -8,7 +8,7 @@ use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use thiserror::Error;
-use ureq::{Agent, AgentBuilder, Request};
+use ureq::{Agent, Request};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -78,11 +78,6 @@ pub enum ApiError {
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
-
-    /// Native tls error
-    #[error("Native tls: {0}")]
-    #[cfg(feature = "native-tls")]
-    Native(#[from] native_tls::Error),
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -174,8 +169,7 @@ impl ApiBuilder {
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers();
 
-        let builder = builder()?;
-        let agent = builder.build();
+        let agent = ureq::builder().try_proxy_from_env(true).build();
         let client = HeaderAgent::new(agent, headers.clone());
 
         let no_redirect_agent = ureq::builder()
@@ -459,18 +453,6 @@ impl ApiRepo {
     }
 }
 
-#[cfg(feature = "native-tls")]
-fn builder() -> Result<AgentBuilder, ApiError> {
-    Ok(ureq::builder()
-        .try_proxy_from_env(true)
-        .tls_connector(std::sync::Arc::new(native_tls::TlsConnector::new()?)))
-}
-
-#[cfg(not(feature = "native-tls"))]
-fn builder() -> Result<AgentBuilder, ApiError> {
-    Ok(ureq::builder().try_proxy_from_env(true))
-}
-
 impl ApiRepo {
     /// Get the fully qualified URL of the remote filename
     /// ```
@@ -591,10 +573,9 @@ impl ApiRepo {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use crate::api::Siblings;
-    use crate::assert_no_diff;
     use hex_literal::hex;
     use rand::{distributions::Alphanumeric, Rng};
     use serde_json::{json, Value};
@@ -789,7 +770,7 @@ pub(crate) mod tests {
             .unwrap()
             .into_json()
             .unwrap();
-        assert_no_diff!(
+        assert_eq!(
             blobs_info,
             json!({
                 "_id": "621ffdc136468d709f17ddb4",
@@ -800,7 +781,7 @@ pub(crate) mod tests {
                 "gated": false,
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
-                "likes": 1,
+                "likes": 0,
                 "modelId": "mcpotato/42-eicar-street",
                 "private": false,
                 "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
@@ -854,13 +835,12 @@ pub(crate) mod tests {
 
     #[test]
     fn endpoint() {
+        std::env::remove_var("HF_ENDPOINT");
         let api = ApiBuilder::new().build().unwrap();
         assert_eq!(api.endpoint, "https://huggingface.co".to_string());
         let fake_endpoint = "https://fake_endpoint.com".to_string();
-        let api = ApiBuilder::new()
-            .with_endpoint(fake_endpoint.clone())
-            .build()
-            .unwrap();
+        std::env::set_var("HF_ENDPOINT", &fake_endpoint);
+        let api = ApiBuilder::new().build().unwrap();
         assert_eq!(api.endpoint, fake_endpoint);
     }
 }
