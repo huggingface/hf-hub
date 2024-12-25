@@ -37,5 +37,12 @@ jobs:
       - name: Run Tests (no ssl)
         run: cargo test --no-default-features --verbose
 
+      - name: Run Tests (ssl cross)
+        run: |
+          cargo test --no-default-features --features ureq,native-tls
+          cargo test --no-default-features --features ureq,rustls-tls
+          cargo test --no-default-features --features tokio,native-tls
+          cargo test --no-default-features --features tokio,rustls-tls
+
       - name: Run Audit
         run: cargo audit -D warnings

@@ -591,7 +591,7 @@ impl ApiRepo {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use crate::api::Siblings;
     use crate::assert_no_diff;
