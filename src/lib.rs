@@ -55,8 +55,8 @@ impl Cache {
     /// Use `huggingface-cli login` to set it up.
     pub fn token(&self) -> Option<String> {
         let token_filename = self.token_path();
-        if !token_filename.exists() {
-            log::info!("Token file not found {token_filename:?}");
+        if token_filename.exists() {
+            log::info!("Using token file found {token_filename:?}");
         }
         match std::fs::read_to_string(token_filename) {
             Ok(token_content) => {
