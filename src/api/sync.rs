@@ -37,7 +37,7 @@ fn wrap_read<P: Progress, R: Read>(inner: R, progress: &mut P) -> Wrapper<P, R> 
     Wrapper { inner, progress }
 }
 
-impl<'a, P: Progress, R: Read> Read for Wrapper<'a, P, R> {
+impl<P: Progress, R: Read> Read for Wrapper<'_, P, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read = self.inner.read(buf)?;
         self.progress.update(read);
@@ -444,7 +444,7 @@ impl Api {
         Ok(filepath)
     }
 
-    fn download_from<'a, P>(
+    fn download_from<P>(
         &self,
         url: &str,
         current: u64,
