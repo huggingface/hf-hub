@@ -29,7 +29,7 @@ type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
 
 /// Specific name for the sync part of the resumable file
-const EXTENTION: &'static str = ".part";
+const EXTENTION: &str = ".part";
 
 struct Wrapper<'a, P: Progress, R: Read> {
     progress: &'a mut P,
@@ -429,7 +429,7 @@ impl Api {
         tmp_path: PathBuf,
         filename: &str,
     ) -> Result<PathBuf, ApiError> {
-        progress.init(size as usize, filename);
+        progress.init(size, filename);
         let filepath = tmp_path;
 
         // Create the file and set everything properly
