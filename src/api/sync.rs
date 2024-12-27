@@ -28,16 +28,16 @@ const AUTHORIZATION: &str = "Authorization";
 type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
 
-struct Wrapper<P: Progress, R: Read> {
-    progress: P,
+struct Wrapper<'a, P: Progress, R: Read> {
+    progress: &'a mut P,
     inner: R,
 }
 
-fn wrap_read<P: Progress, R: Read>(inner: R, progress: P) -> Wrapper<P, R> {
+fn wrap_read<P: Progress, R: Read>(inner: R, progress: &mut P) -> Wrapper<P, R> {
     Wrapper { inner, progress }
 }
 
-impl<P: Progress, R: Read> Read for Wrapper<P, R> {
+impl<'a, P: Progress, R: Read> Read for Wrapper<'a, P, R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read = self.inner.read(buf)?;
         self.progress.update(read);
@@ -417,54 +417,44 @@ impl Api {
     fn download_tempfile<P: Progress + Sync + Send>(
         &self,
         url: &str,
-        progress: P,
+        mut progress: P,
+        filename: &str,
     ) -> Result<PathBuf, ApiError> {
-        let filename = self.cache.temp_path();
+        let filepath = self.cache.temp_path();
 
         // Create the file and set everything properly
-        let mut file = std::fs::File::create(&filename)?;
+        let mut file = std::fs::File::create(&filepath)?;
 
+        let mut res = self.download_from(url, 0u64, &mut file, filename, &mut progress);
         if self.max_retries > 0 {
             let mut i = 0;
-            let mut res = self.download_from(url, 0u64, &mut file);
             while let Err(dlerr) = res {
                 let wait_time = exponential_backoff(300, i, 10_000);
                 std::thread::sleep(std::time::Duration::from_millis(wait_time as u64));
 
-                res = self.download_from(url, file.stream_position()?, &mut file);
+                let current = file.stream_position()?;
+                res = self.download_from(url, current, &mut file, filename, &mut progress);
                 i += 1;
                 if i > self.max_retries {
                     return Err(ApiError::TooManyRetries(dlerr.into()));
                 }
             }
-            res?;
-            if let Some(p) = progressbar {
-                p.finish()
-            }
-            return Ok(filename);
         }
-
-        let response = self.client.get(url).call().map_err(Box::new)?;
-
-        let reader = response.into_reader();
-        //if let Some(p) = &progressbar {
-        let mut reader = Box::new(wrap_read(reader, progress));
-        //}
-
-        std::io::copy(&mut reader, &mut file)?;
-
-        //if let Some(p) = progressbar {
-        reader.progress.finish();
-        //}
-        Ok(filename)
+        res?;
+        Ok(filepath)
     }
 
-    fn download_from(
+    fn download_from<'a, P>(
         &self,
         url: &str,
         current: u64,
         file: &mut std::fs::File,
-    ) -> Result<(), ApiError> {
+        filename: &str,
+        progress: &mut P,
+    ) -> Result<(), ApiError>
+    where
+        P: Progress,
+    {
         let range = format!("bytes={current}-");
         let response = self
             .client
@@ -472,8 +462,12 @@ impl Api {
             .set(RANGE, &range)
             .call()
             .map_err(Box::new)?;
-        let mut reader = response.into_reader();
+        let reader = response.into_reader();
+        progress.init(0, filename);
+        progress.update(current as usize);
+        let mut reader = Box::new(wrap_read(reader, progress));
         std::io::copy(&mut reader, file)?;
+        progress.finish();
         Ok(())
     }
 
@@ -619,7 +613,7 @@ impl ApiRepo {
 
         progress.init(metadata.size, filename);
 
-        let tmp_filename = self.api.download_tempfile(&url, progress)?;
+        let tmp_filename = self.api.download_tempfile(&url, progress, filename)?;
 
         std::fs::rename(tmp_filename, &blob_path)?;
 
