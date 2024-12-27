@@ -6,4 +6,3 @@ edition = "2021"
 [dependencies]
 iced = { version = "0.13.1", features = ["tokio"] }
 hf-hub = { path = "../../", default-features = false, features = ["tokio", "rustls-tls"] }
-reqwest = "0.12.10"

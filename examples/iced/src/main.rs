@@ -1,10 +1,8 @@
-use hf_hub::api::tokio::Api;
+use hf_hub::api::tokio::{Api, ApiError};
 use iced::futures::{SinkExt, Stream};
 use iced::stream::try_channel;
 use iced::task;
 use iced::widget::{button, center, column, progress_bar, text, Column};
-
-use std::sync::Arc;
 
 use iced::{Center, Element, Right, Task};
 
@@ -16,13 +14,12 @@ pub enum Progress {
 
 #[derive(Debug, Clone)]
 pub enum Error {
-    RequestFailed(Arc<reqwest::Error>),
-    NoContentLength,
+    Api(String),
 }
 
-impl From<reqwest::Error> for Error {
-    fn from(error: reqwest::Error) -> Self {
-        Error::RequestFailed(Arc::new(error))
+impl From<ApiError> for Error {
+    fn from(value: ApiError) -> Self {
+        Self::Api(value.to_string())
     }
 }
 
@@ -69,17 +66,15 @@ impl hf_hub::api::tokio::Progress for Prog {
     }
 }
 
-pub fn download(_url: impl AsRef<str>) -> impl Stream<Item = Result<Progress, Error>> {
+pub fn download(
+    repo: String,
+    filename: impl AsRef<str>,
+) -> impl Stream<Item = Result<Progress, Error>> {
     try_channel(1, move |output| async move {
         let prog = Prog { output, total: 0 };
 
-        let api = Api::new()
-            .unwrap()
-            .model("mattshumer/Reflection-Llama-3.1-70B".to_string());
-        let filename = "model-00001-of-00162.safetensors";
-        println!("API OK");
-        api.download_with_progress(filename, prog).await.unwrap();
-        println!("API Download started");
+        let api = Api::new().unwrap().model(repo);
+        api.download_with_progress(filename.as_ref(), prog).await?;
 
         Ok(())
     })
@@ -175,9 +170,8 @@ impl Download {
         match self.state {
             State::Idle { .. } | State::Finished { .. } | State::Errored { .. } => {
                 let (task, handle) = Task::stream(download(
-                    "https://huggingface.co/\
-                        mattshumer/Reflection-Llama-3.1-70B/\
-                        resolve/main/model-00001-of-00162.safetensors",
+                    "mattshumer/Reflection-Llama-3.1-70B".to_string(),
+                    "model-00001-of-00162.safetensors",
                 ))
                 .abortable();
 
