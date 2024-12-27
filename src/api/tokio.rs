@@ -933,6 +933,49 @@ mod tests {
             val[..],
             hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
         );
+
+        // Here we prove the previous part was correctly resuming by purposefully corrupting the
+        // file.
+        let blob = std::fs::canonicalize(&downloaded_path).unwrap();
+        let mut file = std::fs::OpenOptions::new().write(true).open(&blob).unwrap();
+        let size = file.metadata().unwrap().len();
+        // Not random for consistent sha corruption
+        let truncate: f32 = 0.5;
+        let new_size = (size as f32 * truncate) as u64;
+        // Truncating
+        file.set_len(new_size).unwrap();
+        let total_size = size + size_of::<u64>() as u64;
+        file.set_len(total_size).unwrap();
+        file.seek(SeekFrom::Start(size)).unwrap();
+        file.write_all(&new_size.to_le_bytes()).unwrap();
+
+        // Corrupting by changing a single byte.
+        file.seek(SeekFrom::Start(new_size - 1)).unwrap();
+        file.write_all(&[0]).unwrap();
+
+        let mut blob_part = blob.clone();
+        blob_part.set_extension(".sync.part");
+        std::fs::rename(blob, &blob_part).unwrap();
+        std::fs::remove_file(&downloaded_path).unwrap();
+        let content = std::fs::read(&*blob_part).unwrap();
+        assert_eq!(content.len() as u64, total_size);
+        let val = Sha256::digest(content);
+        // We modified the sha.
+        assert!(
+            val[..] != hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
+        );
+        let new_downloaded_path = api
+            .model(model_id.clone())
+            .download("config.json")
+            .await
+            .unwrap();
+        let val = Sha256::digest(std::fs::read(&*new_downloaded_path).unwrap());
+        assert_eq!(downloaded_path, new_downloaded_path);
+        assert_eq!(
+            val[..],
+            // Corrupted sha
+            hex!("32b83c94ee55a8d43d68b03a859975f6789d647342ddeb2326fcd5e0127035b5")
+        );
     }
 
     #[tokio::test]
