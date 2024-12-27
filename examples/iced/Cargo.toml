@@ -1,0 +1,8 @@
+[package]
+name = "iced_hf_hub"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.13.1", features = ["tokio"] }
+hf-hub = { path = "../../", default-features = false, features = ["tokio", "rustls-tls"] }

@@ -1,10 +1,12 @@
 use super::RepoInfo;
 use crate::api::sync::ApiError::InvalidHeader;
+use crate::api::Progress;
 use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::ProgressBar;
 use rand::Rng;
 use std::collections::HashMap;
+use std::io::Read;
 use std::io::Seek;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
@@ -25,6 +27,23 @@ const AUTHORIZATION: &str = "Authorization";
 
 type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
+
+struct Wrapper<'a, P: Progress, R: Read> {
+    progress: &'a mut P,
+    inner: R,
+}
+
+fn wrap_read<P: Progress, R: Read>(inner: R, progress: &mut P) -> Wrapper<P, R> {
+    Wrapper { inner, progress }
+}
+
+impl<P: Progress, R: Read> Read for Wrapper<'_, P, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.progress.update(read);
+        Ok(read)
+    }
+}
 
 /// Simple wrapper over [`ureq::Agent`] to include default headers
 #[derive(Clone, Debug)]
@@ -92,7 +111,6 @@ pub enum ApiError {
 pub struct ApiBuilder {
     endpoint: String,
     cache: Cache,
-    url_template: String,
     token: Option<String>,
     max_retries: usize,
     progress: bool,
@@ -128,12 +146,10 @@ impl ApiBuilder {
         let max_retries = 0;
         let progress = true;
 
-        let endpoint =
-            std::env::var("HF_ENDPOINT").unwrap_or_else(|_| "https://huggingface.co".to_owned());
+        let endpoint = "https://huggingface.co".to_string();
 
         Self {
             endpoint,
-            url_template: "{endpoint}/{repo_id}/resolve/{revision}/{filename}".to_string(),
             cache,
             token,
             max_retries,
@@ -197,10 +213,8 @@ impl ApiBuilder {
 
         Ok(Api {
             endpoint: self.endpoint,
-            url_template: self.url_template,
             cache: self.cache,
             client,
-
             no_redirect_client,
             max_retries: self.max_retries,
             progress: self.progress,
@@ -216,12 +230,10 @@ struct Metadata {
 }
 
 /// The actual Api used to interacto with the hub.
-/// You can inspect repos with [`Api::info`]
-/// or download files with [`Api::download`]
+/// Use any repo with [`Api::repo`]
 #[derive(Clone, Debug)]
 pub struct Api {
     endpoint: String,
-    url_template: String,
     cache: Cache,
     client: HeaderAgent,
     no_redirect_client: HeaderAgent,
@@ -402,57 +414,47 @@ impl Api {
         })
     }
 
-    fn download_tempfile(
+    fn download_tempfile<P: Progress + Sync + Send>(
         &self,
         url: &str,
-        progressbar: Option<ProgressBar>,
+        mut progress: P,
+        filename: &str,
     ) -> Result<PathBuf, ApiError> {
-        let filename = self.cache.temp_path();
+        let filepath = self.cache.temp_path();
 
         // Create the file and set everything properly
-        let mut file = std::fs::File::create(&filename)?;
+        let mut file = std::fs::File::create(&filepath)?;
 
+        let mut res = self.download_from(url, 0u64, &mut file, filename, &mut progress);
         if self.max_retries > 0 {
             let mut i = 0;
-            let mut res = self.download_from(url, 0u64, &mut file);
             while let Err(dlerr) = res {
                 let wait_time = exponential_backoff(300, i, 10_000);
                 std::thread::sleep(std::time::Duration::from_millis(wait_time as u64));
 
-                res = self.download_from(url, file.stream_position()?, &mut file);
+                let current = file.stream_position()?;
+                res = self.download_from(url, current, &mut file, filename, &mut progress);
                 i += 1;
                 if i > self.max_retries {
                     return Err(ApiError::TooManyRetries(dlerr.into()));
                 }
             }
-            res?;
-            if let Some(p) = progressbar {
-                p.finish()
-            }
-            return Ok(filename);
         }
-
-        let response = self.client.get(url).call().map_err(Box::new)?;
-
-        let mut reader = response.into_reader();
-        if let Some(p) = &progressbar {
-            reader = Box::new(p.wrap_read(reader));
-        }
-
-        std::io::copy(&mut reader, &mut file)?;
-
-        if let Some(p) = progressbar {
-            p.finish();
-        }
-        Ok(filename)
+        res?;
+        Ok(filepath)
     }
 
-    fn download_from(
+    fn download_from<P>(
         &self,
         url: &str,
         current: u64,
         file: &mut std::fs::File,
-    ) -> Result<(), ApiError> {
+        filename: &str,
+        progress: &mut P,
+    ) -> Result<(), ApiError>
+    where
+        P: Progress,
+    {
         let range = format!("bytes={current}-");
         let response = self
             .client
@@ -460,8 +462,12 @@ impl Api {
             .set(RANGE, &range)
             .call()
             .map_err(Box::new)?;
-        let mut reader = response.into_reader();
+        let reader = response.into_reader();
+        progress.init(0, filename);
+        progress.update(current as usize);
+        let mut reader = Box::new(wrap_read(reader, progress));
         std::io::copy(&mut reader, file)?;
+        progress.finish();
         Ok(())
     }
 
@@ -506,6 +512,8 @@ impl Api {
 }
 
 /// Shorthand for accessing things within a particular repo
+/// You can inspect repos with [`ApiRepo::info`]
+/// or download files with [`ApiRepo::download`]
 #[derive(Debug)]
 pub struct ApiRepo {
     api: Api,
@@ -541,12 +549,8 @@ impl ApiRepo {
     pub fn url(&self, filename: &str) -> String {
         let endpoint = &self.api.endpoint;
         let revision = &self.repo.url_revision();
-        self.api
-            .url_template
-            .replace("{endpoint}", endpoint)
-            .replace("{repo_id}", &self.repo.url())
-            .replace("{revision}", revision)
-            .replace("{filename}", filename)
+        let repo_id = self.repo.url();
+        format!("{endpoint}/{repo_id}/resolve/{revision}/{filename}")
     }
 
     /// This will attempt the fetch the file locally first, then [`Api.download`]
@@ -563,16 +567,40 @@ impl ApiRepo {
         }
     }
 
-    /// Downloads a remote file (if not already present) into the cache directory
-    /// to be used locally.
-    /// This functions require internet access to verify if new versions of the file
-    /// exist, even if a file is already on disk at location.
+    /// This function is used to download a file with a custom progress function.
+    /// It uses the [`Progress`] trait and can be used in more complex use
+    /// cases like downloading a showing progress in a UI.
     /// ```no_run
-    /// # use hf_hub::api::sync::Api;
+    /// # use hf_hub::api::{sync::Api, Progress};
+    /// struct MyProgress{
+    ///     current: usize,
+    ///     total: usize
+    /// }
+    ///
+    /// impl Progress for MyProgress{
+    ///     fn init(&mut self, size: usize, _filename: &str){
+    ///         self.total = size;
+    ///         self.current = 0;
+    ///     }
+    ///
+    ///     fn update(&mut self, size: usize){
+    ///         self.current += size;
+    ///         println!("{}/{}", self.current, self.total)
+    ///     }
+    ///
+    ///     fn finish(&mut self){
+    ///         println!("Done !");
+    ///     }
+    /// }
     /// let api = Api::new().unwrap();
-    /// let local_filename = api.model("gpt2".to_string()).download("model.safetensors").unwrap();
+    /// let progress = MyProgress{current: 0, total: 0};
+    /// let local_filename = api.model("gpt2".to_string()).download_with_progress("model.safetensors", progress).unwrap();
     /// ```
-    pub fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
+    pub fn download_with_progress<P: Progress + Send + Sync>(
+        &self,
+        filename: &str,
+        mut progress: P,
+    ) -> Result<PathBuf, ApiError> {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url)?;
 
@@ -583,27 +611,9 @@ impl ApiRepo {
             .blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
-        let progressbar = if self.api.progress {
-            let progress = ProgressBar::new(metadata.size as u64);
-            progress.set_style(
-                ProgressStyle::with_template(
-                    "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
-                )
-                    .unwrap(), // .progress_chars("━ "),
-            );
-            let maxlength = 30;
-            let message = if filename.len() > maxlength {
-                format!("..{}", &filename[filename.len() - maxlength..])
-            } else {
-                filename.to_string()
-            };
-            progress.set_message(message);
-            Some(progress)
-        } else {
-            None
-        };
+        progress.init(metadata.size, filename);
 
-        let tmp_filename = self.api.download_tempfile(&url, progressbar)?;
+        let tmp_filename = self.api.download_tempfile(&url, progress, filename)?;
 
         std::fs::rename(tmp_filename, &blob_path)?;
 
@@ -622,6 +632,23 @@ impl ApiRepo {
             .create_ref(&metadata.commit_hash)?;
 
         Ok(pointer_path)
+    }
+
+    /// Downloads a remote file (if not already present) into the cache directory
+    /// to be used locally.
+    /// This functions require internet access to verify if new versions of the file
+    /// exist, even if a file is already on disk at location.
+    /// ```no_run
+    /// # use hf_hub::api::sync::Api;
+    /// let api = Api::new().unwrap();
+    /// let local_filename = api.model("gpt2".to_string()).download("model.safetensors").unwrap();
+    /// ```
+    pub fn download(&self, filename: &str) -> Result<PathBuf, ApiError> {
+        if self.api.progress {
+            self.download_with_progress(filename, ProgressBar::new(0))
+        } else {
+            self.download_with_progress(filename, ())
+        }
     }
 
     /// Get information about the Repo

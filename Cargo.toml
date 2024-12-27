@@ -26,6 +26,7 @@ num_cpus = { version = "1.15.0", optional = true }
 rand = { version = "0.8.5", optional = true }
 reqwest = { version = "0.12.2", optional = true, default-features = false, features = [
   "json",
+  "stream",
 ] }
 rustls = { version = "0.23.4", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -41,7 +42,7 @@ native-tls = { version = "0.2.12", optional = true }
 [features]
 default = ["default-tls", "tokio", "ureq"]
 # These features are only relevant when used with the `tokio` feature, but this might change in the future.
-default-tls = []
+default-tls = ["native-tls"]
 native-tls = ["dep:reqwest", "reqwest/default", "dep:native-tls", "ureq/native-tls"]
 rustls-tls = ["dep:rustls", "reqwest/rustls-tls"]
 tokio = [
