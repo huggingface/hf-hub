@@ -4,8 +4,6 @@
     not(feature = "ureq"),
     doc = "Documentation is meant to be compiled with default features (at least ureq)"
 )]
-#[cfg(any(feature = "tokio", feature = "ureq"))]
-use rand::{distributions::Alphanumeric, Rng};
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -123,21 +121,6 @@ impl Cache {
     /// ```
     pub fn space(&self, model_id: String) -> CacheRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
-    }
-
-    #[cfg(any(feature = "tokio", feature = "ureq"))]
-    pub(crate) fn temp_path(&self) -> PathBuf {
-        let mut path = self.path().clone();
-        path.push("tmp");
-        std::fs::create_dir_all(&path).ok();
-
-        let s: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(7)
-            .map(char::from)
-            .collect();
-        path.push(s);
-        path.to_path_buf()
     }
 }
 
