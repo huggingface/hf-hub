@@ -9,6 +9,8 @@ pub mod tokio;
 #[cfg(feature = "ureq")]
 pub mod sync;
 
+const HF_ENDPOINT: &str = "HF_ENDPOINT";
+
 /// This trait is used by users of the lib
 /// to implement custom behavior during file downloads
 pub trait Progress {

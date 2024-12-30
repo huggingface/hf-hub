@@ -1,4 +1,4 @@
-use super::RepoInfo;
+use super::{RepoInfo, HF_ENDPOINT};
 use crate::api::sync::ApiError::InvalidHeader;
 use crate::api::Progress;
 use crate::{Cache, Repo, RepoType};
@@ -131,6 +131,23 @@ impl ApiBuilder {
     pub fn new() -> Self {
         let cache = Cache::default();
         Self::from_cache(cache)
+    }
+
+    /// Creates API with values potentially from environment variables.
+    /// HF_HOME decides the location of the cache folder
+    /// HF_ENDPOINT modifies the URL for the huggingface location
+    /// to download files from.
+    /// ```
+    /// use hf_hub::api::sync::ApiBuilder;
+    /// let api = ApiBuilder::from_env().build().unwrap();
+    /// ```
+    pub fn from_env() -> Self {
+        let cache = Cache::from_env();
+        let mut builder = Self::from_cache(cache);
+        if let Ok(endpoint) = std::env::var(HF_ENDPOINT) {
+            builder = builder.with_endpoint(endpoint);
+        }
+        builder
     }
 
     /// From a given cache

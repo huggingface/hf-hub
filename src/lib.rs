@@ -13,6 +13,8 @@ use std::path::PathBuf;
 #[cfg(any(feature = "tokio", feature = "ureq"))]
 pub mod api;
 
+const HF_HOME: &str = "HF_HOME";
+
 /// The type of repo to interact with
 #[derive(Debug, Clone, Copy)]
 pub enum RepoType {
@@ -35,6 +37,19 @@ impl Cache {
     /// Creates a new cache object location
     pub fn new(path: PathBuf) -> Self {
         Self { path }
+    }
+
+    /// Creates cache from environment variable HF_HOME (if defined) otherwise
+    /// defaults to [`home_dir`]/.cache/huggingface/
+    pub fn from_env() -> Self {
+        match std::env::var(HF_HOME) {
+            Ok(home) => {
+                let mut path: PathBuf = home.into();
+                path.push("hub");
+                Self::new(path)
+            }
+            Err(_) => Self::default(),
+        }
     }
 
     /// Creates a new cache object location
@@ -137,6 +152,7 @@ impl CacheRepo {
     fn new(cache: Cache, repo: Repo) -> Self {
         Self { cache, repo }
     }
+
     /// This will get the location of the file within the cache for the remote
     /// `filename`. Will return `None` if file is not already present in cache.
     pub fn get(&self, filename: &str) -> Option<PathBuf> {
@@ -197,15 +213,9 @@ impl CacheRepo {
 
 impl Default for Cache {
     fn default() -> Self {
-        let mut path = match std::env::var("HF_HOME") {
-            Ok(home) => home.into(),
-            Err(_) => {
-                let mut cache = dirs::home_dir().expect("Cache directory cannot be found");
-                cache.push(".cache");
-                cache.push("huggingface");
-                cache
-            }
-        };
+        let mut path = dirs::home_dir().expect("Cache directory cannot be found");
+        path.push(".cache");
+        path.push("huggingface");
         path.push("hub");
         Self::new(path)
     }
@@ -338,9 +348,9 @@ mod tests {
     #[test]
     #[cfg(not(target_os = "windows"))]
     fn token_path() {
-        let cache = Cache::default();
+        let cache = Cache::from_env();
         let token_path = cache.token_path().to_str().unwrap().to_string();
-        if let Ok(hf_home) = std::env::var("HF_HOME") {
+        if let Ok(hf_home) = std::env::var(HF_HOME) {
             assert_eq!(token_path, format!("{hf_home}/token"));
         } else {
             let n = "huggingface/token".len();
@@ -351,9 +361,9 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn token_path() {
-        let cache = Cache::default();
+        let cache = Cache::from_env();
         let token_path = cache.token_path().to_str().unwrap().to_string();
-        if let Ok(hf_home) = std::env::var("HF_HOME") {
+        if let Ok(hf_home) = std::env::var(HF_HOME) {
             assert_eq!(token_path, format!("{hf_home}\\token"));
         } else {
             let n = "huggingface/token".len();
