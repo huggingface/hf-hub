@@ -1,5 +1,5 @@
 use super::Progress as SyncProgress;
-use super::RepoInfo;
+use super::{RepoInfo, HF_ENDPOINT};
 use crate::{Cache, Repo, RepoType};
 use futures::StreamExt;
 use indicatif::ProgressBar;
@@ -133,6 +133,23 @@ impl ApiBuilder {
         Self::from_cache(cache)
     }
 
+    /// Creates API with values potentially from environment variables.
+    /// HF_HOME decides the location of the cache folder
+    /// HF_ENDPOINT modifies the URL for the huggingface location
+    /// to download files from.
+    /// ```
+    /// use hf_hub::api::tokio::ApiBuilder;
+    /// let api = ApiBuilder::from_env().build().unwrap();
+    /// ```
+    pub fn from_env() -> Self {
+        let cache = Cache::from_env();
+        let mut builder = Self::from_cache(cache);
+        if let Ok(endpoint) = std::env::var(HF_ENDPOINT) {
+            builder = builder.with_endpoint(endpoint);
+        }
+        builder
+    }
+
     /// High CPU download
     ///
     /// This may cause issues on regular desktops as it will saturate
@@ -141,12 +158,10 @@ impl ApiBuilder {
     /// saturate the bandwidth (>500MB/s) better.
     /// ```
     /// use hf_hub::api::tokio::ApiBuilder;
-    /// let api = ApiBuilder::high().build().unwrap();
+    /// let api = ApiBuilder::new().high().build().unwrap();
     /// ```
-    pub fn high() -> Self {
-        let cache = Cache::default();
-        Self::from_cache(cache)
-            .with_max_files(num_cpus::get())
+    pub fn high(self) -> Self {
+        self.with_max_files(num_cpus::get())
             .with_chunk_size(Some(10_000_000))
     }
 
