@@ -1,4 +1,6 @@
-use indicatif::{ProgressBar, ProgressStyle};
+use std::{collections::VecDeque, time::Duration};
+
+use indicatif::{style::ProgressTracker, HumanBytes, ProgressBar, ProgressStyle};
 use serde::Deserialize;
 
 /// The asynchronous version of the API
@@ -33,9 +35,9 @@ impl Progress for ProgressBar {
         self.set_length(size as u64);
         self.set_style(
                 ProgressStyle::with_template(
-                    "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
-                )
-                    .unwrap(), // .progress_chars("━ "),
+                    "{msg} [{elapsed_precise}] [{wide_bar}] {bytes}/{total_bytes} {bytes_per_sec_smoothed} ({eta})",
+                ).unwrap().with_key("bytes_per_sec_smoothed", MovingAvgRate::default())
+                    ,
             );
         let maxlength = 30;
         let message = if filename.len() > maxlength {
@@ -70,4 +72,49 @@ pub struct RepoInfo {
 
     /// The commit sha of the repo.
     pub sha: String,
+}
+
+#[derive(Clone, Default)]
+struct MovingAvgRate {
+    samples: VecDeque<(std::time::Instant, u64)>,
+}
+
+impl ProgressTracker for MovingAvgRate {
+    fn clone_box(&self) -> Box<dyn ProgressTracker> {
+        Box::new(self.clone())
+    }
+
+    fn tick(&mut self, state: &indicatif::ProgressState, now: std::time::Instant) {
+        // sample at most every 20ms
+        if self
+            .samples
+            .back()
+            .map_or(true, |(prev, _)| (now - *prev) > Duration::from_millis(20))
+        {
+            self.samples.push_back((now, state.pos()));
+        }
+
+        while let Some(first) = self.samples.front() {
+            if now - first.0 > Duration::from_secs(1) {
+                self.samples.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn reset(&mut self, _state: &indicatif::ProgressState, _now: std::time::Instant) {
+        self.samples = Default::default();
+    }
+
+    fn write(&self, _state: &indicatif::ProgressState, w: &mut dyn std::fmt::Write) {
+        match (self.samples.front(), self.samples.back()) {
+            (Some((t0, p0)), Some((t1, p1))) if self.samples.len() > 1 => {
+                let elapsed_ms = (*t1 - *t0).as_millis();
+                let rate = ((p1 - p0) as f64 * 1000f64 / elapsed_ms as f64) as u64;
+                write!(w, "{}/s", HumanBytes(rate)).unwrap()
+            }
+            _ => write!(w, "-").unwrap(),
+        }
+    }
 }

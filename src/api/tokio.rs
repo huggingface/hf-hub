@@ -599,19 +599,23 @@ impl ApiRepo {
             let (start, stop) = chunk?;
             temporaries.push(Reverse((start, stop)));
 
+            let mut modified = false;
             while let Some(Reverse((min, max))) = temporaries.pop() {
                 if min as u64 == committed {
-                    let mut file = tokio::fs::OpenOptions::new()
-                        .write(true)
-                        .open(&filename)
-                        .await?;
-                    file.seek(SeekFrom::Start(length as u64)).await?;
-                    file.write_all(&committed.to_le_bytes()).await?;
                     committed = max as u64 + 1;
+                    modified = true;
                 } else {
                     temporaries.push(Reverse((min, max)));
                     break;
                 }
+            }
+            if modified {
+                let mut file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&filename)
+                    .await?;
+                file.seek(SeekFrom::Start(length as u64)).await?;
+                file.write_all(&committed.to_le_bytes()).await?;
             }
         }
         tokio::fs::OpenOptions::new()
@@ -637,11 +641,6 @@ impl ApiRepo {
     {
         // Process each socket concurrently.
         let range = format!("bytes={start}-{stop}");
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(filename)
-            .await?;
-        file.seek(SeekFrom::Start(start as u64)).await?;
         let response = client
             .get(url)
             .header(RANGE, range)
@@ -649,11 +648,18 @@ impl ApiRepo {
             .await?
             .error_for_status()?;
         let mut byte_stream = response.bytes_stream();
+        let mut buf: Vec<u8> = Vec::with_capacity(stop - start);
         while let Some(next) = byte_stream.next().await {
             let next = next?;
-            file.write_all(&next).await?;
+            buf.extend(&next);
             progress.update(next.len()).await;
         }
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(filename)
+            .await?;
+        file.seek(SeekFrom::Start(start as u64)).await?;
+        file.write_all(&buf).await?;
         Ok((start, stop))
     }
 
