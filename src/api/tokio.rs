@@ -516,7 +516,7 @@ impl ApiRepo {
             .await
         {
             Ok(mut f) => {
-                let len = f.metadata().await.unwrap().len();
+                let len = f.metadata().await?.len();
                 if len == (length + N_BYTES) as u64 {
                     f.seek(SeekFrom::Start(length as u64)).await.unwrap();
                     let mut buf = [0u8; N_BYTES];
