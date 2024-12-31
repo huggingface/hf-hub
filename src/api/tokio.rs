@@ -95,7 +95,7 @@ async fn lock_file(path: PathBuf) -> Result<Handle, ApiError> {
             }
         }
     }
-    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition)?;
+    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition(lock.clone()))?;
     Ok(Handle { path, _file })
 }
 
@@ -148,8 +148,10 @@ pub enum ApiError {
     #[error("Join: {0}")]
     Join(#[from] JoinError),
 
-    #[error("Lock acquisition failed")]
-    LockAcquisition,
+    /// We failed to acquire lock for file `f`. Meaning
+    /// Someone else is writing/downloading said file
+    #[error("Lock acquisition failed: {0}")]
+    LockAcquisition(PathBuf),
 }
 
 /// Helper to create [`Api`] with all the options.
