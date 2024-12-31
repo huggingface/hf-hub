@@ -919,8 +919,7 @@ mod tests {
                     .unwrap();
 
                 let model_id = "julien-c/dummy-unknown".to_string();
-                let downloaded_path = api.model(model_id.clone()).download("config.json").unwrap();
-                downloaded_path
+                api.model(model_id.clone()).download("config.json").unwrap()
             });
             handles.push(f);
         }

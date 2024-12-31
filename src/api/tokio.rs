@@ -915,7 +915,7 @@ mod tests {
         let tmp = Arc::new(Mutex::new(TempDir::new()));
 
         let mut handles = JoinSet::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             let tmp2 = tmp.clone();
             handles.spawn(async move {
                 let api = ApiBuilder::new()
@@ -928,12 +928,10 @@ mod tests {
                 let millis: u64 = rand::random::<u8>().into();
                 tokio::time::sleep(Duration::from_millis(millis)).await;
                 let model_id = "julien-c/dummy-unknown".to_string();
-                let downloaded_path = api
-                    .model(model_id.clone())
+                api.model(model_id.clone())
                     .download("config.json")
                     .await
-                    .unwrap();
-                downloaded_path
+                    .unwrap()
             });
         }
         while let Some(handle) = handles.join_next().await {
