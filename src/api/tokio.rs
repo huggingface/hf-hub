@@ -30,7 +30,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
 
-const EXTENSION: &str = ".sync.part";
+const EXTENSION: &str = "sync.part";
 
 /// This trait is used by users of the lib
 /// to implement custom behavior during file downloads
@@ -74,28 +74,25 @@ impl Drop for Handle {
     }
 }
 
-async fn lock_file(path: PathBuf) -> Result<Handle, ApiError> {
-    let mut lock = path.clone();
-    lock.set_extension(".lock");
+async fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
+    path.set_extension("lock");
 
-    let mut n = 0;
-    while lock.exists() {
-        n += 1;
-        if n > 0 {}
-    }
     let mut lock_handle = None;
     for i in 0..30 {
-        match tokio::fs::File::create(lock.clone()).await {
-            Ok(handle) => lock_handle = Some(handle),
+        match tokio::fs::File::create_new(path.clone()).await {
+            Ok(handle) => {
+                lock_handle = Some(handle);
+                break;
+            }
             Err(_err) => {
                 if i == 0 {
-                    eprintln!("Waiting for lock");
+                    log::warn!("Waiting for lock {path:?}");
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
-    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition)?;
+    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition(path.clone()))?;
     Ok(Handle { path, _file })
 }
 
@@ -148,8 +145,10 @@ pub enum ApiError {
     #[error("Join: {0}")]
     Join(#[from] JoinError),
 
-    #[error("Lock acquisition failed")]
-    LockAcquisition,
+    /// We failed to acquire lock for file `f`. Meaning
+    /// Someone else is writing/downloading said file
+    #[error("Lock acquisition failed: {0}")]
+    LockAcquisition(PathBuf),
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -565,7 +564,6 @@ impl ApiRepo {
         // Create the file and set everything properly
         const N_BYTES: usize = size_of::<u64>();
 
-        let lock = lock_file(filename.clone());
         let start = match tokio::fs::OpenOptions::new()
             .read(true)
             .open(&filename)
@@ -574,7 +572,7 @@ impl ApiRepo {
             Ok(mut f) => {
                 let len = f.metadata().await?.len();
                 if len == (length + N_BYTES) as u64 {
-                    f.seek(SeekFrom::Start(length as u64)).await.unwrap();
+                    f.seek(SeekFrom::Start(length as u64)).await?;
                     let mut buf = [0u8; N_BYTES];
                     let n = f.read(buf.as_mut_slice()).await?;
                     if n == N_BYTES {
@@ -681,7 +679,6 @@ impl ApiRepo {
             .set_len(length as u64)
             .await?;
         progressbar.finish().await;
-        drop(lock);
         Ok(filename)
     }
 
@@ -801,15 +798,16 @@ impl ApiRepo {
         let blob_path = cache.blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
+        let lock = lock_file(blob_path.clone()).await;
         progress.init(metadata.size, filename).await;
         let mut tmp_path = blob_path.clone();
         tmp_path.set_extension(EXTENSION);
         let tmp_filename = self
             .download_tempfile(&url, metadata.size, tmp_path, progress)
-            .await
-            .unwrap();
+            .await?;
 
         tokio::fs::rename(&tmp_filename, &blob_path).await?;
+        drop(lock);
 
         let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
         pointer_path.push(filename);
@@ -910,6 +908,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn locking() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio::task::JoinSet;
+        let tmp = Arc::new(Mutex::new(TempDir::new()));
+
+        let mut handles = JoinSet::new();
+        for _ in 0..5 {
+            let tmp2 = tmp.clone();
+            handles.spawn(async move {
+                let api = ApiBuilder::new()
+                    .with_progress(false)
+                    .with_cache_dir(tmp2.lock().await.path.clone())
+                    .build()
+                    .unwrap();
+
+                // 0..256ms sleep to randomize potential clashes
+                let millis: u64 = rand::random::<u8>().into();
+                tokio::time::sleep(Duration::from_millis(millis)).await;
+                let model_id = "julien-c/dummy-unknown".to_string();
+                api.model(model_id.clone())
+                    .download("config.json")
+                    .await
+                    .unwrap()
+            });
+        }
+        while let Some(handle) = handles.join_next().await {
+            let downloaded_path = handle.unwrap();
+            assert!(downloaded_path.exists());
+            let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+            assert_eq!(
+                val[..],
+                hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn resume() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
@@ -939,7 +975,7 @@ mod tests {
         let new_size = (size as f32 * truncate) as u64;
         file.set_len(new_size).unwrap();
         let mut blob_part = blob.clone();
-        blob_part.set_extension(".sync.part");
+        blob_part.set_extension("sync.part");
         std::fs::rename(blob, &blob_part).unwrap();
         std::fs::remove_file(&downloaded_path).unwrap();
         let content = std::fs::read(&*blob_part).unwrap();
@@ -975,7 +1011,7 @@ mod tests {
         file.write_all(&new_size.to_le_bytes()).unwrap();
 
         let mut blob_part = blob.clone();
-        blob_part.set_extension(".sync.part");
+        blob_part.set_extension("sync.part");
         std::fs::rename(blob, &blob_part).unwrap();
         std::fs::remove_file(&downloaded_path).unwrap();
         let content = std::fs::read(&*blob_part).unwrap();
@@ -1017,7 +1053,7 @@ mod tests {
         file.write_all(&[0]).unwrap();
 
         let mut blob_part = blob.clone();
-        blob_part.set_extension(".sync.part");
+        blob_part.set_extension("sync.part");
         std::fs::rename(blob, &blob_part).unwrap();
         std::fs::remove_file(&downloaded_path).unwrap();
         let content = std::fs::read(&*blob_part).unwrap();
