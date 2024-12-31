@@ -30,7 +30,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
 
-const EXTENSION: &str = ".sync.part";
+const EXTENSION: &str = "sync.part";
 
 /// This trait is used by users of the lib
 /// to implement custom behavior during file downloads
@@ -75,17 +75,17 @@ impl Drop for Handle {
 }
 
 async fn lock_file(path: PathBuf) -> Result<Handle, ApiError> {
-    let mut lock = path.clone();
-    lock.set_extension(".lock");
+    let mut path = path.clone();
+    path.set_extension("lock");
 
     let mut n = 0;
-    while lock.exists() {
+    while path.exists() {
         n += 1;
         if n > 0 {}
     }
     let mut lock_handle = None;
     for i in 0..30 {
-        match tokio::fs::File::create(lock.clone()).await {
+        match tokio::fs::File::create(path.clone()).await {
             Ok(handle) => lock_handle = Some(handle),
             Err(_err) => {
                 if i == 0 {
@@ -95,7 +95,7 @@ async fn lock_file(path: PathBuf) -> Result<Handle, ApiError> {
             }
         }
     }
-    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition(lock.clone()))?;
+    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition(path.clone()))?;
     Ok(Handle { path, _file })
 }
 
@@ -941,7 +941,7 @@ mod tests {
         let new_size = (size as f32 * truncate) as u64;
         file.set_len(new_size).unwrap();
         let mut blob_part = blob.clone();
-        blob_part.set_extension(".sync.part");
+        blob_part.set_extension("sync.part");
         std::fs::rename(blob, &blob_part).unwrap();
         std::fs::remove_file(&downloaded_path).unwrap();
         let content = std::fs::read(&*blob_part).unwrap();
@@ -977,7 +977,7 @@ mod tests {
         file.write_all(&new_size.to_le_bytes()).unwrap();
 
         let mut blob_part = blob.clone();
-        blob_part.set_extension(".sync.part");
+        blob_part.set_extension("sync.part");
         std::fs::rename(blob, &blob_part).unwrap();
         std::fs::remove_file(&downloaded_path).unwrap();
         let content = std::fs::read(&*blob_part).unwrap();
@@ -1019,7 +1019,7 @@ mod tests {
         file.write_all(&[0]).unwrap();
 
         let mut blob_part = blob.clone();
-        blob_part.set_extension(".sync.part");
+        blob_part.set_extension("sync.part");
         std::fs::rename(blob, &blob_part).unwrap();
         std::fs::remove_file(&downloaded_path).unwrap();
         let content = std::fs::read(&*blob_part).unwrap();

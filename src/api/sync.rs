@@ -30,7 +30,7 @@ type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
 
 /// Specific name for the sync part of the resumable file
-const EXTENSION: &str = ".part";
+const EXTENSION: &str = "part";
 
 struct Wrapper<'a, P: Progress, R: Read> {
     progress: &'a mut P,
@@ -70,6 +70,7 @@ impl HeaderAgent {
     }
 }
 
+#[derive(Debug)]
 struct Handle {
     _file: std::fs::File,
     path: PathBuf,
@@ -81,27 +82,27 @@ impl Drop for Handle {
 }
 
 fn lock_file(path: PathBuf) -> Result<Handle, ApiError> {
-    let mut lock = path.clone();
-    lock.set_extension(".lock");
+    let mut path = path.clone();
+    path.set_extension("lock");
 
     let mut n = 0;
-    while lock.exists() {
+    while path.exists() {
         n += 1;
         if n > 0 {}
     }
     let mut lock_handle = None;
     for i in 0..30 {
-        match std::fs::File::create(lock.clone()) {
+        match std::fs::File::create(path.clone()) {
             Ok(handle) => lock_handle = Some(handle),
             Err(_err) => {
                 if i == 0 {
-                    eprintln!("Waiting for lock");
+                    log::warn!("Waiting for lock {path:?}");
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }
         }
     }
-    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition(lock.clone()))?;
+    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition(path.clone()))?;
     Ok(Handle { path, _file })
 }
 
@@ -491,7 +492,7 @@ impl Api {
         let filepath = tmp_path;
 
         // Create the file and set everything properly
-        let lock = lock_file(filepath.clone())?;
+        let lock = lock_file(filepath.clone()).expect("lock");
 
         let mut file = match std::fs::OpenOptions::new().append(true).open(&filepath) {
             Ok(f) => f,
@@ -694,11 +695,12 @@ impl ApiRepo {
 
         let mut tmp_path = blob_path.clone();
         tmp_path.set_extension(EXTENSION);
-        let tmp_filename =
-            self.api
-                .download_tempfile(&url, metadata.size, progress, tmp_path, filename)?;
+        let tmp_filename = self
+            .api
+            .download_tempfile(&url, metadata.size, progress, tmp_path, filename)
+            .expect("downloaded");
 
-        std::fs::rename(tmp_filename, &blob_path)?;
+        std::fs::rename(tmp_filename, &blob_path).expect("rename");
         let mut pointer_path = self
             .api
             .cache
@@ -707,7 +709,7 @@ impl ApiRepo {
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
-        symlink_or_rename(&blob_path, &pointer_path)?;
+        symlink_or_rename(&blob_path, &pointer_path).expect("rename");
         self.api
             .cache
             .repo(self.repo.clone())
@@ -847,7 +849,7 @@ mod tests {
         let new_size = (size as f32 * truncate) as u64;
         file.set_len(new_size).unwrap();
         let mut blob_part = blob.clone();
-        blob_part.set_extension(".part");
+        blob_part.set_extension("part");
         std::fs::rename(blob, &blob_part).unwrap();
         std::fs::remove_file(&downloaded_path).unwrap();
         let content = std::fs::read(&*blob_part).unwrap();
@@ -880,7 +882,7 @@ mod tests {
         file.write_all(&[0]).unwrap();
 
         let mut blob_part = blob.clone();
-        blob_part.set_extension(".part");
+        blob_part.set_extension("part");
         std::fs::rename(blob, &blob_part).unwrap();
         std::fs::remove_file(&downloaded_path).unwrap();
         let content = std::fs::read(&*blob_part).unwrap();
@@ -893,6 +895,8 @@ mod tests {
         let new_downloaded_path = api.model(model_id.clone()).download("config.json").unwrap();
         let val = Sha256::digest(std::fs::read(&*new_downloaded_path).unwrap());
         assert_eq!(downloaded_path, new_downloaded_path);
+        println!("{new_downloaded_path:?}");
+        println!("Corrupted {val:#x}");
         assert_eq!(
             val[..],
             // Corrupted sha
