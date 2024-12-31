@@ -74,24 +74,21 @@ impl Drop for Handle {
     }
 }
 
-async fn lock_file(path: PathBuf) -> Result<Handle, ApiError> {
-    let mut path = path.clone();
+async fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
     path.set_extension("lock");
 
-    let mut n = 0;
-    while path.exists() {
-        n += 1;
-        if n > 0 {}
-    }
     let mut lock_handle = None;
     for i in 0..30 {
-        match tokio::fs::File::create(path.clone()).await {
-            Ok(handle) => lock_handle = Some(handle),
+        match tokio::fs::File::create_new(path.clone()).await {
+            Ok(handle) => {
+                lock_handle = Some(handle);
+                break;
+            }
             Err(_err) => {
                 if i == 0 {
-                    eprintln!("Waiting for lock");
+                    log::warn!("Waiting for lock {path:?}");
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
@@ -567,7 +564,6 @@ impl ApiRepo {
         // Create the file and set everything properly
         const N_BYTES: usize = size_of::<u64>();
 
-        let lock = lock_file(filename.clone());
         let start = match tokio::fs::OpenOptions::new()
             .read(true)
             .open(&filename)
@@ -576,7 +572,7 @@ impl ApiRepo {
             Ok(mut f) => {
                 let len = f.metadata().await?.len();
                 if len == (length + N_BYTES) as u64 {
-                    f.seek(SeekFrom::Start(length as u64)).await.unwrap();
+                    f.seek(SeekFrom::Start(length as u64)).await?;
                     let mut buf = [0u8; N_BYTES];
                     let n = f.read(buf.as_mut_slice()).await?;
                     if n == N_BYTES {
@@ -683,7 +679,6 @@ impl ApiRepo {
             .set_len(length as u64)
             .await?;
         progressbar.finish().await;
-        drop(lock);
         Ok(filename)
     }
 
@@ -803,15 +798,16 @@ impl ApiRepo {
         let blob_path = cache.blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
+        let lock = lock_file(blob_path.clone()).await;
         progress.init(metadata.size, filename).await;
         let mut tmp_path = blob_path.clone();
         tmp_path.set_extension(EXTENSION);
         let tmp_filename = self
             .download_tempfile(&url, metadata.size, tmp_path, progress)
-            .await
-            .unwrap();
+            .await?;
 
         tokio::fs::rename(&tmp_filename, &blob_path).await?;
+        drop(lock);
 
         let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
         pointer_path.push(filename);
@@ -909,6 +905,46 @@ mod tests {
         // Make sure the file is now seeable without connection
         let cache_path = api.cache.repo(repo.clone()).get("config.json").unwrap();
         assert_eq!(cache_path, downloaded_path);
+    }
+
+    #[tokio::test]
+    async fn locking() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio::task::JoinSet;
+        let tmp = Arc::new(Mutex::new(TempDir::new()));
+
+        let mut handles = JoinSet::new();
+        for _ in 0..4 {
+            let tmp2 = tmp.clone();
+            handles.spawn(async move {
+                let api = ApiBuilder::new()
+                    .with_progress(false)
+                    .with_cache_dir(tmp2.lock().await.path.clone())
+                    .build()
+                    .unwrap();
+
+                // 0..256ms sleep to randomize potential clashes
+                let millis: u64 = rand::random::<u8>().into();
+                tokio::time::sleep(Duration::from_millis(millis)).await;
+                let model_id = "julien-c/dummy-unknown".to_string();
+                let downloaded_path = api
+                    .model(model_id.clone())
+                    .download("config.json")
+                    .await
+                    .unwrap();
+                downloaded_path
+            });
+        }
+        while let Some(handle) = handles.join_next().await {
+            let downloaded_path = handle.unwrap();
+            assert!(downloaded_path.exists());
+            let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+            assert_eq!(
+                val[..],
+                hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
+            );
+        }
     }
 
     #[tokio::test]

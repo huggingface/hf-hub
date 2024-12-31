@@ -81,20 +81,17 @@ impl Drop for Handle {
     }
 }
 
-fn lock_file(path: PathBuf) -> Result<Handle, ApiError> {
-    let mut path = path.clone();
+fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
     path.set_extension("lock");
 
-    let mut n = 0;
-    while path.exists() {
-        n += 1;
-        if n > 0 {}
-    }
     let mut lock_handle = None;
     for i in 0..30 {
-        match std::fs::File::create(path.clone()) {
-            Ok(handle) => lock_handle = Some(handle),
-            Err(_err) => {
+        match std::fs::File::create_new(path.clone()) {
+            Ok(handle) => {
+                lock_handle = Some(handle);
+                break;
+            }
+            _ => {
                 if i == 0 {
                     log::warn!("Waiting for lock {path:?}");
                 }
@@ -492,7 +489,6 @@ impl Api {
         let filepath = tmp_path;
 
         // Create the file and set everything properly
-        let lock = lock_file(filepath.clone()).expect("lock");
 
         let mut file = match std::fs::OpenOptions::new().append(true).open(&filepath) {
             Ok(f) => f,
@@ -521,7 +517,6 @@ impl Api {
             }
         }
         res?;
-        drop(lock);
         Ok(filepath)
     }
 
@@ -693,14 +688,16 @@ impl ApiRepo {
             .blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
+        let lock = lock_file(blob_path.clone())?;
         let mut tmp_path = blob_path.clone();
         tmp_path.set_extension(EXTENSION);
-        let tmp_filename = self
-            .api
-            .download_tempfile(&url, metadata.size, progress, tmp_path, filename)
-            .expect("downloaded");
+        let tmp_filename =
+            self.api
+                .download_tempfile(&url, metadata.size, progress, tmp_path, filename)?;
 
-        std::fs::rename(tmp_filename, &blob_path).expect("rename");
+        std::fs::rename(tmp_filename, &blob_path)?;
+        drop(lock);
+
         let mut pointer_path = self
             .api
             .cache
@@ -709,7 +706,7 @@ impl ApiRepo {
         pointer_path.push(filename);
         std::fs::create_dir_all(pointer_path.parent().unwrap()).ok();
 
-        symlink_or_rename(&blob_path, &pointer_path).expect("rename");
+        symlink_or_rename(&blob_path, &pointer_path)?;
         self.api
             .cache
             .repo(self.repo.clone())
@@ -902,6 +899,40 @@ mod tests {
             // Corrupted sha
             hex!("32b83c94ee55a8d43d68b03a859975f6789d647342ddeb2326fcd5e0127035b5")
         );
+    }
+
+    #[test]
+    fn locking() {
+        use std::sync::{Arc, Mutex};
+        let tmp = Arc::new(Mutex::new(TempDir::new()));
+
+        let mut handles = vec![];
+        for _ in 0..5 {
+            let tmp2 = tmp.clone();
+            let f = std::thread::spawn(move || {
+                // 0..256ms sleep to randomize potential clashes
+                std::thread::sleep(Duration::from_millis(rand::random::<u8>().into()));
+                let api = ApiBuilder::new()
+                    .with_progress(false)
+                    .with_cache_dir(tmp2.lock().unwrap().path.clone())
+                    .build()
+                    .unwrap();
+
+                let model_id = "julien-c/dummy-unknown".to_string();
+                let downloaded_path = api.model(model_id.clone()).download("config.json").unwrap();
+                downloaded_path
+            });
+            handles.push(f);
+        }
+        while let Some(handle) = handles.pop() {
+            let downloaded_path = handle.join().unwrap();
+            assert!(downloaded_path.exists());
+            let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+            assert_eq!(
+                val[..],
+                hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
+            );
+        }
     }
 
     #[test]
