@@ -11,6 +11,7 @@ use std::io::Seek;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 use thiserror::Error;
 use ureq::{Agent, AgentBuilder, Request};
 
@@ -29,7 +30,7 @@ type HeaderMap = HashMap<&'static str, String>;
 type HeaderName = &'static str;
 
 /// Specific name for the sync part of the resumable file
-const EXTENTION: &str = ".part";
+const EXTENSION: &str = ".part";
 
 struct Wrapper<'a, P: Progress, R: Read> {
     progress: &'a mut P,
@@ -67,6 +68,41 @@ impl HeaderAgent {
         }
         request
     }
+}
+
+struct Handle {
+    _file: std::fs::File,
+    path: PathBuf,
+}
+impl Drop for Handle {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.path).expect("Removing lockfile")
+    }
+}
+
+fn lock_file(path: PathBuf) -> Result<Handle, ApiError> {
+    let mut lock = path.clone();
+    lock.set_extension(".lock");
+
+    let mut n = 0;
+    while lock.exists() {
+        n += 1;
+        if n > 0 {}
+    }
+    let mut lock_handle = None;
+    for i in 0..30 {
+        match std::fs::File::create(lock.clone()) {
+            Ok(handle) => lock_handle = Some(handle),
+            Err(_err) => {
+                if i == 0 {
+                    eprintln!("Waiting for lock");
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition)?;
+    Ok(Handle { path, _file })
 }
 
 #[derive(Debug, Error)]
@@ -111,6 +147,10 @@ pub enum ApiError {
     /// The part file is corrupted
     #[error("Invalid part file - corrupted file")]
     InvalidResume,
+
+    /// Lock acquisition
+    #[error("Unable to acquire lock")]
+    LockAcquisition,
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -450,6 +490,7 @@ impl Api {
         let filepath = tmp_path;
 
         // Create the file and set everything properly
+        let lock = lock_file(filepath.clone())?;
 
         let mut file = match std::fs::OpenOptions::new().append(true).open(&filepath) {
             Ok(f) => f,
@@ -478,6 +519,7 @@ impl Api {
             }
         }
         res?;
+        drop(lock);
         Ok(filepath)
     }
 
@@ -650,7 +692,7 @@ impl ApiRepo {
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
         let mut tmp_path = blob_path.clone();
-        tmp_path.set_extension(EXTENTION);
+        tmp_path.set_extension(EXTENSION);
         let tmp_filename =
             self.api
                 .download_tempfile(&url, metadata.size, progress, tmp_path, filename)?;
@@ -669,6 +711,8 @@ impl ApiRepo {
             .cache
             .repo(self.repo.clone())
             .create_ref(&metadata.commit_hash)?;
+
+        assert!(pointer_path.exists());
 
         Ok(pointer_path)
     }
@@ -847,7 +891,6 @@ mod tests {
         );
         let new_downloaded_path = api.model(model_id.clone()).download("config.json").unwrap();
         let val = Sha256::digest(std::fs::read(&*new_downloaded_path).unwrap());
-        println!("Sha {val:#x}");
         assert_eq!(downloaded_path, new_downloaded_path);
         assert_eq!(
             val[..],
@@ -1096,4 +1139,16 @@ mod tests {
             .unwrap();
         assert_eq!(api.endpoint, fake_endpoint);
     }
+
+    // #[test]
+    // fn real() {
+    //     let api = Api::new().unwrap();
+    //     let repo = api.model("bert-base-uncased".to_string());
+    //     let weights = repo.get("model.safetensors").unwrap();
+    //     let val = Sha256::digest(std::fs::read(&*weights).unwrap());
+    //     assert_eq!(
+    //         val[..],
+    //         hex!("68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3")
+    //     );
+    // }
 }

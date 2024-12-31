@@ -18,6 +18,7 @@ use std::collections::BinaryHeap;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
@@ -29,7 +30,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
 const NAME: &str = env!("CARGO_PKG_NAME");
 
-const EXTENTION: &str = ".sync.part";
+const EXTENSION: &str = ".sync.part";
 
 /// This trait is used by users of the lib
 /// to implement custom behavior during file downloads
@@ -61,6 +62,41 @@ impl Progress for () {
     async fn init(&mut self, _size: usize, _filename: &str) {}
     async fn finish(&mut self) {}
     async fn update(&mut self, _size: usize) {}
+}
+
+struct Handle {
+    _file: tokio::fs::File,
+    path: PathBuf,
+}
+impl Drop for Handle {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.path).expect("Removing lockfile")
+    }
+}
+
+async fn lock_file(path: PathBuf) -> Result<Handle, ApiError> {
+    let mut lock = path.clone();
+    lock.set_extension(".lock");
+
+    let mut n = 0;
+    while lock.exists() {
+        n += 1;
+        if n > 0 {}
+    }
+    let mut lock_handle = None;
+    for i in 0..30 {
+        match tokio::fs::File::create(lock.clone()).await {
+            Ok(handle) => lock_handle = Some(handle),
+            Err(_err) => {
+                if i == 0 {
+                    eprintln!("Waiting for lock");
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+    }
+    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition)?;
+    Ok(Handle { path, _file })
 }
 
 #[derive(Debug, Error)]
@@ -111,6 +147,9 @@ pub enum ApiError {
     /// Join failed
     #[error("Join: {0}")]
     Join(#[from] JoinError),
+
+    #[error("Lock acquisition failed")]
+    LockAcquisition,
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -525,6 +564,8 @@ impl ApiRepo {
 
         // Create the file and set everything properly
         const N_BYTES: usize = size_of::<u64>();
+
+        let lock = lock_file(filename.clone());
         let start = match tokio::fs::OpenOptions::new()
             .read(true)
             .open(&filename)
@@ -640,6 +681,7 @@ impl ApiRepo {
             .set_len(length as u64)
             .await?;
         progressbar.finish().await;
+        drop(lock);
         Ok(filename)
     }
 
@@ -761,7 +803,7 @@ impl ApiRepo {
 
         progress.init(metadata.size, filename).await;
         let mut tmp_path = blob_path.clone();
-        tmp_path.set_extension(EXTENTION);
+        tmp_path.set_extension(EXTENSION);
         let tmp_filename = self
             .download_tempfile(&url, metadata.size, tmp_path, progress)
             .await
@@ -1229,4 +1271,17 @@ mod tests {
             })
         );
     }
+
+    // #[tokio::test]
+    // async fn real() {
+    //     let api = Api::new().unwrap();
+    //     let repo = api.model("bert-base-uncased".to_string());
+    //     let weights = repo.get("model.safetensors").await.unwrap();
+    //     let val = Sha256::digest(std::fs::read(&*weights).unwrap());
+    //     println!("Digest {val:#x}");
+    //     assert_eq!(
+    //         val[..],
+    //         hex!("68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3")
+    //     );
+    // }
 }
