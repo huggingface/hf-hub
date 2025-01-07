@@ -656,7 +656,7 @@ impl ApiRepo {
             let mut modified = false;
             while let Some(Reverse((min, max))) = temporaries.pop() {
                 if min as u64 == committed {
-                    committed = max as u64 + 1;
+                    committed = max as u64;
                     modified = true;
                 } else {
                     temporaries.push(Reverse((min, max)));
@@ -1151,6 +1151,8 @@ mod tests {
         let api = ApiBuilder::new()
             .with_progress(false)
             .with_cache_dir(tmp.path.clone())
+            .with_max_files(100)
+            .with_chunk_size(10_000)
             .build()
             .unwrap();
         let repo = Repo::with_revision(
