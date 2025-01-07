@@ -75,6 +75,7 @@ struct Handle {
 
 impl Drop for Handle {
     fn drop(&mut self) {
+        println!("Released lock on {:?}", std::thread::current().id());
         unlock(&self.file);
     }
 }
@@ -94,6 +95,7 @@ fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
     if res != 0 {
         Err(ApiError::LockAcquisition(path))
     } else {
+        println!("Acquired lock on {:?}", std::thread::current().id());
         Ok(Handle { file })
     }
 }
