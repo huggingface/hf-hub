@@ -593,11 +593,10 @@ impl ApiRepo {
                 0
             }
         };
-        println!("Resuming at {start} for {filename:?} - length {length}");
         progressbar.update(start).await;
 
         let chunk_size = self.api.chunk_size.unwrap_or(length);
-        let n_chunks = length.div_ceil(chunk_size);
+        let n_chunks = length / chunk_size;
         let mut handles = Vec::with_capacity(n_chunks);
         for start in (start..length).step_by(chunk_size) {
             let url = url.to_string();
@@ -657,7 +656,7 @@ impl ApiRepo {
             let mut modified = false;
             while let Some(Reverse((min, max))) = temporaries.pop() {
                 if min as u64 == committed {
-                    committed = max as u64;
+                    committed = max as u64 + 1;
                     modified = true;
                 } else {
                     temporaries.push(Reverse((min, max)));
@@ -673,21 +672,12 @@ impl ApiRepo {
                 file.write_all(&committed.to_le_bytes()).await?;
             }
         }
-        println!("Truncating file {filename:?} to {length}");
-        let mut f = tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(&filename).await?;
-        println!("Current size {:?}", f.metadata().await?.len());
-        f
-            .set_len(length as u64).await?;
-        f.flush().await?;
-        let metadata = tokio::fs::OpenOptions::new()
+        tokio::fs::OpenOptions::new()
             .write(true)
             .open(&filename)
-            .await?.metadata().await?;
-        assert_eq!(metadata.len(), length as u64);
-
-        println!("Truncated file {filename:?} to {length}");
+            .await?
+            .set_len(length as u64)
+            .await?;
         progressbar.finish().await;
         Ok(filename)
     }
@@ -869,23 +859,6 @@ mod tests {
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
     use std::io::{Seek, Write};
-
-    #[macro_export]
-    /// Helper function to have cleaner error message when the hash is wrong.
-    macro_rules! assert_hash {
-        ($left: expr, $right: expr) => {
-            let content = std::fs::read(&*$left).unwrap();
-            let val = Sha256::digest(content.clone());
-            assert_eq!(
-                val[..],
-                hex!($right),
-                "{:x} != {}\nContent: {}",
-                val,
-                $right,
-                String::from_utf8_lossy(&content)
-            );
-        };
-    }
 
     struct TempDir {
         path: PathBuf,
@@ -1120,9 +1093,10 @@ mod tests {
             .await
             .unwrap();
         assert!(downloaded_path.exists());
-        assert_hash!(
-            downloaded_path,
-            "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66")
         );
 
         // Make sure the file is now seeable without connection
@@ -1149,9 +1123,10 @@ mod tests {
             .await
             .unwrap();
         assert!(downloaded_path.exists());
-        assert_hash!(
-            downloaded_path,
-            "ABDFC9F83B1103B502924072460D4C92F277C9B49C313CEF3E48CFCF7428E125"
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("ABDFC9F83B1103B502924072460D4C92F277C9B49C313CEF3E48CFCF7428E125")
         );
     }
 
@@ -1161,8 +1136,6 @@ mod tests {
         let api = ApiBuilder::new()
             .with_progress(false)
             .with_cache_dir(tmp.path.clone())
-            .with_max_files(100)
-            .with_chunk_size(Some(10_000))
             .build()
             .unwrap();
         let repo = Repo::with_revision(
@@ -1172,9 +1145,10 @@ mod tests {
         );
         let downloaded_path = api.repo(repo).download("tokenizer.json").await.unwrap();
         assert!(downloaded_path.exists());
-        assert_hash!(
-            downloaded_path,
-            "9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E"
+        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        assert_eq!(
+            val[..],
+            hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E")
         );
     }
 
