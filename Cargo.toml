@@ -41,7 +41,7 @@ native-tls = { version = "0.2.12", optional = true }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.59"
-features = ["Win32_Foundation", "Win32_Storage_FileSystem"]
+features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"]
 optional = true
 
 [target.'cfg(unix)'.dependencies.libc]

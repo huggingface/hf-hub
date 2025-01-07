@@ -116,7 +116,7 @@ mod windows {
 
     pub(crate) fn lock(file: &tokio::fs::File) -> i32 {
         unsafe {
-            let mut overlapped = mem::zeroed();
+            let mut overlapped = std::mem::zeroed();
             let flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
             LockFileEx(
                 file.as_raw_handle() as HANDLE,
@@ -129,9 +129,7 @@ mod windows {
         }
     }
     pub(crate) fn unlock(file: &tokio::fs::File) -> i32 {
-        unsafe {
-            UnlockFile(file.as_raw_handle() as HANDLE, 0, 0, !0, !0);
-        }
+        unsafe { UnlockFile(file.as_raw_handle() as HANDLE, 0, 0, !0, !0) }
     }
 }
 #[cfg(target_family = "windows")]
