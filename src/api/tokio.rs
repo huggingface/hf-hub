@@ -678,12 +678,12 @@ impl ApiRepo {
             .write(true)
             .open(&filename)?;
         f
-            .set_len(length as u64);
-        let metadata = tokio::fs::OpenOptions::new()
-            .write(true)
-            .open(&filename)
-            .await?.metadata().await?;
-        assert_eq!(metadata.len(), length as u64);
+            .set_len(length as u64)?;
+        // let metadata = tokio::fs::OpenOptions::new()
+        //     .write(true)
+        //     .open(&filename)
+        //     .await?.metadata().await?;
+        // assert_eq!(metadata.len(), length as u64);
 
         println!("Truncated file {filename:?} to {length}");
         progressbar.finish().await;
