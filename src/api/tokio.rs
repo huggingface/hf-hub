@@ -674,14 +674,11 @@ impl ApiRepo {
             }
         }
         println!("Truncating file {filename:?} to {length}");
-        let f = tokio::fs::OpenOptions::new()
+        let f = std::fs::OpenOptions::new()
             .write(true)
-            .open(&filename)
-            .await?;
+            .open(&filename)?;
         f
-            .set_len(length as u64)
-            .await?;
-        f.sync_all().await?;
+            .set_len(length as u64);
         let metadata = tokio::fs::OpenOptions::new()
             .write(true)
             .open(&filename)
