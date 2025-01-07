@@ -617,6 +617,7 @@ impl ApiRepo {
                 let mut i = 0;
                 if parallel_failures > 0 {
                     while let Err(dlerr) = chunk {
+                        println!("Trial {i}");
                         let parallel_failure_permit =
                             parallel_failures_semaphore.clone().try_acquire_owned()?;
 
@@ -1158,7 +1159,7 @@ mod tests {
         let repo = Repo::with_revision(
             "BAAI/bGe-reRanker-Base".to_string(),
             RepoType::Model,
-            "main".to_string(),
+            "refs/pr/5".to_string(),
         );
         let downloaded_path = api.repo(repo).download("tokenizer.json").await.unwrap();
         assert!(downloaded_path.exists());
