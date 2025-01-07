@@ -593,10 +593,11 @@ impl ApiRepo {
                 0
             }
         };
+        println!("Resuming at {start} for {filename:?} - length {length}");
         progressbar.update(start).await;
 
         let chunk_size = self.api.chunk_size.unwrap_or(length);
-        let n_chunks = length / chunk_size;
+        let n_chunks = (length  + chunk_size - 1) / chunk_size;
         let mut handles = Vec::with_capacity(n_chunks);
         for start in (start..length).step_by(chunk_size) {
             let url = url.to_string();
@@ -617,7 +618,6 @@ impl ApiRepo {
                 let mut i = 0;
                 if parallel_failures > 0 {
                     while let Err(dlerr) = chunk {
-                        println!("Trial {i}");
                         let parallel_failure_permit =
                             parallel_failures_semaphore.clone().try_acquire_owned()?;
 
@@ -673,12 +673,14 @@ impl ApiRepo {
                 file.write_all(&committed.to_le_bytes()).await?;
             }
         }
+        println!("Truncating file {filename:?} to {length}");
         tokio::fs::OpenOptions::new()
             .write(true)
             .open(&filename)
             .await?
             .set_len(length as u64)
             .await?;
+        println!("Truncated file {filename:?} to {length}");
         progressbar.finish().await;
         Ok(filename)
     }
