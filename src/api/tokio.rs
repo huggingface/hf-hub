@@ -674,12 +674,14 @@ impl ApiRepo {
             }
         }
         println!("Truncating file {filename:?} to {length}");
-        tokio::fs::OpenOptions::new()
+        let mut f = tokio::fs::OpenOptions::new()
             .write(true)
             .open(&filename)
-            .await?
+            .await?;
+        f
             .set_len(length as u64)
             .await?;
+        f.sync_all().await?;
         println!("Truncated file {filename:?} to {length}");
         progressbar.finish().await;
         Ok(filename)
