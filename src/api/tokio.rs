@@ -1145,10 +1145,13 @@ mod tests {
         );
         let downloaded_path = api.repo(repo).download("tokenizer.json").await.unwrap();
         assert!(downloaded_path.exists());
-        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
+        let content = std::fs::read(&*downloaded_path).unwrap();
+        let val = Sha256::digest(content.clone());
         assert_eq!(
             val[..],
-            hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E")
+            hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E"),
+            "{}",
+            String::from_utf8_lossy(&content)
         );
     }
 
