@@ -670,7 +670,7 @@ impl ApiRepo {
                     .await?;
                 file.seek(SeekFrom::Start(length as u64)).await?;
                 file.write_all(&committed.to_le_bytes()).await?;
-                file.flush().await;
+                file.flush().await?;
             }
         }
         let mut f = tokio::fs::OpenOptions::new()
