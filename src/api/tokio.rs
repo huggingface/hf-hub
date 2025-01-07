@@ -869,7 +869,9 @@ mod tests {
             assert_eq!(
                 val[..],
                 hex!($right),
-                "{}",
+                "{:x} != {}\nContent: {}",
+                val,
+                $right,
                 String::from_utf8_lossy(&content)
             );
         };
@@ -1108,10 +1110,9 @@ mod tests {
             .await
             .unwrap();
         assert!(downloaded_path.exists());
-        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
-        assert_eq!(
-            val[..],
-            hex!("d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66")
+        assert_hash!(
+            downloaded_path,
+            "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
         );
 
         // Make sure the file is now seeable without connection
