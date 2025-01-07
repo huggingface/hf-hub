@@ -28,7 +28,6 @@ reqwest = { version = "0.12.2", optional = true, default-features = false, featu
   "json",
   "stream",
 ] }
-rustls = { version = "0.23.4", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 thiserror = { version = "2", optional = true }
@@ -44,7 +43,7 @@ default = ["default-tls", "tokio", "ureq"]
 # These features are only relevant when used with the `tokio` feature, but this might change in the future.
 default-tls = ["native-tls"]
 native-tls = ["dep:reqwest", "reqwest/default", "dep:native-tls", "ureq/native-tls"]
-rustls-tls = ["dep:rustls", "reqwest/rustls-tls"]
+rustls-tls = ["reqwest/rustls-tls"]
 tokio = [
   "dep:futures",
   "dep:indicatif",
