@@ -860,6 +860,21 @@ mod tests {
     use sha2::{Digest, Sha256};
     use std::io::{Seek, Write};
 
+    #[macro_export]
+    /// Helper function to have cleaner error message when the hash is wrong.
+    macro_rules! assert_hash {
+        ($left: expr, $right: expr) => {
+            let content = std::fs::read(&*$left).unwrap();
+            let val = Sha256::digest(content.clone());
+            assert_eq!(
+                val[..],
+                hex!($right),
+                "{}",
+                String::from_utf8_lossy(&content)
+            );
+        };
+    }
+
     struct TempDir {
         path: PathBuf,
     }
@@ -1123,10 +1138,9 @@ mod tests {
             .await
             .unwrap();
         assert!(downloaded_path.exists());
-        let val = Sha256::digest(std::fs::read(&*downloaded_path).unwrap());
-        assert_eq!(
-            val[..],
-            hex!("ABDFC9F83B1103B502924072460D4C92F277C9B49C313CEF3E48CFCF7428E125")
+        assert_hash!(
+            downloaded_path,
+            "ABDFC9F83B1103B502924072460D4C92F277C9B49C313CEF3E48CFCF7428E125"
         );
     }
 
@@ -1145,13 +1159,9 @@ mod tests {
         );
         let downloaded_path = api.repo(repo).download("tokenizer.json").await.unwrap();
         assert!(downloaded_path.exists());
-        let content = std::fs::read(&*downloaded_path).unwrap();
-        let val = Sha256::digest(content.clone());
-        assert_eq!(
-            val[..],
-            hex!("9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E"),
-            "{}",
-            String::from_utf8_lossy(&content)
+        assert_hash!(
+            downloaded_path,
+            "9EB652AC4E40CC093272BBBE0F55D521CF67570060227109B5CDC20945A4489E"
         );
     }
 
