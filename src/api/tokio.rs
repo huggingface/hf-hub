@@ -16,6 +16,7 @@ use reqwest::{
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::num::ParseIntError;
+use std::os::fd::{AsFd, AsRawFd};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
@@ -64,23 +65,32 @@ impl Progress for () {
 }
 
 struct Handle {
-    _file: tokio::fs::File,
-    path: PathBuf,
+    file: tokio::fs::File,
 }
+
 impl Drop for Handle {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.path).expect("Removing lockfile")
+        unsafe { libc::flock(self.file.as_fd().as_raw_fd(), libc::LOCK_UN) };
     }
 }
 
 async fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
-    use fs4::tokio::AsyncFileExt;
     path.set_extension("lock");
 
     let file = tokio::fs::File::create(path.clone()).await?;
-    file.lock_exclusive()?;
-    let _file = file;
-    Ok(Handle { path, _file })
+    let mut res = unsafe { libc::flock(file.as_fd().as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    for _ in 0..5 {
+        if res == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        res = unsafe { libc::flock(file.as_fd().as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    }
+    if res != 0 {
+        Err(ApiError::LockAcquisition(path))
+    } else {
+        Ok(Handle { file })
+    }
 }
 
 #[derive(Debug, Error)]

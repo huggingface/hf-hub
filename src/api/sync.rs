@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::io::Seek;
 use std::num::ParseIntError;
+use std::os::fd::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use thiserror::Error;
@@ -72,29 +73,31 @@ impl HeaderAgent {
 #[derive(Debug)]
 struct Handle {
     file: std::fs::File,
-    path: PathBuf,
 }
+
 impl Drop for Handle {
     fn drop(&mut self) {
-        use fs4::fs_std::FileExt;
-        println!("Unlocking file {:?}", std::thread::current().id());
-        self.file.unlock().unwrap();
-        self.file.lock_exclusive().unwrap();
-        println!("Removing file {:?}", std::thread::current().id());
-        std::fs::remove_file(&self.path).ok();
-        self.file.unlock().unwrap();
-        println!("Final {:?}", std::thread::current().id());
+        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
     }
 }
 
 fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
-    use fs4::fs_std::FileExt;
     path.set_extension("lock");
 
     let file = std::fs::File::create(path.clone())?;
-    file.lock_exclusive()?;
-    println!("Acquired lock {:?}", std::thread::current().id());
-    Ok(Handle { path, file })
+    let mut res = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    for _ in 0..5 {
+        if res == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        res = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    }
+    if res != 0 {
+        Err(ApiError::LockAcquisition(path))
+    } else {
+        Ok(Handle { file })
+    }
 }
 
 #[derive(Debug, Error)]
