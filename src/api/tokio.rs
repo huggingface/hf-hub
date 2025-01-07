@@ -597,7 +597,7 @@ impl ApiRepo {
         progressbar.update(start).await;
 
         let chunk_size = self.api.chunk_size.unwrap_or(length);
-        let n_chunks = (length  + chunk_size - 1) / chunk_size;
+        let n_chunks = length.div_ceil(chunk_size);
         let mut handles = Vec::with_capacity(n_chunks);
         for start in (start..length).step_by(chunk_size) {
             let url = url.to_string();
