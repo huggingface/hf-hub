@@ -1158,7 +1158,7 @@ mod tests {
         let repo = Repo::with_revision(
             "BAAI/bGe-reRanker-Base".to_string(),
             RepoType::Model,
-            "refs/pr/5".to_string(),
+            "main".to_string(),
         );
         let downloaded_path = api.repo(repo).download("tokenizer.json").await.unwrap();
         assert!(downloaded_path.exists());
