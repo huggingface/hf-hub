@@ -16,7 +16,6 @@ use reqwest::{
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::num::ParseIntError;
-use std::os::fd::{AsFd, AsRawFd};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
@@ -70,7 +69,7 @@ struct Handle {
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        unsafe { libc::flock(self.file.as_fd().as_raw_fd(), libc::LOCK_UN) };
+        unlock(&self.file);
     }
 }
 
@@ -78,13 +77,13 @@ async fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
     path.set_extension("lock");
 
     let file = tokio::fs::File::create(path.clone()).await?;
-    let mut res = unsafe { libc::flock(file.as_fd().as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    let mut res = lock(&file);
     for _ in 0..5 {
         if res == 0 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        res = unsafe { libc::flock(file.as_fd().as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        res = lock(&file);
     }
     if res != 0 {
         Err(ApiError::LockAcquisition(path))
@@ -92,6 +91,63 @@ async fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
         Ok(Handle { file })
     }
 }
+
+#[cfg(target_family = "unix")]
+mod unix {
+    use std::os::fd::AsRawFd;
+
+    pub(crate) fn lock(file: &tokio::fs::File) -> i32 {
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }
+    }
+    pub(crate) fn unlock(file: &tokio::fs::File) -> i32 {
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) }
+    }
+}
+#[cfg(target_family = "unix")]
+use unix::{lock, unlock};
+
+#[cfg(target_family = "windows")]
+mod windows {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        LockFileEx, UnlockFile, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
+
+    pub(crate) fn lock(file: &tokio::fs::File) -> i32 {
+        unsafe {
+            let mut overlapped = mem::zeroed();
+            let flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
+            LockFileEx(
+                file.as_raw_handle() as HANDLE,
+                flags,
+                0,
+                !0,
+                !0,
+                &mut overlapped,
+            )
+        }
+    }
+    pub(crate) fn unlock(file: &tokio::fs::File) -> i32 {
+        unsafe {
+            UnlockFile(file.as_raw_handle() as HANDLE, 0, 0, !0, !0);
+        }
+    }
+}
+#[cfg(target_family = "windows")]
+use windows::{lock, unlock};
+
+#[cfg(not(any(target_family = "unix", target_family = "windows")))]
+mod other {
+    pub(crate) fn lock(file: &tokio::fs::File) -> i32 {
+        0
+    }
+    pub(crate) fn unlock(file: &tokio::fs::File) -> i32 {
+        0
+    }
+}
+#[cfg(not(any(target_family = "unix", target_family = "windows")))]
+use other::{lock, unlock};
 
 #[derive(Debug, Error)]
 /// All errors the API can throw

@@ -5,7 +5,7 @@ fn main() {}
 #[cfg(feature = "ureq")]
 #[cfg(not(feature = "tokio"))]
 fn main() {
-    let api = hf_hub::api::sync::ApiBuilder::from_env().build().unwrap();
+    let api = hf_hub::api::sync::Api::new().unwrap();
 
     let _filename = api
         .model("meta-llama/Llama-2-7b-hf".to_string())
@@ -16,10 +16,7 @@ fn main() {
 #[cfg(feature = "tokio")]
 #[tokio::main]
 async fn main() {
-    let api = hf_hub::api::tokio::ApiBuilder::from_env()
-        .high()
-        .build()
-        .unwrap();
+    let api = hf_hub::api::tokio::Api::new().unwrap();
 
     let _filename = api
         .model("meta-llama/Llama-2-7b-hf".to_string())
