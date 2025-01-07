@@ -674,7 +674,7 @@ impl ApiRepo {
             }
         }
         println!("Truncating file {filename:?} to {length}");
-        let mut f = tokio::fs::OpenOptions::new()
+        let f = tokio::fs::OpenOptions::new()
             .write(true)
             .open(&filename)
             .await?;
@@ -682,6 +682,12 @@ impl ApiRepo {
             .set_len(length as u64)
             .await?;
         f.sync_all().await?;
+        let metadata = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&filename)
+            .await?.metadata().await?;
+        assert_eq!(metadata.len(), length as u64);
+
         println!("Truncated file {filename:?} to {length}");
         progressbar.finish().await;
         Ok(filename)
