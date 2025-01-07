@@ -672,12 +672,20 @@ impl ApiRepo {
                 file.write_all(&committed.to_le_bytes()).await?;
             }
         }
-        tokio::fs::OpenOptions::new()
+        let mut f = tokio::fs::OpenOptions::new()
             .write(true)
             .open(&filename)
-            .await?
+            .await?;
+        f
             .set_len(length as u64)
             .await?;
+        // XXX Extremely important and not obvious.
+        // Tokio::fs doesn't guarantee data is written at the end of `.await` 
+        // boundaries. Even though we await the `set_len` it may not have been
+        // committed to disk, leading to invalid rename.
+        // Forcing a flush forces the data (here the truncation) to be committed to disk
+        f.flush().await?;
+
         progressbar.finish().await;
         Ok(filename)
     }
