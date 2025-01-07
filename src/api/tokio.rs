@@ -674,16 +674,18 @@ impl ApiRepo {
             }
         }
         println!("Truncating file {filename:?} to {length}");
-        let f = std::fs::OpenOptions::new()
+        let mut f = tokio::fs::OpenOptions::new()
             .write(true)
-            .open(&filename)?;
+            .open(&filename).await?;
+        println!("Current size {:?}", f.metadata().await?.len());
         f
-            .set_len(length as u64)?;
-        // let metadata = tokio::fs::OpenOptions::new()
-        //     .write(true)
-        //     .open(&filename)
-        //     .await?.metadata().await?;
-        // assert_eq!(metadata.len(), length as u64);
+            .set_len(length as u64).await?;
+        f.flush().await?;
+        let metadata = tokio::fs::OpenOptions::new()
+            .write(true)
+            .open(&filename)
+            .await?.metadata().await?;
+        assert_eq!(metadata.len(), length as u64);
 
         println!("Truncated file {filename:?} to {length}");
         progressbar.finish().await;
