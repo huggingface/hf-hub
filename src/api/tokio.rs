@@ -1152,7 +1152,7 @@ mod tests {
             .with_progress(false)
             .with_cache_dir(tmp.path.clone())
             .with_max_files(100)
-            .with_chunk_size(10_000)
+            .with_chunk_size(Some(10_000))
             .build()
             .unwrap();
         let repo = Repo::with_revision(
