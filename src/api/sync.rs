@@ -11,7 +11,6 @@ use std::io::Seek;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
-use std::time::Duration;
 use thiserror::Error;
 use ureq::{Agent, AgentBuilder, Request};
 
@@ -72,35 +71,30 @@ impl HeaderAgent {
 
 #[derive(Debug)]
 struct Handle {
-    _file: std::fs::File,
+    file: std::fs::File,
     path: PathBuf,
 }
 impl Drop for Handle {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.path).expect("Removing lockfile")
+        use fs4::fs_std::FileExt;
+        println!("Unlocking file {:?}", std::thread::current().id());
+        self.file.unlock().unwrap();
+        self.file.lock_exclusive().unwrap();
+        println!("Removing file {:?}", std::thread::current().id());
+        std::fs::remove_file(&self.path).ok();
+        self.file.unlock().unwrap();
+        println!("Final {:?}", std::thread::current().id());
     }
 }
 
 fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
+    use fs4::fs_std::FileExt;
     path.set_extension("lock");
 
-    let mut lock_handle = None;
-    for i in 0..30 {
-        match std::fs::File::create_new(path.clone()) {
-            Ok(handle) => {
-                lock_handle = Some(handle);
-                break;
-            }
-            _ => {
-                if i == 0 {
-                    log::warn!("Waiting for lock {path:?}");
-                }
-                std::thread::sleep(Duration::from_secs(1));
-            }
-        }
-    }
-    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition(path.clone()))?;
-    Ok(Handle { path, _file })
+    let file = std::fs::File::create(path.clone())?;
+    file.lock_exclusive()?;
+    println!("Acquired lock {:?}", std::thread::current().id());
+    Ok(Handle { path, file })
 }
 
 #[derive(Debug, Error)]
@@ -769,6 +763,7 @@ mod tests {
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
     use std::io::{Seek, SeekFrom, Write};
+    use std::time::Duration;
 
     struct TempDir {
         path: PathBuf,

@@ -18,7 +18,6 @@ use std::collections::BinaryHeap;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
@@ -75,24 +74,12 @@ impl Drop for Handle {
 }
 
 async fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
+    use fs4::tokio::AsyncFileExt;
     path.set_extension("lock");
 
-    let mut lock_handle = None;
-    for i in 0..30 {
-        match tokio::fs::File::create_new(path.clone()).await {
-            Ok(handle) => {
-                lock_handle = Some(handle);
-                break;
-            }
-            Err(_err) => {
-                if i == 0 {
-                    log::warn!("Waiting for lock {path:?}");
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }
-    }
-    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition(path.clone()))?;
+    let file = tokio::fs::File::create(path.clone()).await?;
+    file.lock_exclusive()?;
+    let _file = file;
     Ok(Handle { path, _file })
 }
 
@@ -677,11 +664,9 @@ impl ApiRepo {
             .write(true)
             .open(&filename)
             .await?;
-        f
-            .set_len(length as u64)
-            .await?;
+        f.set_len(length as u64).await?;
         // XXX Extremely important and not obvious.
-        // Tokio::fs doesn't guarantee data is written at the end of `.await` 
+        // Tokio::fs doesn't guarantee data is written at the end of `.await`
         // boundaries. Even though we await the `set_len` it may not have been
         // committed to disk, leading to invalid rename.
         // Forcing a flush forces the data (here the truncation) to be committed to disk
@@ -808,7 +793,7 @@ impl ApiRepo {
         let blob_path = cache.blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
-        let lock = lock_file(blob_path.clone()).await;
+        let lock = lock_file(blob_path.clone()).await?;
         progress.init(metadata.size, filename).await;
         let mut tmp_path = blob_path.clone();
         tmp_path.set_extension(EXTENSION);
@@ -869,6 +854,7 @@ mod tests {
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
     use std::io::{Seek, Write};
+    use std::time::Duration;
 
     struct TempDir {
         path: PathBuf,
