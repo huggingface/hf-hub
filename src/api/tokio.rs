@@ -857,7 +857,7 @@ impl ApiRepo {
         let blob_path = cache.blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
-        let lock = lock_file(blob_path.clone()).await?;
+        let lock = lock_file(blob_path.clone()).await.unwrap();
         progress.init(metadata.size, filename).await;
         let mut tmp_path = blob_path.clone();
         tmp_path.set_extension(EXTENSION);
