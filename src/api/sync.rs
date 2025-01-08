@@ -11,7 +11,6 @@ use std::io::Seek;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
-use std::time::Duration;
 use thiserror::Error;
 use ureq::{Agent, AgentBuilder, Request};
 
@@ -70,38 +69,90 @@ impl HeaderAgent {
     }
 }
 
-#[derive(Debug)]
 struct Handle {
-    _file: std::fs::File,
-    path: PathBuf,
+    file: std::fs::File,
 }
+
 impl Drop for Handle {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.path).expect("Removing lockfile")
+        unlock(&self.file);
     }
 }
 
 fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
     path.set_extension("lock");
 
-    let mut lock_handle = None;
-    for i in 0..30 {
-        match std::fs::File::create_new(path.clone()) {
-            Ok(handle) => {
-                lock_handle = Some(handle);
-                break;
-            }
-            _ => {
-                if i == 0 {
-                    log::warn!("Waiting for lock {path:?}");
-                }
-                std::thread::sleep(Duration::from_secs(1));
-            }
+    let file = std::fs::File::create(path.clone())?;
+    let mut res = lock(&file);
+    for _ in 0..5 {
+        if res == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        res = lock(&file);
+    }
+    if res != 0 {
+        Err(ApiError::LockAcquisition(path))
+    } else {
+        Ok(Handle { file })
+    }
+}
+
+#[cfg(target_family = "unix")]
+mod unix {
+    use std::os::fd::AsRawFd;
+
+    pub(crate) fn lock(file: &std::fs::File) -> i32 {
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }
+    }
+    pub(crate) fn unlock(file: &std::fs::File) -> i32 {
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) }
+    }
+}
+#[cfg(target_family = "unix")]
+use unix::{lock, unlock};
+
+#[cfg(target_family = "windows")]
+mod windows {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        LockFileEx, UnlockFile, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
+
+    pub(crate) fn lock(file: &std::fs::File) -> i32 {
+        unsafe {
+            let mut overlapped = std::mem::zeroed();
+            let flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
+            let res = LockFileEx(
+                file.as_raw_handle() as HANDLE,
+                flags,
+                0,
+                !0,
+                !0,
+                &mut overlapped,
+            );
+            1 - res
         }
     }
-    let _file = lock_handle.ok_or_else(|| ApiError::LockAcquisition(path.clone()))?;
-    Ok(Handle { path, _file })
+    pub(crate) fn unlock(file: &std::fs::File) -> i32 {
+        unsafe { UnlockFile(file.as_raw_handle() as HANDLE, 0, 0, !0, !0) }
+    }
 }
+#[cfg(target_family = "windows")]
+use windows::{lock, unlock};
+
+#[cfg(not(any(target_family = "unix", target_family = "windows")))]
+mod other {
+    pub(crate) fn lock(file: &std::fs::File) -> i32 {
+        0
+    }
+    pub(crate) fn unlock(file: &std::fs::File) -> i32 {
+        0
+    }
+}
+#[cfg(not(any(target_family = "unix", target_family = "windows")))]
+use other::{lock, unlock};
 
 #[derive(Debug, Error)]
 /// All errors the API can throw
@@ -688,7 +739,7 @@ impl ApiRepo {
             .blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
-        let lock = lock_file(blob_path.clone())?;
+        let lock = lock_file(blob_path.clone()).unwrap();
         let mut tmp_path = blob_path.clone();
         tmp_path.set_extension(EXTENSION);
         let tmp_filename =
@@ -769,6 +820,7 @@ mod tests {
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
     use std::io::{Seek, SeekFrom, Write};
+    use std::time::Duration;
 
     struct TempDir {
         path: PathBuf,

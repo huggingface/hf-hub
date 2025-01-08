@@ -28,7 +28,6 @@ reqwest = { version = "0.12.2", optional = true, default-features = false, featu
   "json",
   "stream",
 ] }
-rustls = { version = "0.23.4", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 thiserror = { version = "2", optional = true }
@@ -39,12 +38,21 @@ ureq = { version = "2.8.0", optional = true, features = [
 ] }
 native-tls = { version = "0.2.12", optional = true }
 
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59"
+features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"]
+optional = true
+
+[target.'cfg(unix)'.dependencies.libc]
+version = "0.2"
+optional = true
+
 [features]
 default = ["default-tls", "tokio", "ureq"]
 # These features are only relevant when used with the `tokio` feature, but this might change in the future.
 default-tls = ["native-tls"]
-native-tls = ["dep:reqwest", "reqwest/default", "dep:native-tls", "ureq/native-tls"]
-rustls-tls = ["dep:rustls", "reqwest/rustls-tls"]
+native-tls = ["dep:reqwest", "reqwest?/default", "dep:native-tls", "dep:ureq", "ureq?/native-tls"]
+rustls-tls = ["reqwest?/rustls-tls"]
 tokio = [
   "dep:futures",
   "dep:indicatif",
@@ -59,6 +67,8 @@ tokio = [
   "dep:thiserror",
   "dep:tokio",
   "tokio/rt-multi-thread",
+  "dep:libc",
+  "dep:windows-sys",
 ]
 ureq = [
   "dep:http",
@@ -68,6 +78,8 @@ ureq = [
   "dep:serde_json",
   "dep:thiserror",
   "dep:ureq",
+  "dep:libc",
+  "dep:windows-sys",
 ]
 
 [dev-dependencies]
