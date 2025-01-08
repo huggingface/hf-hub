@@ -113,7 +113,6 @@ mod windows {
     use windows_sys::Win32::Storage::FileSystem::{
         LockFileEx, UnlockFile, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
     };
-    use windows_sys::Win32::System::SystemServices::MAXDWORD;
 
     pub(crate) fn lock(file: &tokio::fs::File) -> i32 {
         unsafe {
@@ -123,8 +122,8 @@ mod windows {
                 file.as_raw_handle() as HANDLE,
                 flags,
                 0,
-                MAXDWORD,
-                MAXDWORD,
+                !0,
+                !0,
                 &mut overlapped,
             );
             1 - res
@@ -859,7 +858,7 @@ impl ApiRepo {
         let blob_path = cache.blob_path(&metadata.etag);
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
-        let lock = lock_file(blob_path.clone()).await.unwrap();
+        let lock = lock_file(blob_path.clone()).await?;
         progress.init(metadata.size, filename).await;
         let mut tmp_path = blob_path.clone();
         tmp_path.set_extension(EXTENSION);

@@ -75,7 +75,6 @@ struct Handle {
 
 impl Drop for Handle {
     fn drop(&mut self) {
-        println!("Released lock on {:?}", std::thread::current().id());
         unlock(&self.file);
     }
 }
@@ -95,7 +94,6 @@ fn lock_file(mut path: PathBuf) -> Result<Handle, ApiError> {
     if res != 0 {
         Err(ApiError::LockAcquisition(path))
     } else {
-        println!("Acquired lock on {:?}", std::thread::current().id());
         Ok(Handle { file })
     }
 }
@@ -121,7 +119,6 @@ mod windows {
     use windows_sys::Win32::Storage::FileSystem::{
         LockFileEx, UnlockFile, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
     };
-    use windows_sys::Win32::System::SystemServices::MAXDWORD;
 
     pub(crate) fn lock(file: &std::fs::File) -> i32 {
         unsafe {
@@ -131,8 +128,8 @@ mod windows {
                 file.as_raw_handle() as HANDLE,
                 flags,
                 0,
-                MAXDWORD,
-                MAXDWORD,
+                !0,
+                !0,
                 &mut overlapped,
             );
             1 - res
