@@ -113,19 +113,21 @@ mod windows {
     use windows_sys::Win32::Storage::FileSystem::{
         LockFileEx, UnlockFile, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
     };
+    use windows_sys::Win32::System::SystemServices::MAXDWORD;
 
     pub(crate) fn lock(file: &tokio::fs::File) -> i32 {
         unsafe {
             let mut overlapped = std::mem::zeroed();
             let flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
-            LockFileEx(
+            let res = LockFileEx(
                 file.as_raw_handle() as HANDLE,
                 flags,
                 0,
-                !0,
-                !0,
+                MAXDWORD,
+                MAXDWORD,
                 &mut overlapped,
-            )
+            );
+            1 - res
         }
     }
     pub(crate) fn unlock(file: &tokio::fs::File) -> i32 {

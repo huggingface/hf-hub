@@ -127,14 +127,15 @@ mod windows {
         unsafe {
             let mut overlapped = std::mem::zeroed();
             let flags = LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY;
-            LockFileEx(
+            let res = LockFileEx(
                 file.as_raw_handle() as HANDLE,
                 flags,
                 0,
                 MAXDWORD,
                 MAXDWORD,
                 &mut overlapped,
-            )
+            );
+            1 - res
         }
     }
     pub(crate) fn unlock(file: &std::fs::File) -> i32 {
