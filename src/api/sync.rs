@@ -121,6 +121,7 @@ mod windows {
     use windows_sys::Win32::Storage::FileSystem::{
         LockFileEx, UnlockFile, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
     };
+    use windows_sys::Win32::System::SystemServices::MAXDWORD;
 
     pub(crate) fn lock(file: &std::fs::File) -> i32 {
         unsafe {
@@ -130,8 +131,8 @@ mod windows {
                 file.as_raw_handle() as HANDLE,
                 flags,
                 0,
-                !0,
-                !0,
+                MAXDWORD,
+                MAXDWORD,
                 &mut overlapped,
             )
         }
