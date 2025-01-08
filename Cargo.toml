@@ -80,6 +80,7 @@ ureq = [
   "dep:thiserror",
   "dep:ureq",
   "dep:libc",
+  "dep:windows-sys",
 ]
 
 [dev-dependencies]
