@@ -48,10 +48,10 @@ This library uses tokio default TLS implementations which is `native-tls` (opens
 If you want control over the TLS backend you can remove the default features and only add the backend you are intending to use. 
 
 ```bash
-cargo add hf-hub -no-default-features --features ureq,rustls-tls
-cargo add hf-hub -no-default-features --features ureq,native-tls
-cargo add hf-hub -no-default-features --features tokio,rustls-tls
-cargo add hf-hub -no-default-features --features tokio,native-tls
+cargo add hf-hub --no-default-features --features ureq,rustls-tls
+cargo add hf-hub --no-default-features --features ureq,native-tls
+cargo add hf-hub --no-default-features --features tokio,rustls-tls
+cargo add hf-hub --no-default-features --features tokio,native-tls
 ```
 
 
