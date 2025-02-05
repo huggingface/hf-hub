@@ -179,7 +179,7 @@ impl CacheRepo {
     }
 
     #[cfg(any(feature = "tokio", feature = "ureq"))]
-    pub(crate) fn blob_path(&self, etag: &str) -> PathBuf {
+    pub fn blob_path(&self, etag: &str) -> PathBuf {
         let mut blob_path = self.path();
         blob_path.push("blobs");
         blob_path.push(etag);
