@@ -1,4 +1,4 @@
-use super::Progress as SyncProgress;
+use super::{Progress as SyncProgress, ENV_UA_ORIGIN};
 use super::{RepoInfo, HF_ENDPOINT};
 use crate::{Cache, Repo, RepoType};
 use futures::stream::FuturesUnordered;
@@ -330,8 +330,8 @@ impl ApiBuilder {
         let mut headers = HeaderMap::new();
         let user_agent = format!("unknown/None; {NAME}/{VERSION}; rust/unknown");
         // add origin user-agent if HF_HUB_USER_AGENT_ORIGIN is set in environment
-        let user_agent = match std::env::var("HF_HUB_USER_AGENT_ORIGIN").ok() {
-            Some(origin) => format!("{user_agent}; {origin}"),
+        let user_agent = match std::env::var(ENV_UA_ORIGIN).ok() {
+            Some(origin) => format!("{user_agent}; origin/{origin}"),
             None => user_agent,
         };
         headers.insert(USER_AGENT, HeaderValue::from_str(&user_agent)?);
@@ -1322,7 +1322,7 @@ mod tests {
                 "gated": false,
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
-                "likes": 1,
+                "likes": 2,
                 "modelId": "mcpotato/42-eicar-street",
                 "private": false,
                 "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
@@ -1370,6 +1370,7 @@ mod tests {
                 ],
                 "spaces": [],
                 "tags": ["pytorch", "region:us"],
+                "usedStorage": 22,
             })
         );
     }

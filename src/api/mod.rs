@@ -13,6 +13,8 @@ pub mod sync;
 
 const HF_ENDPOINT: &str = "HF_ENDPOINT";
 
+const ENV_UA_ORIGIN: &str = "HF_HUB_USER_AGENT_ORIGIN";
+
 /// This trait is used by users of the lib
 /// to implement custom behavior during file downloads
 pub trait Progress {
