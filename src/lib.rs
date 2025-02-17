@@ -186,7 +186,7 @@ impl CacheRepo {
         blob_path
     }
 
-    pub(crate) fn pointer_path(&self, commit_hash: &str) -> PathBuf {
+    pub fn pointer_path(&self, commit_hash: &str) -> PathBuf {
         let mut pointer_path = self.path();
         pointer_path.push("snapshots");
         pointer_path.push(commit_hash);
