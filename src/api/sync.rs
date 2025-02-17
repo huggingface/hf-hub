@@ -303,7 +303,12 @@ impl ApiBuilder {
 
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
+        let user_agent = format!("unknown/None; {NAME}/{VERSION}; rust/unknown");
+        // add origin user-agent if HF_HUB_USER_AGENT_ORIGIN is set in environment
+        let user_agent = match std::env::var("HF_HUB_USER_AGENT_ORIGIN").ok() {
+            Some(origin) => format!("{user_agent}; {origin}"),
+            None => user_agent,
+        };
         headers.insert(USER_AGENT, user_agent);
         if let Some(token) = &self.token {
             headers.insert(AUTHORIZATION, format!("Bearer {token}"));
