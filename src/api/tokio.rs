@@ -608,7 +608,7 @@ impl ApiRepo {
         format!("{endpoint}/{repo_id}/resolve/{revision}/{filename}")
     }
 
-    async fn download_tempfile<'a, P: Progress + Clone + Send + Sync + 'static>(
+    async fn download_tempfile<P: Progress + Clone + Send + Sync + 'static>(
         &self,
         url: &str,
         length: usize,
