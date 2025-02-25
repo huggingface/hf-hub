@@ -317,11 +317,13 @@ impl ApiBuilder {
 
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        let mut user_agent = "".to_string();
-        self.user_agent.iter().for_each(|(key, value)| {
-            user_agent = format!("{user_agent}; {key}/{value}");
-        });
-        headers.insert(USER_AGENT, user_agent[2..].to_string());
+        let user_agent = self
+            .user_agent
+            .iter()
+            .map(|(key, value)| format!("{key}/{value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        headers.insert(USER_AGENT, user_agent.to_string());
         if let Some(token) = &self.token {
             headers.insert(AUTHORIZATION, format!("Bearer {token}"));
         }
