@@ -91,7 +91,7 @@ impl ProgressTracker for MovingAvgRate {
         if self
             .samples
             .back()
-            .map_or(true, |(prev, _)| (now - *prev) > Duration::from_millis(20))
+            .is_none_or(|(prev, _)| (now - *prev) > Duration::from_millis(20))
         {
             self.samples.push_back((now, state.pos()));
         }
