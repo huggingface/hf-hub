@@ -211,6 +211,7 @@ pub struct ApiBuilder {
     token: Option<String>,
     max_retries: usize,
     progress: bool,
+    user_agent: Vec<(String, String)>,
 }
 
 impl Default for ApiBuilder {
@@ -262,12 +263,19 @@ impl ApiBuilder {
 
         let endpoint = "https://huggingface.co".to_string();
 
+        let user_agent = vec![
+            ("unknown".to_string(), "None".to_string()),
+            (NAME.to_string(), VERSION.to_string()),
+            ("rust".to_string(), "unknown".to_string()),
+        ];
+
         Self {
             endpoint,
             cache,
             token,
             max_retries,
             progress,
+            user_agent,
         }
     }
 
@@ -301,10 +309,21 @@ impl ApiBuilder {
         self
     }
 
+    /// Adds custom fields to headers user-agent
+    pub fn with_user_agent(mut self, key: &str, value: &str) -> Self {
+        self.user_agent.push((key.to_string(), value.to_string()));
+        self
+    }
+
     fn build_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
-        headers.insert(USER_AGENT, user_agent);
+        let user_agent = self
+            .user_agent
+            .iter()
+            .map(|(key, value)| format!("{key}/{value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        headers.insert(USER_AGENT, user_agent.to_string());
         if let Some(token) = &self.token {
             headers.insert(AUTHORIZATION, format!("Bearer {token}"));
         }
@@ -1163,7 +1182,7 @@ mod tests {
                 "gated": false,
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
-                "likes": 1,
+                "likes": 2,
                 "modelId": "mcpotato/42-eicar-street",
                 "private": false,
                 "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
@@ -1211,6 +1230,7 @@ mod tests {
                 ],
                 "spaces": [],
                 "tags": ["pytorch", "region:us"],
+                "usedStorage": 22
             })
         );
     }
@@ -1225,6 +1245,42 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(api.endpoint, fake_endpoint);
+    }
+
+    #[test]
+    fn headers_with_token() {
+        let api = ApiBuilder::new()
+            .with_token(Some("token".to_string()))
+            .build()
+            .unwrap();
+        let headers = api.client.headers;
+        assert_eq!(
+            headers.get("Authorization"),
+            Some(&"Bearer token".to_string())
+        );
+    }
+
+    #[test]
+    fn headers_default() {
+        let api = ApiBuilder::new().build().unwrap();
+        let headers = api.client.headers;
+        assert_eq!(
+            headers.get(USER_AGENT),
+            Some(&"unknown/None; hf-hub/0.4.1; rust/unknown".to_string())
+        );
+    }
+
+    #[test]
+    fn headers_custom() {
+        let api = ApiBuilder::new()
+            .with_user_agent("origin", "custom")
+            .build()
+            .unwrap();
+        let headers = api.client.headers;
+        assert_eq!(
+            headers.get(USER_AGENT),
+            Some(&"unknown/None; hf-hub/0.4.1; rust/unknown; origin/custom".to_string())
+        );
     }
 
     // #[test]

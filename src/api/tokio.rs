@@ -214,6 +214,7 @@ pub struct ApiBuilder {
     parallel_failures: usize,
     max_retries: usize,
     progress: bool,
+    user_agent: Vec<(String, String)>,
 }
 
 impl Default for ApiBuilder {
@@ -277,6 +278,12 @@ impl ApiBuilder {
 
         let progress = true;
 
+        let user_agent = vec![
+            ("unknown".to_string(), "None".to_string()),
+            (NAME.to_string(), VERSION.to_string()),
+            ("rust".to_string(), "unknown".to_string()),
+        ];
+
         Self {
             endpoint: "https://huggingface.co".to_string(),
             cache,
@@ -287,6 +294,7 @@ impl ApiBuilder {
             parallel_failures: 0,
             max_retries: 0,
             progress,
+            user_agent,
         }
     }
 
@@ -326,9 +334,20 @@ impl ApiBuilder {
         self
     }
 
+    /// Adds custom fields to headers user-agent
+    pub fn with_user_agent(mut self, key: &str, value: &str) -> Self {
+        self.user_agent.push((key.to_string(), value.to_string()));
+        self
+    }
+
     fn build_headers(&self) -> Result<HeaderMap, ApiError> {
         let mut headers = HeaderMap::new();
-        let user_agent = format!("unkown/None; {NAME}/{VERSION}; rust/unknown");
+        let user_agent = self
+            .user_agent
+            .iter()
+            .map(|(key, value)| format!("{key}/{value}"))
+            .collect::<Vec<_>>()
+            .join("; ");
         headers.insert(USER_AGENT, HeaderValue::from_str(&user_agent)?);
         if let Some(token) = &self.token {
             headers.insert(
@@ -603,7 +622,7 @@ impl ApiRepo {
         format!("{endpoint}/{repo_id}/resolve/{revision}/{filename}")
     }
 
-    async fn download_tempfile<'a, P: Progress + Clone + Send + Sync + 'static>(
+    async fn download_tempfile<P: Progress + Clone + Send + Sync + 'static>(
         &self,
         url: &str,
         length: usize,
@@ -1317,7 +1336,7 @@ mod tests {
                 "gated": false,
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
-                "likes": 1,
+                "likes": 2,
                 "modelId": "mcpotato/42-eicar-street",
                 "private": false,
                 "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
@@ -1365,6 +1384,7 @@ mod tests {
                 ],
                 "spaces": [],
                 "tags": ["pytorch", "region:us"],
+                "usedStorage": 22
             })
         );
     }
