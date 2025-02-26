@@ -1266,7 +1266,7 @@ mod tests {
         let headers = api.client.headers;
         assert_eq!(
             headers.get(USER_AGENT),
-            Some(&"unknown/None; hf-hub/0.4.1; rust/unknown".to_string())
+            Some(&"unknown/None; hf-hub/0.4.2; rust/unknown".to_string())
         );
     }
 
@@ -1279,7 +1279,7 @@ mod tests {
         let headers = api.client.headers;
         assert_eq!(
             headers.get(USER_AGENT),
-            Some(&"unknown/None; hf-hub/0.4.1; rust/unknown; origin/custom".to_string())
+            Some(&"unknown/None; hf-hub/0.4.2; rust/unknown; origin/custom".to_string())
         );
     }
 
