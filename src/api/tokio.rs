@@ -1389,6 +1389,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn headers_default() {
+        let headers = ApiBuilder::new().build_headers().unwrap();
+        assert_eq!(
+            headers.get(USER_AGENT),
+            Some(
+                &"unknown/None; hf-hub/0.4.2; rust/unknown"
+                    .try_into()
+                    .unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn headers_custom() {
+        let headers = ApiBuilder::new()
+            .with_user_agent("origin", "custom")
+            .build_headers()
+            .unwrap();
+        assert_eq!(
+            headers.get(USER_AGENT),
+            Some(
+                &"unknown/None; hf-hub/0.4.2; rust/unknown; origin/custom"
+                    .try_into()
+                    .unwrap()
+            )
+        );
+    }
+
     // #[tokio::test]
     // async fn real() {
     //     let api = Api::new().unwrap();
