@@ -178,6 +178,7 @@ impl CacheRepo {
         Ok(())
     }
 
+    /// Get the path of the blob with the given etag.
     #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn blob_path(&self, etag: &str) -> PathBuf {
         let mut blob_path = self.path();
@@ -186,6 +187,10 @@ impl CacheRepo {
         blob_path
     }
 
+
+    /// Get the path of the snapshot with the given commit hash.
+    ///
+    /// This path contains symlink pointers to the files for this commit.
     pub fn pointer_path(&self, commit_hash: &str) -> PathBuf {
         let mut pointer_path = self.path();
         pointer_path.push("snapshots");
