@@ -400,11 +400,29 @@ impl ApiBuilder {
     }
 }
 
+/// File metadata.
 #[derive(Debug)]
 pub struct Metadata {
-    pub commit_hash: String,
-    pub etag: String,
-    pub size: usize,
+    commit_hash: String,
+    etag: String,
+    size: usize,
+}
+
+impl Metadata {
+    /// Get the commit hash of the file.
+    pub fn commit_hash(&self) -> &str {
+        &self.commit_hash
+    }
+
+    /// Get the etag of the file.
+    pub fn etag(&self) -> &str {
+        &self.etag
+    }
+
+    /// Get the file size.
+    pub fn size(&self) -> usize {
+        self.size
+    }
 }
 
 /// The actual Api used to interact with the hub.
@@ -496,6 +514,7 @@ impl Api {
         &self.client
     }
 
+    /// Get metadata for the file at the given URL.
     pub async fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let response = self
             .relative_redirect_client
@@ -523,7 +542,7 @@ impl Api {
             .to_str()?
             .to_string();
 
-        // The response was redirected o S3 most likely which will
+        // The response was redirected to S3 most likely which will
         // know about the size of the file
         let response = if response.status().is_redirection() {
             self.client

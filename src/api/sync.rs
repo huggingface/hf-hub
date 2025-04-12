@@ -360,11 +360,29 @@ impl ApiBuilder {
     }
 }
 
+/// File metadata.
 #[derive(Debug)]
-struct Metadata {
+pub struct Metadata {
     commit_hash: String,
     etag: String,
     size: usize,
+}
+
+impl Metadata {
+    /// Get the commit hash of the file.
+    pub fn commit_hash(&self) -> &str {
+        &self.commit_hash
+    }
+
+    /// Get the etag of the file.
+    pub fn etag(&self) -> &str {
+        &self.etag
+    }
+
+    /// Get the file size.
+    pub fn size(&self) -> usize {
+        self.size
+    }
 }
 
 /// The actual Api used to interact with the hub.
