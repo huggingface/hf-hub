@@ -1168,12 +1168,11 @@ mod tests {
 
     #[test]
     fn redirect_test() {
-        // this works
         let api = ApiBuilder::from_env().build().unwrap();
         let repo = api.model("meta-llama/Llama-3.1-8B".to_string());
         repo.download("config.json").unwrap();
 
-        // this now works
+        // with redirect
         let api = ApiBuilder::from_env().build().unwrap();
         let repo = api.model("meta-llama/Meta-Llama-3.1-8B".to_string());
         repo.download("config.json").unwrap();
