@@ -360,6 +360,7 @@ struct Metadata {
     commit_hash: String,
     etag: String,
     size: usize,
+    resolved_url: String, // Added field
 }
 
 /// The actual Api used to interacto with the hub.
@@ -449,14 +450,14 @@ impl Api {
     }
 
     fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
+        let mut url = url.to_string();
         let mut response = self
             .no_redirect_client
-            .get(url)
+            .get(&url)
             .set(RANGE, "bytes=0-0")
             .call()
             .map_err(Box::new)?;
 
-        // Closure to check if status code is a redirection
         let should_redirect = |status_code: u16| {
             matches!(
                 StatusCode::from_u16(status_code).unwrap(),
@@ -470,7 +471,7 @@ impl Api {
 
         // Follow redirects until `host.is_some()` i.e. only follow relative redirects
         // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
-        let response = loop {
+        loop {
             // Check if redirect
             if should_redirect(response.status()) {
                 // Get redirect location
@@ -481,24 +482,28 @@ impl Api {
                     // Check if relative i.e. host is none
                     if uri.host().is_none() {
                         // Merge relative path with url
-                        let mut parts = Uri::from_str(url).unwrap().into_parts();
+                        let mut parts = Uri::from_str(&url).unwrap().into_parts();
                         parts.path_and_query = uri.into_parts().path_and_query;
                         // Final uri
-                        let redirect_uri = Uri::from_parts(parts).unwrap();
+                        url = Uri::from_parts(parts).unwrap().to_string();
 
                         // Follow redirect
                         response = self
                             .no_redirect_client
-                            .get(&redirect_uri.to_string())
+                            .get(&url)
                             .set(RANGE, "bytes=0-0")
                             .call()
                             .map_err(Box::new)?;
                         continue;
+                    } else {
+                        break;
                     }
+                } else {
+                    return Err(ApiError::MissingHeader(LOCATION));
                 };
             }
-            break response;
-        };
+            break;
+        }
 
         // let headers = response.headers();
         let header_commit = "x-repo-commit";
@@ -522,14 +527,21 @@ impl Api {
         // know about the size of the file
         let status = response.status();
         let is_redirection = (300..400).contains(&status);
-        let response = if is_redirection {
-            self.client
-                .get(response.header(LOCATION).unwrap())
+        let final_download_url = if is_redirection {
+            let final_download_url = response
+                .header(LOCATION)
+                .ok_or(ApiError::MissingHeader(LOCATION))?
+                .to_string();
+
+            response = self
+                .client
+                .get(&final_download_url)
                 .set(RANGE, "bytes=0-0")
                 .call()
-                .map_err(Box::new)?
+                .map_err(Box::new)?;
+            final_download_url
         } else {
-            response
+            url
         };
         let content_range = response
             .header(CONTENT_RANGE)
@@ -544,6 +556,7 @@ impl Api {
             commit_hash,
             etag,
             size,
+            resolved_url: final_download_url,
         })
     }
 
@@ -761,9 +774,13 @@ impl ApiRepo {
         let lock = lock_file(blob_path.clone()).unwrap();
         let mut tmp_path = blob_path.clone();
         tmp_path.set_extension(EXTENSION);
-        let tmp_filename =
-            self.api
-                .download_tempfile(&url, metadata.size, progress, tmp_path, filename)?;
+        let tmp_filename = self.api.download_tempfile(
+            &metadata.resolved_url,
+            metadata.size,
+            progress,
+            tmp_path,
+            filename,
+        )?;
 
         std::fs::rename(tmp_filename, &blob_path)?;
         drop(lock);
@@ -1150,6 +1167,19 @@ mod tests {
     }
 
     #[test]
+    fn redirect_test() {
+        // this works
+        let api = ApiBuilder::from_env().build().unwrap();
+        let repo = api.model("meta-llama/Llama-3.1-8B".to_string());
+        repo.download("config.json").unwrap();
+
+        // this now works
+        let api = ApiBuilder::from_env().build().unwrap();
+        let repo = api.model("meta-llama/Meta-Llama-3.1-8B".to_string());
+        repo.download("config.json").unwrap();
+    }
+
+    #[test]
     fn detailed_info() {
         let tmp = TempDir::new();
         let api = ApiBuilder::new()
@@ -1182,7 +1212,7 @@ mod tests {
                 "gated": false,
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
-                "likes": 2,
+                "likes": 3,
                 "modelId": "mcpotato/42-eicar-street",
                 "private": false,
                 "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
