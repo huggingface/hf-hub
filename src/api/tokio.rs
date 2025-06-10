@@ -907,7 +907,13 @@ impl ApiRepo {
     /// # })
     /// ```
     pub async fn info(&self) -> Result<RepoInfo, ApiError> {
-        Ok(self.info_request().send().await?.json().await?)
+        Ok(self
+            .info_request()
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     /// Get the raw [`reqwest::RequestBuilder`] with the url and method already set
@@ -933,6 +939,7 @@ mod tests {
     use super::*;
     use crate::api::Siblings;
     use crate::assert_no_diff;
+    use core::panic;
     use hex_literal::hex;
     use rand::distributions::Alphanumeric;
     use serde_json::{json, Value};
@@ -1416,6 +1423,26 @@ mod tests {
                     .unwrap()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn repo_info_failed() {
+        let api = ApiBuilder::new()
+            .with_progress(true)
+            // Use an empty token to trigger an authorization error.
+            .with_token(Some("".to_string()))
+            .build()
+            .expect("failed to build API");
+
+        let repo = api.model("google-bert/bert-base-uncased".to_string());
+        let error = repo
+            .info()
+            .await
+            .expect_err("failed to raise authentication error");
+        match error {
+            ApiError::RequestError(error) if error.is_status() => {}
+            _ => panic!("unexpected request error"),
+        }
     }
 
     // #[tokio::test]
