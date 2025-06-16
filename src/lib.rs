@@ -304,8 +304,8 @@ mod tests {
                 use rand::Rng;
                 use std::io::Write;
                 use std::process::Command;
-                let rand_string: String = rand::thread_rng()
-                    .sample_iter(&rand::distributions::Alphanumeric)
+                let rand_string: String = rand::rng()
+                    .sample_iter(&rand::distr::Alphanumeric)
                     .take(6)
                     .map(char::from)
                     .collect();

@@ -477,7 +477,7 @@ fn symlink_or_rename(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
 }
 
 fn jitter() -> usize {
-    rand::thread_rng().gen_range(0..=500)
+    rand::rng().random_range(0..=500)
 }
 
 fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
@@ -941,7 +941,7 @@ mod tests {
     use crate::assert_no_diff;
     use core::panic;
     use hex_literal::hex;
-    use rand::distributions::Alphanumeric;
+    use rand::distr::Alphanumeric;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
     use std::io::{Seek, Write};
@@ -953,7 +953,7 @@ mod tests {
 
     impl TempDir {
         pub fn new() -> Self {
-            let s: String = rand::thread_rng()
+            let s: String = rand::rng()
                 .sample_iter(&Alphanumeric)
                 .take(7)
                 .map(char::from)
@@ -1402,7 +1402,7 @@ mod tests {
         assert_eq!(
             headers.get(USER_AGENT),
             Some(
-                &"unknown/None; hf-hub/0.4.2; rust/unknown"
+                &"unknown/None; hf-hub/0.4.3; rust/unknown"
                     .try_into()
                     .unwrap()
             )
@@ -1418,7 +1418,7 @@ mod tests {
         assert_eq!(
             headers.get(USER_AGENT),
             Some(
-                &"unknown/None; hf-hub/0.4.2; rust/unknown; origin/custom"
+                &"unknown/None; hf-hub/0.4.3; rust/unknown; origin/custom"
                     .try_into()
                     .unwrap()
             )
