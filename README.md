@@ -6,7 +6,7 @@ they are already present and whenever this crate downloads or modifies this cach
 it should be consistent with [huggingface_hub](https://github.com/huggingface/huggingface_hub/)
 
 At this time only a limited subset of the functionality is present, the goal is to add new
-features over time. We are currently treating this as an internel/external tool, meaning
+features over time. We are currently treating this as an internal/external tool, meaning
 we are currently modifying everything at will for our internal needs. This will eventually
 stabilize as it matures to accomodate most of our needs.
 
