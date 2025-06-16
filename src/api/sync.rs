@@ -12,7 +12,7 @@ use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use thiserror::Error;
-use ureq::{Agent, AgentBuilder, Request};
+use ureq::{Agent, AgentBuilder, RedirectAuthHeaders, Request};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -334,7 +334,7 @@ impl ApiBuilder {
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers();
 
-        let builder = builder()?;
+        let builder = builder()?.redirect_auth_headers(RedirectAuthHeaders::SameHost);
         let agent = builder.build();
         let client = HeaderAgent::new(agent, headers.clone());
 
@@ -537,7 +537,7 @@ impl Api {
 
         let size = content_range
             .split('/')
-            .last()
+            .next_back()
             .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
             .parse()?;
         Ok(Metadata {
@@ -1182,7 +1182,7 @@ mod tests {
                 "gated": false,
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
-                "likes": 2,
+                "likes": 3,
                 "modelId": "mcpotato/42-eicar-street",
                 "private": false,
                 "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
@@ -1294,4 +1294,18 @@ mod tests {
     //         hex!("68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3")
     //     );
     // }
+
+    #[test]
+    fn redirect_test() {
+        // This test requires a valid HF_TOKEN with gate access to this llama model.
+        if let Ok(token) = std::env::var("HF_TOKEN") {
+            let api = ApiBuilder::new().with_token(Some(token)).build().unwrap();
+            let repo = api.model("meta-llama/Llama-3.1-8B".to_string());
+            repo.download("config.json").unwrap();
+
+            // with redirect
+            let repo = api.model("meta-llama/Meta-Llama-3.1-8B".to_string());
+            repo.download("config.json").unwrap();
+        }
+    }
 }
