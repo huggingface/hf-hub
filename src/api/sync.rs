@@ -12,7 +12,11 @@ use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use thiserror::Error;
-use ureq::{Agent, AgentBuilder, RedirectAuthHeaders, Request};
+use ureq::config::ConfigBuilder;
+use ureq::config::RedirectAuthHeaders;
+use ureq::tls::{TlsConfig, TlsProvider};
+use ureq::typestate::{AgentScope, WithoutBody};
+use ureq::{Agent, RequestBuilder};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -60,10 +64,10 @@ impl HeaderAgent {
         Self { agent, headers }
     }
 
-    fn get(&self, url: &str) -> ureq::Request {
+    fn get(&self, url: &str) -> RequestBuilder<WithoutBody> {
         let mut request = self.agent.get(url);
         for (header, value) in &self.headers {
-            request = request.set(header, value);
+            request = request.header(*header, value);
         }
         request
     }
@@ -335,13 +339,14 @@ impl ApiBuilder {
         let headers = self.build_headers();
 
         let builder = builder()?.redirect_auth_headers(RedirectAuthHeaders::SameHost);
-        let agent = builder.build();
+        let agent: Agent = builder.build().into();
         let client = HeaderAgent::new(agent, headers.clone());
 
-        let no_redirect_agent = ureq::builder()
-            .try_proxy_from_env(true)
-            .redirects(0)
-            .build();
+        let no_redirect_agent: Agent = Agent::config_builder()
+            // .try_proxy_from_env(true)
+            .max_redirects(0)
+            .build()
+            .into();
         let no_redirect_client = HeaderAgent::new(no_redirect_agent, headers);
 
         Ok(Api {
@@ -452,14 +457,14 @@ impl Api {
         let mut response = self
             .no_redirect_client
             .get(url)
-            .set(RANGE, "bytes=0-0")
+            .header(RANGE, "bytes=0-0")
             .call()
             .map_err(Box::new)?;
 
         // Closure to check if status code is a redirection
-        let should_redirect = |status_code: u16| {
+        let should_redirect = |status_code: StatusCode| {
             matches!(
-                StatusCode::from_u16(status_code).unwrap(),
+                status_code,
                 StatusCode::MOVED_PERMANENTLY
                     | StatusCode::FOUND
                     | StatusCode::SEE_OTHER
@@ -474,9 +479,13 @@ impl Api {
             // Check if redirect
             if should_redirect(response.status()) {
                 // Get redirect location
-                if let Some(location) = response.header("Location") {
+                if let Some(location) = response.headers().get("Location") {
                     // Parse location
-                    let uri = Uri::from_str(location).map_err(|_| InvalidHeader("location"))?;
+                    let uri = Uri::from_str(
+                        std::str::from_utf8(location.as_bytes())
+                            .map_err(|_| InvalidHeader("location"))?,
+                    )
+                    .map_err(|_| InvalidHeader("location"))?;
 
                     // Check if relative i.e. host is none
                     if uri.host().is_none() {
@@ -490,7 +499,7 @@ impl Api {
                         response = self
                             .no_redirect_client
                             .get(&redirect_uri.to_string())
-                            .set(RANGE, "bytes=0-0")
+                            .header(RANGE, "bytes=0-0")
                             .call()
                             .map_err(Box::new)?;
                         continue;
@@ -505,35 +514,52 @@ impl Api {
         let header_linked_etag = "x-linked-etag";
         let header_etag = "etag";
 
-        let etag = match response.header(header_linked_etag) {
+        let etag = match response.headers().get(header_linked_etag) {
             Some(etag) => etag,
             None => response
-                .header(header_etag)
+                .headers()
+                .get(header_etag)
                 .ok_or(ApiError::MissingHeader(header_etag))?,
         };
         // Cleaning extra quotes
-        let etag = etag.to_string().replace('"', "");
-        let commit_hash = response
-            .header(header_commit)
-            .ok_or(ApiError::MissingHeader(header_commit))?
-            .to_string();
+        let etag = std::str::from_utf8(etag.as_bytes())
+            .map_err(|_| ApiError::InvalidHeader("etag"))?
+            .replace('"', "");
+        let commit_hash = std::str::from_utf8(
+            response
+                .headers()
+                .get(header_commit)
+                .ok_or(ApiError::MissingHeader(header_commit))?
+                .as_bytes(),
+        )
+        .map_err(|_| ApiError::InvalidHeader("commit_hash"))?
+        .to_string();
 
-        // The response was redirected o S3 most likely which will
+        // The response was redirected to S3 most likely which will
         // know about the size of the file
         let status = response.status();
-        let is_redirection = (300..400).contains(&status);
+        let is_redirection = status.is_redirection();
         let response = if is_redirection {
+            let location = response
+                .headers()
+                .get(LOCATION)
+                .expect("location header in redirect");
+            let location = std::str::from_utf8(location.as_bytes())
+                .map_err(|_| ApiError::InvalidHeader("etag"))?;
             self.client
-                .get(response.header(LOCATION).unwrap())
-                .set(RANGE, "bytes=0-0")
+                .get(location)
+                .header(RANGE, "bytes=0-0")
                 .call()
                 .map_err(Box::new)?
         } else {
             response
         };
         let content_range = response
-            .header(CONTENT_RANGE)
+            .headers()
+            .get(CONTENT_RANGE)
             .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?;
+        let content_range = std::str::from_utf8(content_range.as_bytes())
+            .map_err(|_| ApiError::InvalidHeader(CONTENT_RANGE))?;
 
         let size = content_range
             .split('/')
@@ -606,10 +632,11 @@ impl Api {
         let response = self
             .client
             .get(url)
-            .set(RANGE, &range)
+            .header(RANGE, &range)
             .call()
             .map_err(Box::new)?;
-        let reader = response.into_reader();
+        let (_, body) = response.into_parts();
+        let reader = body.into_reader();
         progress.init(size, filename);
         progress.update(current as usize);
         let mut reader = Box::new(wrap_read(reader, progress));
@@ -674,15 +701,19 @@ impl ApiRepo {
 }
 
 #[cfg(feature = "native-tls")]
-fn builder() -> Result<AgentBuilder, ApiError> {
-    Ok(ureq::builder()
-        .try_proxy_from_env(true)
-        .tls_connector(std::sync::Arc::new(native_tls::TlsConnector::new()?)))
+fn builder() -> Result<ConfigBuilder<AgentScope>, ApiError> {
+    Ok(Agent::config_builder().tls_config(
+        TlsConfig::builder()
+            .provider(TlsProvider::NativeTls)
+            .build(),
+    ))
 }
 
 #[cfg(not(feature = "native-tls"))]
 fn builder() -> Result<AgentBuilder, ApiError> {
-    Ok(ureq::builder().try_proxy_from_env(true))
+    Ok(Agent::config_builder()
+        .tls_config(TlsConfig::builder().provider(TlsProvider::RustTls).build())
+        .build()?)
 }
 
 impl ApiRepo {
@@ -811,10 +842,12 @@ impl ApiRepo {
     /// api.model("gpt2".to_string()).info();
     /// ```
     pub fn info(&self) -> Result<RepoInfo, ApiError> {
-        Ok(self.info_request().call().map_err(Box::new)?.into_json()?)
+        let mut response = self.info_request().call().map_err(Box::new)?;
+
+        Ok(response.body_mut().read_json().map_err(Box::new)?)
     }
 
-    /// Get the raw [`ureq::Request`] with the url and method already set
+    /// Get the raw [`Request`] with the url and method already set
     /// ```
     /// # use hf_hub::api::sync::Api;
     /// let api = Api::new().unwrap();
@@ -823,7 +856,7 @@ impl ApiRepo {
     ///     .query("blobs", "true")
     ///     .call();
     /// ```
-    pub fn info_request(&self) -> Request {
+    pub fn info_request(&self) -> RequestBuilder<WithoutBody> {
         let url = format!("{}/api/{}", self.api.endpoint, self.repo.api_url());
         self.api.client.get(&url)
     }
@@ -1169,7 +1202,8 @@ mod tests {
             .query("blobs", "true")
             .call()
             .unwrap()
-            .into_json()
+            .body_mut()
+            .read_json()
             .unwrap();
         assert_no_diff!(
             blobs_info,
