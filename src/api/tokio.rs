@@ -14,14 +14,14 @@ use reqwest::{
     Client, Error as ReqwestError, RequestBuilder,
 };
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, VecDeque};
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
-use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
+use tokio::sync::{AcquireError, Mutex, Semaphore, TryAcquireError};
 use tokio::task::JoinError;
 
 /// Current version (used in user-agent)
@@ -631,6 +631,7 @@ impl ApiRepo {
     ) -> Result<PathBuf, ApiError> {
         let semaphore = Arc::new(Semaphore::new(self.api.max_files));
         let parallel_failures_semaphore = Arc::new(Semaphore::new(self.api.parallel_failures));
+        let queue = Arc::new(Mutex::new(VecDeque::new()));
 
         // Create the file and set everything properly
         const N_BYTES: usize = size_of::<u64>();
@@ -668,20 +669,36 @@ impl ApiRepo {
 
         let chunk_size = self.api.chunk_size.unwrap_or(length);
         let n_chunks = length / chunk_size;
+        {
+            let mut queue_write = queue.lock().await;
+            for start in (start..length).step_by(chunk_size) {
+                let stop = std::cmp::min(start + chunk_size - 1, length);
+                queue_write.push_back((start, stop));
+            }
+            drop(queue_write);
+        }
+
         let mut handles = Vec::with_capacity(n_chunks);
-        for start in (start..length).step_by(chunk_size) {
+        for _start in (start..length).step_by(chunk_size) {
             let url = url.to_string();
             let filename = filename.clone();
             let client = self.api.client.clone();
 
-            let stop = std::cmp::min(start + chunk_size - 1, length);
             let permit = semaphore.clone();
             let parallel_failures = self.api.parallel_failures;
             let max_retries = self.api.max_retries;
             let parallel_failures_semaphore = parallel_failures_semaphore.clone();
             let progress = progressbar.clone();
+            let queue = queue.clone();
             handles.push(tokio::spawn(async move {
                 let permit = permit.acquire_owned().await?;
+                let mut queue = queue.lock().await;
+                let (start, stop) = match queue.pop_front() {
+                    Some((q_start, q_stop)) => (q_start, q_stop),
+                    None => unreachable!("Queue is empty"), // This should never happen
+                };
+                drop(queue);
+
                 let mut chunk =
                     Self::download_chunk(&client, &url, &filename, start, stop, progress.clone())
                         .await;
