@@ -542,7 +542,7 @@ impl Api {
 
         let size = content_range
             .split('/')
-            .last()
+            .next_back()
             .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
             .parse()?;
         Ok(Metadata {
