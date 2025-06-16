@@ -1404,13 +1404,15 @@ mod tests {
 
     #[tokio::test]
     async fn redirect_test() {
-        let api = ApiBuilder::from_env().build().unwrap();
-        let repo = api.model("meta-llama/Llama-3.1-8B".to_string());
-        repo.download("config.json").await.unwrap();
+        // This test requires a valid HF_TOKEN with gate access to this llama model.
+        if let Ok(token) = std::env::var("HF_TOKEN") {
+            let api = ApiBuilder::new().with_token(Some(token)).build().unwrap();
+            let repo = api.model("meta-llama/Llama-3.1-8B".to_string());
+            repo.download("config.json").await.unwrap();
 
-        // with redirect
-        let api = ApiBuilder::from_env().build().unwrap();
-        let repo = api.model("meta-llama/Meta-Llama-3.1-8B".to_string());
-        repo.download("config.json").await.unwrap();
+            // with redirect
+            let repo = api.model("meta-llama/Meta-Llama-3.1-8B".to_string());
+            repo.download("config.json").await.unwrap();
+        }
     }
 }
