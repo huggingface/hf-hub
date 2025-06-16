@@ -710,10 +710,9 @@ fn builder() -> Result<ConfigBuilder<AgentScope>, ApiError> {
 }
 
 #[cfg(not(feature = "native-tls"))]
-fn builder() -> Result<AgentBuilder, ApiError> {
+fn builder() -> Result<ConfigBuilder<AgentScope>, ApiError> {
     Ok(Agent::config_builder()
-        .tls_config(TlsConfig::builder().provider(TlsProvider::RustTls).build())
-        .build()?)
+        .tls_config(TlsConfig::builder().provider(TlsProvider::Rustls).build()))
 }
 
 impl ApiRepo {
