@@ -7,7 +7,7 @@ it should be consistent with [huggingface_hub](https://github.com/huggingface/hu
 
 At this time only a limited subset of the functionality is present, the goal is to add new
 features over time. We are currently treating this as an internal/external tool, meaning
-we will are currently modifying everything at will for out internal needs. This will eventually
+we are currently modifying everything at will for our internal needs. This will eventually
 stabilize as it matures to accomodate most of our needs.
 
 If you're interested in using this, you're welcome to do it but be warned about potential changing grounds.
