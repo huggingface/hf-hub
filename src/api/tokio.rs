@@ -298,7 +298,7 @@ impl ApiBuilder {
         }
     }
 
-    /// Wether to show a progressbar
+    /// Whether to show a progressbar
     pub fn with_progress(mut self, progress: bool) -> Self {
         self.progress = progress;
         self
