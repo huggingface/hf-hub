@@ -20,7 +20,7 @@ It aims to be compatible with [huggingface_hub](https://github.com/huggingface/h
 futures = { version = "0.3.28", optional = true }
 dirs = "6"
 http = { version = "1.0.0", optional = true }
-indicatif = { version = "0.17.5", optional = true }
+indicatif = { version = "0.18.0", optional = true }
 log = "0.4.19"
 num_cpus = { version = "1.15.0", optional = true }
 rand = { version = "0.9", optional = true }
