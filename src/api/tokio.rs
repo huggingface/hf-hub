@@ -1343,7 +1343,7 @@ mod tests {
                 "gated": false,
                 "id": "mcpotato/42-eicar-street",
                 "lastModified": "2022-11-30T19:54:16.000Z",
-                "likes": 3,
+                "likes": 4,
                 "modelId": "mcpotato/42-eicar-street",
                 "private": false,
                 "sha": "8b3861f6931c4026b0cd22b38dbc09e7668983ac",
@@ -1389,7 +1389,9 @@ mod tests {
                         "size": 31
                     }
                 ],
-                "spaces": [],
+                "spaces": [
+                    "szk2024/est"
+                ],
                 "tags": ["pytorch", "region:us"],
                 "usedStorage": 22
             })
