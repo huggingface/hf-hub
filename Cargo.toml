@@ -20,7 +20,7 @@ It aims to be compatible with [huggingface_hub](https://github.com/huggingface/h
 futures = { version = "0.3.28", optional = true }
 dirs = "6"
 http = { version = "1.0.0", optional = true }
-indicatif = { version = "0.17.5", optional = true }
+indicatif = { version = "0.18", optional = true }
 log = "0.4.19"
 num_cpus = { version = "1.15.0", optional = true }
 rand = { version = "0.9", optional = true }
@@ -39,7 +39,7 @@ ureq = { version = "3", optional = true, features = [
 native-tls = { version = "0.2.12", optional = true }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
-version = "0.60"
+version = "0.61"
 features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_IO"]
 optional = true
 
