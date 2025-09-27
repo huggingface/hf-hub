@@ -283,7 +283,7 @@ impl ApiBuilder {
         }
     }
 
-    /// Wether to show a progressbar
+    /// Whether to show a progressbar
     pub fn with_progress(mut self, progress: bool) -> Self {
         self.progress = progress;
         self
@@ -334,7 +334,7 @@ impl ApiBuilder {
         headers
     }
 
-    /// Consumes the builder and buids the final [`Api`]
+    /// Consumes the builder and builds the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers();
 
@@ -367,7 +367,7 @@ struct Metadata {
     size: usize,
 }
 
-/// The actual Api used to interacto with the hub.
+/// The actual Api used to interact with the hub.
 /// Use any repo with [`Api::repo`]
 #[derive(Clone, Debug)]
 pub struct Api {
