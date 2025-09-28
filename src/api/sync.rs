@@ -40,7 +40,7 @@ struct Wrapper<'a, P: Progress, R: Read> {
     inner: R,
 }
 
-fn wrap_read<P: Progress, R: Read>(inner: R, progress: &mut P) -> Wrapper<P, R> {
+fn wrap_read<P: Progress, R: Read>(inner: R, progress: &mut P) -> Wrapper<'_, P, R> {
     Wrapper { inner, progress }
 }
 
@@ -1261,9 +1261,7 @@ mod tests {
                         "size": 31
                     }
                 ],
-                "spaces": [
-                    "szk2024/est"
-                ],
+                "spaces": ["szk2024/est"],
                 "tags": ["pytorch", "region:us"],
                 "usedStorage": 22
             })

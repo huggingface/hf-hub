@@ -1389,9 +1389,7 @@ mod tests {
                         "size": 31
                     }
                 ],
-                "spaces": [
-                    "szk2024/est"
-                ],
+                "spaces": ["szk2024/est"],
                 "tags": ["pytorch", "region:us"],
                 "usedStorage": 22
             })
