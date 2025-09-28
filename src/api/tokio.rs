@@ -812,10 +812,8 @@ impl ApiRepo {
         }
     }
 
-    /// Downloads a remote file (if not already present) into the cache directory
+    /// Downloads a remote file into the cache directory
     /// to be used locally.
-    /// This functions require internet access to verify if new versions of the file
-    /// exist, even if a file is already on disk at location.
     /// ```no_run
     /// # use hf_hub::api::tokio::Api;
     /// # tokio_test::block_on(async {
