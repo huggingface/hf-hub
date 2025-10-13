@@ -25,6 +25,8 @@ const NAME: &str = env!("CARGO_PKG_NAME");
 
 const RANGE: &str = "Range";
 const CONTENT_RANGE: &str = "Content-Range";
+
+const CONTENT_LENGTH: &str = "Content-Length";
 const LOCATION: &str = "Location";
 const USER_AGENT: &str = "User-Agent";
 const AUTHORIZATION: &str = "Authorization";
@@ -66,6 +68,14 @@ impl HeaderAgent {
 
     fn get(&self, url: &str) -> RequestBuilder<WithoutBody> {
         let mut request = self.agent.get(url);
+        for (header, value) in &self.headers {
+            request = request.header(*header, value);
+        }
+        request
+    }
+
+    fn head(&self, url: &str) -> RequestBuilder<WithoutBody> {
+        let mut request = self.agent.head(url);
         for (header, value) in &self.headers {
             request = request.header(*header, value);
         }
@@ -454,7 +464,7 @@ impl Api {
     }
 
     fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
-        let mut response = self
+        let response = self
             .no_redirect_client
             .get(url)
             .header(RANGE, "bytes=0-0")
@@ -475,44 +485,49 @@ impl Api {
 
         // Follow redirects until `host.is_some()` i.e. only follow relative redirects
         // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
-        let response = loop {
-            // Check if redirect
-            if should_redirect(response.status()) {
-                // Get redirect location
-                if let Some(location) = response.headers().get("Location") {
-                    // Parse location
-                    let uri = Uri::from_str(
-                        std::str::from_utf8(location.as_bytes())
-                            .map_err(|_| InvalidHeader("location"))?,
-                    )
-                    .map_err(|_| InvalidHeader("location"))?;
+        let follow_redirects = |mut response: http::Response<ureq::Body>| {
+            loop {
+                // Check if redirect
+                if should_redirect(response.status()) {
+                    // Get redirect location
+                    if let Some(location) = response.headers().get("Location") {
+                        // Parse location
+                        let uri = Uri::from_str(
+                            std::str::from_utf8(location.as_bytes())
+                                .map_err(|_| InvalidHeader("location"))?,
+                        )
+                        .map_err(|_| InvalidHeader("location"))?;
 
-                    // Check if relative i.e. host is none
-                    if uri.host().is_none() {
-                        // Merge relative path with url
-                        let mut parts = Uri::from_str(url).unwrap().into_parts();
-                        parts.path_and_query = uri.into_parts().path_and_query;
-                        // Final uri
-                        let redirect_uri = Uri::from_parts(parts).unwrap();
+                        // Check if relative i.e. host is none
+                        if uri.host().is_none() {
+                            // Merge relative path with url
+                            let mut parts = Uri::from_str(url).unwrap().into_parts();
+                            parts.path_and_query = uri.into_parts().path_and_query;
+                            // Final uri
+                            let redirect_uri = Uri::from_parts(parts).unwrap();
 
-                        // Follow redirect
-                        response = self
-                            .no_redirect_client
-                            .get(&redirect_uri.to_string())
-                            .header(RANGE, "bytes=0-0")
-                            .call()
-                            .map_err(Box::new)?;
-                        continue;
-                    }
-                };
+                            // Follow redirect
+                            response = self
+                                .no_redirect_client
+                                .get(&redirect_uri.to_string())
+                                .header(RANGE, "bytes=0-0")
+                                .call()
+                                .map_err(Box::new)?;
+                            continue;
+                        }
+                    };
+                }
+                break Ok::<_, ApiError>(response);
             }
-            break response;
         };
+
+        let response = follow_redirects(response)?;
 
         // let headers = response.headers();
         let header_commit = "x-repo-commit";
         let header_linked_etag = "x-linked-etag";
         let header_etag = "etag";
+        let header_linked_size = "x-linked-size";
 
         let etag = match response.headers().get(header_linked_etag) {
             Some(etag) => etag,
@@ -554,18 +569,61 @@ impl Api {
         } else {
             response
         };
-        let content_range = response
-            .headers()
-            .get(CONTENT_RANGE)
-            .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?;
-        let content_range = std::str::from_utf8(content_range.as_bytes())
-            .map_err(|_| ApiError::InvalidHeader(CONTENT_RANGE))?;
 
-        let size = content_range
-            .split('/')
-            .next_back()
-            .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
-            .parse()?;
+        let size = match response.headers().get(header_linked_size) {
+            Some(size) => std::str::from_utf8(size.as_bytes())
+                .map_err(|_| ApiError::InvalidHeader(header_linked_size))?
+                .parse()?,
+            None => match response.headers().get(CONTENT_RANGE) {
+                Some(content_range) => {
+                    let content_range = std::str::from_utf8(content_range.as_bytes())
+                        .map_err(|_| ApiError::InvalidHeader(CONTENT_RANGE))?;
+                    content_range
+                        .split('/')
+                        .next_back()
+                        .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
+                        .parse()?
+                }
+                None => {
+                    let response = self.no_redirect_client.head(url).call().map_err(Box::new)?;
+                    let response = follow_redirects(response)?;
+
+                    let status = response.status();
+                    let is_redirection = status.is_redirection();
+                    let response = if is_redirection {
+                        let location = response
+                            .headers()
+                            .get(LOCATION)
+                            .expect("location header in redirect");
+                        let location = std::str::from_utf8(location.as_bytes())
+                            .map_err(|_| ApiError::InvalidHeader("etag"))?;
+                        self.client
+                            .get(location)
+                            .header(RANGE, "bytes=0-0")
+                            .call()
+                            .map_err(Box::new)?
+                    } else {
+                        response
+                    };
+
+                    match response.headers().get(header_linked_size) {
+                        Some(size) => std::str::from_utf8(size.as_bytes())
+                            .map_err(|_| ApiError::InvalidHeader(header_linked_size))?
+                            .parse()?,
+                        None => std::str::from_utf8(
+                            response
+                                .headers()
+                                .get(CONTENT_LENGTH)
+                                .ok_or(ApiError::MissingHeader(CONTENT_LENGTH))?
+                                .as_bytes(),
+                        )
+                        .map_err(|_| ApiError::InvalidHeader(CONTENT_LENGTH))?
+                        .parse()?,
+                    }
+                }
+            },
+        };
+
         Ok(Metadata {
             commit_hash,
             etag,
