@@ -8,7 +8,7 @@ use rand::Rng;
 use reqwest::{
     header::{
         HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
-        CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
+        CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
     },
     redirect::Policy,
     Client, Error as ReqwestError, RequestBuilder,
@@ -508,6 +508,7 @@ impl Api {
         let header_commit = HeaderName::from_static("x-repo-commit");
         let header_linked_etag = HeaderName::from_static("x-linked-etag");
         let header_etag = HeaderName::from_static("etag");
+        let header_linked_size = HeaderName::from_static("x-linked-size");
 
         let etag = match headers.get(&header_linked_etag) {
             Some(etag) => etag,
@@ -535,16 +536,42 @@ impl Api {
             response
         };
         let headers = response.headers();
-        let content_range = headers
-            .get(CONTENT_RANGE)
-            .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?
-            .to_str()?;
 
-        let size = content_range
-            .split('/')
-            .next_back()
-            .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
-            .parse()?;
+        // First to try to get the size from the linked header
+        let size = match headers.get(&header_linked_size) {
+            Some(size) => size.to_str()?.parse()?,
+            None => match headers.get(CONTENT_RANGE) {
+                Some(content_range) => {
+                    let content_range = content_range.to_str()?;
+                    content_range
+                        .split('/')
+                        .next_back()
+                        .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
+                        .parse()?
+                }
+                // Fallback to HEAD request
+                None => {
+                    let response = self.client.head(url).send().await?.error_for_status()?;
+                    let response = if response.status().is_redirection() {
+                        self.client
+                            .head(headers.get(LOCATION).unwrap().to_str()?.to_string())
+                            .send()
+                            .await?
+                    } else {
+                        response
+                    };
+                    let headers = response.headers();
+                    match headers.get(&header_linked_size) {
+                        Some(size) => size.to_str()?.parse()?,
+                        None => headers
+                            .get(CONTENT_LENGTH)
+                            .ok_or(ApiError::MissingHeader(CONTENT_LENGTH))?
+                            .to_str()?
+                            .parse()?,
+                    }
+                }
+            },
+        };
         Ok(Metadata {
             commit_hash,
             etag,
