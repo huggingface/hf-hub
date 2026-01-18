@@ -471,7 +471,8 @@ impl Api {
         &self.client
     }
 
-    fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
+    /// Get metadata for the file at the given URL.
+    pub fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let mut response = self
             .no_redirect_client
             .get(url)
