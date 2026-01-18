@@ -1354,6 +1354,7 @@ mod tests {
             json!({
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
+                "config": {},
                 "createdAt": "2022-03-02T23:29:05.000Z",
                 "disabled": false,
                 "downloads": 0,
@@ -1451,7 +1452,7 @@ mod tests {
             .build()
             .expect("failed to build API");
 
-        let repo = api.model("google-bert/bert-base-uncased".to_string());
+        let repo = api.model("danieldk/private-test".to_string());
         let error = repo
             .info()
             .await
