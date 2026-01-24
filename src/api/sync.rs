@@ -338,12 +338,11 @@ impl ApiBuilder {
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers();
 
-        let builder = builder()?.redirect_auth_headers(RedirectAuthHeaders::SameHost);
-        let agent: Agent = builder.build().into();
+        let bldr = builder()?.redirect_auth_headers(RedirectAuthHeaders::SameHost);
+        let agent: Agent = bldr.build().into();
         let client = HeaderAgent::new(agent, headers.clone());
 
-        let no_redirect_agent: Agent = Agent::config_builder()
-            // .try_proxy_from_env(true)
+        let no_redirect_agent: Agent = builder()?
             .max_redirects(0)
             .build()
             .into();
@@ -724,6 +723,7 @@ fn builder() -> Result<ConfigBuilder<AgentScope>, ApiError> {
     Ok(Agent::config_builder().tls_config(
         TlsConfig::builder()
             .provider(TlsProvider::NativeTls)
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
             .build(),
     ))
 }
