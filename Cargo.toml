@@ -1,6 +1,6 @@
 [package]
 name = "hf-hub"
-version = "0.4.3"
+version = "0.5.0"
 edition = "2021"
 homepage = "https://github.com/huggingface/hf-hub"
 license = "Apache-2.0"
@@ -32,10 +32,7 @@ serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 thiserror = { version = "2", optional = true }
 tokio = { version = "1.29.1", optional = true, features = ["fs", "macros"] }
-ureq = { version = "3", optional = true, features = [
-  "json",
-  "socks-proxy",
-] }
+ureq = { version = "3", optional = true, features = ["json", "socks-proxy"] }
 native-tls = { version = "0.2.12", optional = true }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
@@ -51,7 +48,13 @@ optional = true
 default = ["default-tls", "tokio", "ureq"]
 # These features are only relevant when used with the `tokio` feature, but this might change in the future.
 default-tls = ["native-tls"]
-native-tls = ["dep:reqwest", "reqwest?/default", "dep:native-tls", "dep:ureq", "ureq?/native-tls"]
+native-tls = [
+  "dep:reqwest",
+  "reqwest?/default",
+  "dep:native-tls",
+  "dep:ureq",
+  "ureq?/native-tls",
+]
 rustls-tls = ["reqwest?/rustls-tls"]
 tokio = [
   "dep:futures",
