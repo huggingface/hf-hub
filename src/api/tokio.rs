@@ -24,6 +24,13 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
 use tokio::task::JoinError;
 
+#[cfg(feature = "xet")]
+use super::xet;
+use super::commit::{self, UploadMode};
+use super::lfs;
+
+pub use super::commit::{CommitOperation, CommitOperationAdd, CommitOperationCopy, CommitOperationDelete, CommitResponse};
+
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current name (used in user-agent)
@@ -201,6 +208,32 @@ pub enum ApiError {
     /// Someone else is writing/downloading said file
     #[error("Lock acquisition failed: {0}")]
     LockAcquisition(PathBuf),
+
+    /// Server returned an error in a JSON response body.
+    #[error("API error ({status}): {message}")]
+    HubApiError {
+        /// HTTP status code
+        status: u16,
+        /// Error message from the server
+        message: String,
+    },
+
+    /// Preupload or commit response was malformed.
+    #[error("Invalid API response: {0}")]
+    InvalidApiResponse(String),
+
+    /// Serialization/deserialization failure.
+    #[error("JSON error: {0}")]
+    JsonError(#[from] serde_json::Error),
+
+    /// Xet session or transfer error.
+    #[cfg(feature = "xet")]
+    #[error("Xet error: {0}")]
+    XetError(xet::XetError),
+
+    /// Server chose a transfer protocol we can't handle.
+    #[error("Unsupported transfer protocol: {0}")]
+    UnsupportedTransfer(String),
 }
 
 /// Helper to create [`Api`] with all the options.
@@ -384,7 +417,7 @@ impl ApiBuilder {
 
         let relative_redirect_client = Client::builder()
             .redirect(relative_redirect_policy)
-            .default_headers(headers)
+            .default_headers(headers.clone())
             .build()?;
         Ok(Api {
             endpoint: self.endpoint,
@@ -396,6 +429,9 @@ impl ApiBuilder {
             parallel_failures: self.parallel_failures,
             max_retries: self.max_retries,
             progress: self.progress,
+            headers,
+            #[cfg(feature = "xet")]
+            xet_session: Arc::new(tokio::sync::RwLock::new(None)),
         })
     }
 }
@@ -405,7 +441,9 @@ impl ApiBuilder {
 pub struct Metadata {
     commit_hash: String,
     etag: String,
-    size: usize,
+    size: u64,
+    #[cfg(feature = "xet")]
+    xet_file_data: Option<xet::XetFileData>,
 }
 
 impl Metadata {
@@ -420,14 +458,14 @@ impl Metadata {
     }
 
     /// Get the file size.
-    pub fn size(&self) -> usize {
+    pub fn size(&self) -> u64 {
         self.size
     }
 }
 
 /// The actual Api used to interact with the hub.
 /// Use any repo with [`Api::repo`]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Api {
     endpoint: String,
     cache: Cache,
@@ -438,6 +476,23 @@ pub struct Api {
     parallel_failures: usize,
     max_retries: usize,
     progress: bool,
+    headers: HeaderMap,
+    #[cfg(feature = "xet")]
+    xet_session: Arc<tokio::sync::RwLock<Option<xet::XetSession>>>,
+}
+
+impl std::fmt::Debug for Api {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Api")
+            .field("endpoint", &self.endpoint)
+            .field("cache", &self.cache)
+            .field("max_files", &self.max_files)
+            .field("chunk_size", &self.chunk_size)
+            .field("parallel_failures", &self.parallel_failures)
+            .field("max_retries", &self.max_retries)
+            .field("progress", &self.progress)
+            .finish()
+    }
 }
 
 fn make_relative(src: &Path, dst: &Path) -> PathBuf {
@@ -542,6 +597,10 @@ impl Api {
             .to_str()?
             .to_string();
 
+        // Parse xet headers before following redirects
+        #[cfg(feature = "xet")]
+        let xet_file_data = xet::parse_xet_file_data(headers);
+
         // The response was redirected to S3 most likely which will
         // know about the size of the file
         let response = if response.status().is_redirection() {
@@ -568,6 +627,8 @@ impl Api {
             commit_hash,
             etag,
             size,
+            #[cfg(feature = "xet")]
+            xet_file_data,
         })
     }
 
@@ -608,6 +669,58 @@ impl Api {
     /// ```
     pub fn space(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
+    }
+}
+
+#[cfg(feature = "xet")]
+impl Api {
+    /// Returns a cloned XetSession, initializing it on first call.
+    /// Uses double-checked locking: acquires read lock first, falls back
+    /// to write lock only if session is uninitialized.
+    pub(crate) async fn xet_session(
+        &self,
+        repo_type: &str,
+        repo_id: &str,
+        revision: &str,
+    ) -> Result<xet::XetSession, ApiError> {
+        self.xet_session_with_token_type(repo_type, repo_id, revision, xet::XetTokenType::Read)
+            .await
+    }
+
+    pub(crate) async fn xet_session_with_token_type(
+        &self,
+        repo_type: &str,
+        repo_id: &str,
+        revision: &str,
+        token_type: xet::XetTokenType,
+    ) -> Result<xet::XetSession, ApiError> {
+        // Fast path: read lock, return clone if already initialized
+        {
+            let guard = self.xet_session.read().await;
+            if let Some(ref session) = *guard {
+                return Ok(session.clone());
+            }
+        }
+        // Slow path: write lock, double-check, then create
+        {
+            let mut guard = self.xet_session.write().await;
+            // Another task may have initialized while we waited for the write lock
+            if let Some(ref session) = *guard {
+                return Ok(session.clone());
+            }
+            let session = xet::create_session(
+                &self.client,
+                &self.endpoint,
+                repo_type,
+                repo_id,
+                revision,
+                &self.headers,
+                token_type,
+            )
+            .await?;
+            *guard = Some(session.clone());
+            Ok(session)
+        }
     }
 }
 
@@ -895,14 +1008,27 @@ impl ApiRepo {
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
         let lock = lock_file(blob_path.clone()).await?;
-        progress.init(metadata.size, filename).await;
-        let mut tmp_path = blob_path.clone();
-        tmp_path.set_extension(EXTENSION);
-        let tmp_filename = self
-            .download_tempfile(&url, metadata.size, tmp_path, progress)
+
+        #[cfg(feature = "xet")]
+        if let Some(ref xet_data) = metadata.xet_file_data {
+            let session = self
+                .api
+                .xet_session(
+                    self.repo.repo_type_prefix(),
+                    self.repo.repo_id(),
+                    self.repo.revision(),
+                )
+                .await?;
+            xet::xet_download(&session, xet_data, metadata.size, &blob_path).await?;
+        } else {
+            self.http_download(&url, &metadata, &blob_path, &mut progress, filename)
+                .await?;
+        }
+
+        #[cfg(not(feature = "xet"))]
+        self.http_download(&url, &metadata, &blob_path, &mut progress, filename)
             .await?;
 
-        tokio::fs::rename(&tmp_filename, &blob_path).await?;
         drop(lock);
 
         let mut pointer_path = cache.pointer_path(&metadata.commit_hash);
@@ -913,6 +1039,24 @@ impl ApiRepo {
         cache.create_ref(&metadata.commit_hash)?;
 
         Ok(pointer_path)
+    }
+
+    async fn http_download<P: Progress + Clone + Send + Sync + 'static>(
+        &self,
+        url: &str,
+        metadata: &Metadata,
+        blob_path: &Path,
+        progress: &mut P,
+        filename: &str,
+    ) -> Result<(), ApiError> {
+        progress.init(metadata.size as usize, filename).await;
+        let mut tmp_path = blob_path.to_path_buf();
+        tmp_path.set_extension(EXTENSION);
+        let tmp_filename = self
+            .download_tempfile(url, metadata.size as usize, tmp_path, progress.clone())
+            .await?;
+        tokio::fs::rename(&tmp_filename, blob_path).await?;
+        Ok(())
     }
 
     /// Get information about the Repo
@@ -949,6 +1093,243 @@ impl ApiRepo {
         let url = format!("{}/api/{}", self.api.endpoint, self.repo.api_url());
         self.api.client.get(url)
     }
+
+    /// Upload a single file to the repository.
+    pub async fn upload_file(&self, params: UploadFileParams<'_>) -> Result<commit::CommitResponse, ApiError> {
+        let add = CommitOperationAdd::new(
+            params.path_in_repo.to_string(),
+            params.local_path.to_path_buf(),
+        );
+        self.create_commit(CreateCommitParams {
+            operations: vec![CommitOperation::Add(add)],
+            commit_message: params.commit_message,
+            commit_description: params.commit_description,
+            parent_commit: params.parent_commit,
+            create_pr: params.create_pr,
+        })
+        .await
+    }
+
+    /// Upload an entire folder to the repository.
+    pub async fn upload_folder(&self, params: UploadFolderParams<'_>) -> Result<commit::CommitResponse, ApiError> {
+        let mut operations = Vec::new();
+        let walker = walkdir(params.local_folder).await?;
+        for local_path in walker {
+            let relative = local_path
+                .strip_prefix(params.local_folder)
+                .map_err(|e| ApiError::InvalidApiResponse(e.to_string()))?;
+            let path_in_repo = if params.path_in_repo.is_empty() {
+                relative.to_string_lossy().to_string()
+            } else {
+                format!("{}/{}", params.path_in_repo, relative.to_string_lossy())
+            };
+            // Normalize path separators
+            let path_in_repo = path_in_repo.replace('\\', "/");
+            operations.push(CommitOperation::Add(CommitOperationAdd::new(
+                path_in_repo,
+                local_path,
+            )));
+        }
+
+        self.create_commit(CreateCommitParams {
+            operations,
+            commit_message: params.commit_message,
+            commit_description: params.commit_description,
+            parent_commit: params.parent_commit,
+            create_pr: params.create_pr,
+        })
+        .await
+    }
+
+    /// Create a commit with multiple operations (add, delete, copy).
+    pub async fn create_commit(&self, params: CreateCommitParams<'_>) -> Result<commit::CommitResponse, ApiError> {
+        let repo_type = self.repo.repo_type_prefix();
+        let repo_id = self.repo.repo_id();
+        let revision = self.repo.url_revision();
+
+        // Separate additions from other operations
+        let mut additions: Vec<CommitOperationAdd> = Vec::new();
+        let mut other_ops: Vec<CommitOperation> = Vec::new();
+
+        for op in params.operations {
+            match op {
+                CommitOperation::Add(add) => additions.push(add),
+                other => other_ops.push(other),
+            }
+        }
+
+        // 1. Compute UploadInfo for each Add
+        for add in &mut additions {
+            let info = lfs::UploadInfo::from_path(&add.local_path).await?;
+            add.upload_info = Some(info);
+        }
+
+        // 2. Fetch upload modes from server
+        commit::fetch_upload_modes(
+            &self.api.client,
+            &self.api.endpoint,
+            repo_type,
+            repo_id,
+            &revision,
+            &self.api.headers,
+            &mut additions,
+            params.create_pr,
+        )
+        .await?;
+
+        // 3. Collect LFS file indices
+        let lfs_indices: Vec<usize> = additions
+            .iter()
+            .enumerate()
+            .filter(|(_, add)| add.upload_mode == Some(UploadMode::Lfs) && !add.should_ignore)
+            .map(|(i, _)| i)
+            .collect();
+
+        // 4. Handle LFS files via xet
+        if !lfs_indices.is_empty() {
+            // Collect upload infos for LFS batch
+            let upload_infos: Vec<&lfs::UploadInfo> = lfs_indices
+                .iter()
+                .filter_map(|&i| additions[i].upload_info.as_ref())
+                .collect();
+
+            let batch_response = lfs::post_lfs_batch_info(
+                &self.api.client,
+                &self.api.endpoint,
+                &self.repo.url(),
+                &self.api.headers,
+                &upload_infos,
+            )
+            .await?;
+
+            if batch_response.transfer != "xet" {
+                return Err(ApiError::UnsupportedTransfer(batch_response.transfer));
+            }
+
+            // Upload via xet
+            #[cfg(feature = "xet")]
+            {
+                let session = self
+                    .api
+                    .xet_session_with_token_type(
+                        repo_type,
+                        repo_id,
+                        self.repo.revision(),
+                        xet::XetTokenType::Write,
+                    )
+                    .await?;
+
+                let lfs_files: Vec<&CommitOperationAdd> = lfs_indices
+                    .iter()
+                    .map(|&i| &additions[i])
+                    .collect();
+                let xet_results = xet::xet_upload(&session, &lfs_files).await?;
+
+                // Set remote OIDs from xet results
+                for result in &xet_results {
+                    for add in &mut additions {
+                        if add.path_in_repo == result.path_in_repo {
+                            add.remote_oid = Some(result.xet_hash.clone());
+                        }
+                    }
+                }
+            }
+
+            #[cfg(not(feature = "xet"))]
+            {
+                return Err(ApiError::UnsupportedTransfer(
+                    "xet (feature not enabled)".to_string(),
+                ));
+            }
+        }
+
+        // 5. Reconstruct operations and send commit
+        let mut final_ops: Vec<CommitOperation> = additions
+            .into_iter()
+            .map(CommitOperation::Add)
+            .collect();
+        final_ops.extend(other_ops);
+
+        commit::create_commit_request(
+            &self.api.client,
+            &self.api.endpoint,
+            repo_type,
+            repo_id,
+            &revision,
+            &self.api.headers,
+            params.commit_message,
+            params.commit_description,
+            final_ops,
+            params.create_pr,
+            params.parent_commit,
+        )
+        .await
+    }
+}
+
+/// Parameters for uploading a single file.
+pub struct UploadFileParams<'a> {
+    /// The local file to upload.
+    pub local_path: &'a Path,
+    /// The destination path in the repository.
+    pub path_in_repo: &'a str,
+    /// The commit message.
+    pub commit_message: &'a str,
+    /// Optional extended description.
+    pub commit_description: Option<&'a str>,
+    /// Optional commit SHA for optimistic locking.
+    pub parent_commit: Option<&'a str>,
+    /// Whether to create a pull request.
+    pub create_pr: bool,
+}
+
+/// Parameters for uploading a folder.
+pub struct UploadFolderParams<'a> {
+    /// The local folder to upload.
+    pub local_folder: &'a Path,
+    /// The destination path prefix in the repository.
+    pub path_in_repo: &'a str,
+    /// The commit message.
+    pub commit_message: &'a str,
+    /// Optional extended description.
+    pub commit_description: Option<&'a str>,
+    /// Optional commit SHA for optimistic locking.
+    pub parent_commit: Option<&'a str>,
+    /// Whether to create a pull request.
+    pub create_pr: bool,
+}
+
+/// Parameters for creating a commit with multiple operations.
+pub struct CreateCommitParams<'a> {
+    /// The operations to perform in the commit.
+    pub operations: Vec<CommitOperation>,
+    /// The commit message.
+    pub commit_message: &'a str,
+    /// Optional extended description.
+    pub commit_description: Option<&'a str>,
+    /// Optional commit SHA for optimistic locking.
+    pub parent_commit: Option<&'a str>,
+    /// Whether to create a pull request.
+    pub create_pr: bool,
+}
+
+/// Recursively walk a directory and return all file paths.
+async fn walkdir(dir: &Path) -> Result<Vec<PathBuf>, ApiError> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let mut entries = tokio::fs::read_dir(&current).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 #[cfg(test)]

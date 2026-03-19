@@ -11,6 +11,13 @@ pub mod tokio;
 #[cfg(feature = "ureq")]
 pub mod sync;
 
+#[cfg(feature = "tokio")]
+pub(crate) mod commit;
+#[cfg(feature = "tokio")]
+pub(crate) mod lfs;
+#[cfg(feature = "xet")]
+pub(crate) mod xet;
+
 const HF_ENDPOINT: &str = "HF_ENDPOINT";
 
 /// This trait is used by users of the lib

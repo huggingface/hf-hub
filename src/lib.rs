@@ -262,6 +262,26 @@ impl Repo {
         &self.revision
     }
 
+    /// The repo id (e.g. "user/model-name")
+    pub fn repo_id(&self) -> &str {
+        &self.repo_id
+    }
+
+    /// The repo type
+    pub fn repo_type(&self) -> RepoType {
+        self.repo_type
+    }
+
+    /// The repo type as an API URL prefix (e.g. "models", "datasets", "spaces")
+    #[cfg(any(feature = "tokio", feature = "ureq"))]
+    pub(crate) fn repo_type_prefix(&self) -> &str {
+        match self.repo_type {
+            RepoType::Model => "models",
+            RepoType::Dataset => "datasets",
+            RepoType::Space => "spaces",
+        }
+    }
+
     /// The actual URL part of the repo
     #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn url(&self) -> String {
