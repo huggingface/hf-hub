@@ -26,16 +26,12 @@ This design adds two capabilities to hf-hub's tokio API:
 [dependencies]
 hf-xet = { git = "https://github.com/huggingface/xet-core", rev = "c0f798061658259275557df6e124f64973fdcf85", optional = true }
 xet-client = { git = "https://github.com/huggingface/xet-core", rev = "c0f798061658259275557df6e124f64973fdcf85", optional = true }
-typed-builder = { version = "0.20", optional = true }
-
 [features]
 xet = ["dep:hf-xet", "dep:xet-client", "tokio"]
-tokio = [..., "dep:typed-builder"]
 ```
 
 - `xet` feature is **off by default**. It implies `tokio`.
 - `xet-client` is needed for the `TokenRefresher` trait.
-- `typed-builder` is used for upload/commit params structs, gated behind `tokio`.
 
 ## File Structure
 
@@ -365,12 +361,12 @@ The `XetSession` is long-lived and reused across all operations. Each upload cre
 
 ## Download Flow Changes (`tokio.rs`)
 
-### Extended FileMetadata
+### Extended Metadata
 
-Renamed from `Metadata` to `FileMetadata` for clarity. The `size` field is changed to `u64` to correctly handle files >4GB on 32-bit platforms.
+The `size` field is changed to `u64` to correctly handle files >4GB on 32-bit platforms. A new xet field is added behind the `xet` feature gate.
 
 ```rust
-pub struct FileMetadata {
+pub struct Metadata {
     commit_hash: String,
     etag: String,
     size: u64,
@@ -379,7 +375,7 @@ pub struct FileMetadata {
 }
 ```
 
-Accessor methods (`commit_hash()`, `etag()`, `size()`) are updated accordingly. This is a breaking change to the public API — the old `Metadata` name and `usize` size are replaced.
+Accessor methods (`commit_hash()`, `etag()`, `size()`) are updated accordingly. The `size` type change from `usize` to `u64` is a breaking change.
 
 The `metadata()` method is updated to parse xet headers from the HEAD response (before following redirects).
 
@@ -493,44 +489,37 @@ Existing HTTP download logic is extracted into a private `http_download` helper 
 
 ## Upload Flow (`tokio.rs` public API)
 
-### Params structs (typed-builder)
+### Params structs
+
+All params structs have public fields and implement `Default` for optional fields.
 
 ```rust
-#[derive(TypedBuilder)]
+#[derive(Default)]
 pub struct UploadFileParams<'a> {
     pub local_path: &'a Path,
     pub path_in_repo: &'a str,
     pub commit_message: &'a str,
-    #[builder(default, setter(strip_option))]
     pub commit_description: Option<&'a str>,
-    #[builder(default, setter(strip_option))]
     pub parent_commit: Option<&'a str>,
-    #[builder(default = false)]
     pub create_pr: bool,
 }
 
-#[derive(TypedBuilder)]
+#[derive(Default)]
 pub struct UploadFolderParams<'a> {
     pub local_folder: &'a Path,
     pub path_in_repo: &'a str,
     pub commit_message: &'a str,
-    #[builder(default, setter(strip_option))]
     pub commit_description: Option<&'a str>,
-    #[builder(default, setter(strip_option))]
     pub parent_commit: Option<&'a str>,
-    #[builder(default = false)]
     pub create_pr: bool,
 }
 
-#[derive(TypedBuilder)]
+#[derive(Default)]
 pub struct CreateCommitParams<'a> {
     pub operations: Vec<CommitOperation>,
     pub commit_message: &'a str,
-    #[builder(default, setter(strip_option))]
     pub commit_description: Option<&'a str>,
-    #[builder(default, setter(strip_option))]
     pub parent_commit: Option<&'a str>,
-    #[builder(default = false)]
     pub create_pr: bool,
 }
 ```
@@ -580,26 +569,24 @@ let api = Api::new()?;
 let repo = api.model("user/my-model".into());
 
 // Simple file upload
-repo.upload_file(
-    UploadFileParams::builder()
-        .local_path(Path::new("model.safetensors"))
-        .path_in_repo("model.safetensors")
-        .commit_message("Upload model weights")
-        .build()
-).await?;
+repo.upload_file(UploadFileParams {
+    local_path: Path::new("model.safetensors"),
+    path_in_repo: "model.safetensors",
+    commit_message: "Upload model weights",
+    ..Default::default()
+}).await?;
 
 // Complex commit with mixed operations
-repo.create_commit(
-    CreateCommitParams::builder()
-        .operations(vec![
-            CommitOperation::Add(CommitOperationAdd { ... }),
-            CommitOperation::Delete(CommitOperationDelete { path_in_repo: "old_model.bin".into() }),
-            CommitOperation::Copy(CommitOperationCopy { ... }),
-        ])
-        .commit_message("Reorganize model files")
-        .create_pr(true)
-        .build()
-).await?;
+repo.create_commit(CreateCommitParams {
+    operations: vec![
+        CommitOperation::Add(CommitOperationAdd { ... }),
+        CommitOperation::Delete(CommitOperationDelete { path_in_repo: "old_model.bin".into() }),
+        CommitOperation::Copy(CommitOperationCopy { ... }),
+    ],
+    commit_message: "Reorganize model files",
+    create_pr: true,
+    ..Default::default()
+}).await?;
 ```
 
 ## Error Handling
