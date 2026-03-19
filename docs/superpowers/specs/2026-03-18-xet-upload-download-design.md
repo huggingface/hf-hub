@@ -398,7 +398,7 @@ pub struct Api {
     max_retries: usize,
     progress: bool,
     #[cfg(feature = "xet")]
-    xet_session: Option<XetSession>,  // None until first xet op; cheap to clone
+    xet_session: Arc<RwLock<Option<XetSession>>>,  // written once, read many
 }
 
 pub struct ApiRepo {
@@ -407,25 +407,50 @@ pub struct ApiRepo {
 }
 ```
 
-`ApiRepo` accesses the session via a helper that initializes if needed and stores on `Api`:
+`Api` exposes a `xet_session()` method using double-checked locking via `RwLock`:
 
 ```rust
 #[cfg(feature = "xet")]
-async fn ensure_xet_session(&mut self) -> Result<&XetSession, ApiError> {
-    if self.api.xet_session.is_none() {
-        let session = xet::create_session(
-            &self.api.client,
-            &self.api.endpoint,
-            /* repo_type, repo_id, revision from self.repo */
-            &self.api.headers,
-        ).await?;
-        self.api.xet_session = Some(session);
+impl Api {
+    /// Returns a cloned XetSession, initializing it on first call.
+    /// Uses double-checked locking: acquires read lock first, falls back
+    /// to write lock only if session is uninitialized.
+    pub(crate) async fn xet_session(
+        &self,
+        repo_type: &str,
+        repo_id: &str,
+        revision: &str,
+    ) -> Result<XetSession, ApiError> {
+        // Fast path: read lock, return clone if already initialized
+        {
+            let guard = self.xet_session.read().await;
+            if let Some(ref session) = *guard {
+                return Ok(session.clone());
+            }
+        }
+        // Slow path: write lock, double-check, then create
+        {
+            let mut guard = self.xet_session.write().await;
+            // Another task may have initialized while we waited for the write lock
+            if let Some(ref session) = *guard {
+                return Ok(session.clone());
+            }
+            let session = xet::create_session(
+                &self.client,
+                &self.endpoint,
+                repo_type,
+                repo_id,
+                revision,
+                /* headers */
+            ).await?;
+            *guard = Some(session.clone());
+            Ok(session)
+        }
     }
-    Ok(self.api.xet_session.as_ref().unwrap())
 }
 ```
 
-Since `Api` is `Clone` and `XetSession` is cheaply cloneable, cloning an `Api` after session initialization carries the session to all clones.
+`ApiRepo` calls `self.api.xet_session(...)` to get a session clone. Since `XetSession` is cheaply cloneable (Arc-based internally), the returned clone shares all state with the original.
 
 ### Download branching in `download_with_progress`
 
@@ -443,8 +468,8 @@ pub async fn download_with_progress<P: Progress + Clone + Send + Sync + 'static>
 
     #[cfg(feature = "xet")]
     if let Some(ref xet_data) = metadata.xet_file_data {
-        let session = self.ensure_xet_session().await?;
-        xet::xet_download(session, xet_data, metadata.size, &blob_path).await?;
+        let session = self.api.xet_session(/* repo_type, repo_id, revision */).await?;
+        xet::xet_download(&session, xet_data, metadata.size, &blob_path).await?;
     } else {
         self.http_download(&url, &metadata, &blob_path, progress).await?;
     }
@@ -536,7 +561,7 @@ create_commit(params)
   │
   ├── 4. For lfs_files:
   │     ├── post_lfs_batch_info() → server confirms xet transfer
-  │     ├── self.ensure_xet_session() → get/init shared session
+  │     ├── self.api.xet_session() → get/init shared session
   │     └── xet_upload(&session, lfs_files) → returns xet hashes per file
   │
   └── 5. create_commit_request()
