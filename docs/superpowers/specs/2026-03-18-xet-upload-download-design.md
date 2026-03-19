@@ -305,20 +305,36 @@ pub(crate) struct XetFileData {
 pub(crate) fn parse_xet_file_data(headers: &HeaderMap) -> Option<XetFileData>
 ```
 
-### Download helper
+### Session lifecycle
 
+A single `XetSession` is stored on the `Api` struct as `Option<XetSession>`. Since `XetSession` is cheaply cloneable (all clones share state via `Arc`), it is cloned into each `ApiRepo`.
+
+The session is initialized on the first xet operation. Once set, it is reused for all subsequent operations across all `ApiRepo` instances from the same `Api`. Initialization requires a CAS endpoint and initial token, obtained via `fetch_xet_token`. The session's `TokenRefresher` handles subsequent token refreshes.
+
+**Initialization** (in `xet.rs`):
 ```rust
-/// Downloads a single xet file to the given path.
-/// 1. Fetches read token via fetch_xet_token
-/// 2. Builds XetSession with token + HfTokenRefresher
-/// 3. Creates DownloadGroup, queues file, calls finish()
-pub(crate) async fn xet_download(
+/// Create a new XetSession.
+/// Fetches initial token, builds session with token refresher.
+pub(crate) async fn create_session(
     client: &Client,
     endpoint: &str,
     repo_type: &str,
     repo_id: &str,
     revision: &str,
     headers: &HeaderMap,
+    token_type: XetTokenType,
+) -> Result<XetSession, ApiError>
+```
+
+### Download helper
+
+```rust
+/// Downloads a single xet file to the given path.
+/// Uses the shared XetSession from Api.
+/// 1. Creates DownloadGroup from session
+/// 2. Queues file, calls finish()
+pub(crate) async fn xet_download(
+    session: &XetSession,
     file_data: &XetFileData,
     file_size: u64,
     dest_path: &Path,
@@ -328,18 +344,12 @@ pub(crate) async fn xet_download(
 ### Upload helper
 
 ```rust
-/// Uploads multiple files via XetSession.
-/// 1. Fetches write token via fetch_xet_token
-/// 2. Builds XetSession with token + HfTokenRefresher
-/// 3. Creates UploadCommit, queues all files, calls commit()
-/// 4. Returns per-file xet hashes for the commit payload
+/// Uploads multiple files via the shared XetSession.
+/// 1. Creates UploadCommit from session
+/// 2. Queues all files, calls commit()
+/// 3. Returns per-file xet hashes for the commit payload
 pub(crate) async fn xet_upload(
-    client: &Client,
-    endpoint: &str,
-    repo_type: &str,
-    repo_id: &str,
-    revision: &str,
-    headers: &HeaderMap,
+    session: &XetSession,
     files: &[CommitOperationAdd],
 ) -> Result<Vec<XetUploadResult>, ApiError>
 
@@ -351,7 +361,7 @@ pub(crate) struct XetUploadResult {
 }
 ```
 
-One `XetSession` per upload/download batch. For downloads, single-file groups. For uploads, `create_commit` batches all LFS-mode files into one `UploadCommit`.
+The `XetSession` is long-lived and reused across all operations. Each upload creates an `UploadCommit` and each download creates a `DownloadGroup` from the same session — these are the short-lived, per-operation objects.
 
 ## Download Flow Changes (`tokio.rs`)
 
@@ -373,6 +383,50 @@ Accessor methods (`commit_hash()`, `etag()`, `size()`) are updated accordingly. 
 
 The `metadata()` method is updated to parse xet headers from the HEAD response (before following redirects).
 
+### Changes to `Api` and `ApiRepo`
+
+```rust
+#[derive(Clone, Debug)]
+pub struct Api {
+    endpoint: String,
+    cache: Cache,
+    client: Client,
+    relative_redirect_client: Client,
+    max_files: usize,
+    chunk_size: Option<usize>,
+    parallel_failures: usize,
+    max_retries: usize,
+    progress: bool,
+    #[cfg(feature = "xet")]
+    xet_session: Option<XetSession>,  // None until first xet op; cheap to clone
+}
+
+pub struct ApiRepo {
+    api: Api,
+    repo: Repo,
+}
+```
+
+`ApiRepo` accesses the session via a helper that initializes if needed and stores on `Api`:
+
+```rust
+#[cfg(feature = "xet")]
+async fn ensure_xet_session(&mut self) -> Result<&XetSession, ApiError> {
+    if self.api.xet_session.is_none() {
+        let session = xet::create_session(
+            &self.api.client,
+            &self.api.endpoint,
+            /* repo_type, repo_id, revision from self.repo */
+            &self.api.headers,
+        ).await?;
+        self.api.xet_session = Some(session);
+    }
+    Ok(self.api.xet_session.as_ref().unwrap())
+}
+```
+
+Since `Api` is `Clone` and `XetSession` is cheaply cloneable, cloning an `Api` after session initialization carries the session to all clones.
+
 ### Download branching in `download_with_progress`
 
 ```rust
@@ -389,11 +443,8 @@ pub async fn download_with_progress<P: Progress + Clone + Send + Sync + 'static>
 
     #[cfg(feature = "xet")]
     if let Some(ref xet_data) = metadata.xet_file_data {
-        xet::xet_download(
-            &self.api.client, &self.api.endpoint,
-            /* repo_type, repo_id, revision from self.repo */
-            &self.api.headers, xet_data, metadata.size as u64, &blob_path,
-        ).await?;
+        let session = self.ensure_xet_session().await?;
+        xet::xet_download(session, xet_data, metadata.size, &blob_path).await?;
     } else {
         self.http_download(&url, &metadata, &blob_path, progress).await?;
     }
@@ -485,7 +536,8 @@ create_commit(params)
   │
   ├── 4. For lfs_files:
   │     ├── post_lfs_batch_info() → server confirms xet transfer
-  │     └── xet_upload(lfs_files) → returns xet hashes per file
+  │     ├── self.ensure_xet_session() → get/init shared session
+  │     └── xet_upload(&session, lfs_files) → returns xet hashes per file
   │
   └── 5. create_commit_request()
         ├── regular files: inline base64 content
