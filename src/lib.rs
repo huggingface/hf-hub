@@ -187,7 +187,6 @@ impl CacheRepo {
         blob_path
     }
 
-
     /// Get the path of the snapshot with the given commit hash.
     ///
     /// This path contains symlink pointers to the files for this commit.

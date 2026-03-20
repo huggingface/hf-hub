@@ -5,10 +5,8 @@ use reqwest::Client;
 use std::path::Path;
 use std::sync::Arc;
 
+use xet::xet_session::{Sha256Policy, XetFileInfo, XetSessionBuilder};
 pub(crate) use xet::xet_session::{UniqueID, XetSession};
-use xet::xet_session::{
-    Sha256Policy, XetFileInfo, XetSessionBuilder,
-};
 use xet_client::cas_client::auth::{AuthError, TokenInfo, TokenRefresher};
 
 /// Xet error type, re-exported from xet crate.
@@ -48,9 +46,7 @@ pub(crate) async fn fetch_xet_token(
     token_type: XetTokenType,
 ) -> Result<XetConnectionInfo, ApiError> {
     let token_type_str = token_type.as_str();
-    let url = format!(
-        "{endpoint}/api/{repo_type}/{repo_id}/xet-{token_type_str}-token/{revision}"
-    );
+    let url = format!("{endpoint}/api/{repo_type}/{repo_id}/xet-{token_type_str}-token/{revision}");
 
     let response = client
         .get(&url)
@@ -63,7 +59,9 @@ pub(crate) async fn fetch_xet_token(
 
     let access_token = body["accessToken"]
         .as_str()
-        .ok_or_else(|| ApiError::InvalidApiResponse("missing accessToken in xet token response".into()))?
+        .ok_or_else(|| {
+            ApiError::InvalidApiResponse("missing accessToken in xet token response".into())
+        })?
         .to_string();
 
     let expiration_unix_epoch = body["exp"]
@@ -138,7 +136,10 @@ pub(crate) async fn create_session(
     headers: &HeaderMap,
     token_type: XetTokenType,
 ) -> Result<XetSession, ApiError> {
-    let info = fetch_xet_token(client, endpoint, repo_type, repo_id, revision, headers, token_type).await?;
+    let info = fetch_xet_token(
+        client, endpoint, repo_type, repo_id, revision, headers, token_type,
+    )
+    .await?;
 
     let refresher = HfTokenRefresher {
         client: client.clone(),
@@ -184,10 +185,7 @@ pub(crate) async fn xet_download(
         .await
         .map_err(ApiError::XetError)?;
 
-    let results = download_group
-        .finish()
-        .await
-        .map_err(ApiError::XetError)?;
+    let results = download_group.finish().await.map_err(ApiError::XetError)?;
 
     // Check for any download errors
     for result in results.values() {
@@ -230,10 +228,7 @@ pub(crate) async fn xet_upload(
         task_ids_and_paths.push((handle.task_id, file.path_in_repo.clone()));
     }
 
-    let results = upload_commit
-        .commit()
-        .await
-        .map_err(ApiError::XetError)?;
+    let results = upload_commit.commit().await.map_err(ApiError::XetError)?;
 
     let mut upload_results = Vec::new();
     for (task_id, path_in_repo) in &task_ids_and_paths {

@@ -90,9 +90,11 @@ pub(crate) async fn compute_upload_infos(
 
     let mut results = Vec::with_capacity(handles.len());
     for handle in handles {
-        results.push(handle.await.map_err(|e| {
-            ApiError::InvalidApiResponse(format!("task join error: {e}"))
-        })??);
+        results.push(
+            handle
+                .await
+                .map_err(|e| ApiError::InvalidApiResponse(format!("task join error: {e}")))??,
+        );
     }
     Ok(results)
 }
@@ -156,14 +158,13 @@ pub(crate) async fn post_lfs_batch_info(
 
     let body: serde_json::Value = response.json().await?;
 
-    let transfer = body["transfer"]
-        .as_str()
-        .unwrap_or("basic")
-        .to_string();
+    let transfer = body["transfer"].as_str().unwrap_or("basic").to_string();
 
     let objects = body["objects"]
         .as_array()
-        .ok_or_else(|| ApiError::InvalidApiResponse("missing objects in LFS batch response".into()))?
+        .ok_or_else(|| {
+            ApiError::InvalidApiResponse("missing objects in LFS batch response".into())
+        })?
         .iter()
         .map(|obj| LfsObject {
             oid: obj["oid"].as_str().unwrap_or_default().to_string(),

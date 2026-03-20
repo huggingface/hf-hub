@@ -101,7 +101,10 @@ pub(crate) async fn fetch_upload_modes(
         let files: Vec<serde_json::Value> = chunk
             .iter()
             .map(|add| {
-                let info = add.upload_info.as_ref().expect("upload_info must be set before fetch_upload_modes");
+                let info = add
+                    .upload_info
+                    .as_ref()
+                    .expect("upload_info must be set before fetch_upload_modes");
                 serde_json::json!({
                     "path": add.path_in_repo,
                     "size": info.size,
@@ -126,9 +129,9 @@ pub(crate) async fn fetch_upload_modes(
             .error_for_status()?;
 
         let body: serde_json::Value = response.json().await?;
-        let response_files = body["files"]
-            .as_array()
-            .ok_or_else(|| ApiError::InvalidApiResponse("missing files in preupload response".into()))?;
+        let response_files = body["files"].as_array().ok_or_else(|| {
+            ApiError::InvalidApiResponse("missing files in preupload response".into())
+        })?;
 
         for (i, file_resp) in response_files.iter().enumerate() {
             let idx = chunk_start + i;
@@ -180,7 +183,9 @@ pub(crate) async fn create_commit_request(
                 }
                 match add.upload_mode.as_ref() {
                     Some(UploadMode::Lfs) => {
-                        let info = add.upload_info.as_ref()
+                        let info = add
+                            .upload_info
+                            .as_ref()
                             .expect("upload_info must be set for LFS files");
                         // LFS pointer metadata
                         let mut lfs_info = serde_json::json!({
@@ -194,7 +199,8 @@ pub(crate) async fn create_commit_request(
                         });
                         // If we have a remote_oid from xet upload, include it
                         if let Some(ref remote_oid) = add.remote_oid {
-                            lfs_info["value"]["xetHash"] = serde_json::Value::String(remote_oid.clone());
+                            lfs_info["value"]["xetHash"] =
+                                serde_json::Value::String(remote_oid.clone());
                         }
                         ops_json.push(lfs_info);
                     }

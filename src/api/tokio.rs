@@ -24,12 +24,14 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::{AcquireError, Semaphore, TryAcquireError};
 use tokio::task::JoinError;
 
-#[cfg(feature = "xet")]
-use super::xet;
 use super::commit::{self, UploadMode};
 use super::lfs;
+#[cfg(feature = "xet")]
+use super::xet;
 
-pub use super::commit::{CommitOperation, CommitOperationAdd, CommitOperationCopy, CommitOperationDelete, CommitResponse};
+pub use super::commit::{
+    CommitOperation, CommitOperationAdd, CommitOperationCopy, CommitOperationDelete, CommitResponse,
+};
 
 /// Current version (used in user-agent)
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -430,8 +432,6 @@ impl ApiBuilder {
             max_retries: self.max_retries,
             progress: self.progress,
             headers,
-            #[cfg(feature = "xet")]
-            xet_session: Arc::new(tokio::sync::RwLock::new(None)),
         })
     }
 }
@@ -477,8 +477,6 @@ pub struct Api {
     max_retries: usize,
     progress: bool,
     headers: HeaderMap,
-    #[cfg(feature = "xet")]
-    xet_session: Arc<tokio::sync::RwLock<Option<xet::XetSession>>>,
 }
 
 impl std::fmt::Debug for Api {
@@ -674,53 +672,24 @@ impl Api {
 
 #[cfg(feature = "xet")]
 impl Api {
-    /// Returns a cloned XetSession, initializing it on first call.
-    /// Uses double-checked locking: acquires read lock first, falls back
-    /// to write lock only if session is uninitialized.
+    /// Creates a new XetSession for the given repo and token type.
     pub(crate) async fn xet_session(
-        &self,
-        repo_type: &str,
-        repo_id: &str,
-        revision: &str,
-    ) -> Result<xet::XetSession, ApiError> {
-        self.xet_session_with_token_type(repo_type, repo_id, revision, xet::XetTokenType::Read)
-            .await
-    }
-
-    pub(crate) async fn xet_session_with_token_type(
         &self,
         repo_type: &str,
         repo_id: &str,
         revision: &str,
         token_type: xet::XetTokenType,
     ) -> Result<xet::XetSession, ApiError> {
-        // Fast path: read lock, return clone if already initialized
-        {
-            let guard = self.xet_session.read().await;
-            if let Some(ref session) = *guard {
-                return Ok(session.clone());
-            }
-        }
-        // Slow path: write lock, double-check, then create
-        {
-            let mut guard = self.xet_session.write().await;
-            // Another task may have initialized while we waited for the write lock
-            if let Some(ref session) = *guard {
-                return Ok(session.clone());
-            }
-            let session = xet::create_session(
-                &self.client,
-                &self.endpoint,
-                repo_type,
-                repo_id,
-                revision,
-                &self.headers,
-                token_type,
-            )
-            .await?;
-            *guard = Some(session.clone());
-            Ok(session)
-        }
+        xet::create_session(
+            &self.client,
+            &self.endpoint,
+            repo_type,
+            repo_id,
+            revision,
+            &self.headers,
+            token_type,
+        )
+        .await
     }
 }
 
@@ -1017,6 +986,7 @@ impl ApiRepo {
                     self.repo.repo_type_prefix(),
                     self.repo.repo_id(),
                     &self.repo.url_revision(),
+                    xet::XetTokenType::Read,
                 )
                 .await?;
             xet::xet_download(&session, xet_data, metadata.size, &blob_path).await?;
@@ -1095,7 +1065,10 @@ impl ApiRepo {
     }
 
     /// Upload a single file to the repository.
-    pub async fn upload_file(&self, params: UploadFileParams<'_>) -> Result<commit::CommitResponse, ApiError> {
+    pub async fn upload_file(
+        &self,
+        params: UploadFileParams<'_>,
+    ) -> Result<commit::CommitResponse, ApiError> {
         let add = CommitOperationAdd::new(
             params.path_in_repo.to_string(),
             params.local_path.to_path_buf(),
@@ -1111,7 +1084,10 @@ impl ApiRepo {
     }
 
     /// Upload an entire folder to the repository.
-    pub async fn upload_folder(&self, params: UploadFolderParams<'_>) -> Result<commit::CommitResponse, ApiError> {
+    pub async fn upload_folder(
+        &self,
+        params: UploadFolderParams<'_>,
+    ) -> Result<commit::CommitResponse, ApiError> {
         let mut operations = Vec::new();
         let walker = walkdir(params.local_folder).await?;
         for local_path in walker {
@@ -1142,7 +1118,10 @@ impl ApiRepo {
     }
 
     /// Create a commit with multiple operations (add, delete, copy).
-    pub async fn create_commit(&self, params: CreateCommitParams<'_>) -> Result<commit::CommitResponse, ApiError> {
+    pub async fn create_commit(
+        &self,
+        params: CreateCommitParams<'_>,
+    ) -> Result<commit::CommitResponse, ApiError> {
         let repo_type = self.repo.repo_type_prefix();
         let repo_id = self.repo.repo_id();
         let revision = self.repo.url_revision();
@@ -1216,7 +1195,7 @@ impl ApiRepo {
             {
                 let session = self
                     .api
-                    .xet_session_with_token_type(
+                    .xet_session(
                         repo_type,
                         repo_id,
                         &self.repo.url_revision(),
@@ -1224,10 +1203,8 @@ impl ApiRepo {
                     )
                     .await?;
 
-                let lfs_files: Vec<&CommitOperationAdd> = lfs_indices
-                    .iter()
-                    .map(|&i| &additions[i])
-                    .collect();
+                let lfs_files: Vec<&CommitOperationAdd> =
+                    lfs_indices.iter().map(|&i| &additions[i]).collect();
                 let xet_results = xet::xet_upload(&session, &lfs_files).await?;
 
                 // Set remote OIDs from xet results
@@ -1249,10 +1226,8 @@ impl ApiRepo {
         }
 
         // 5. Reconstruct operations and send commit
-        let mut final_ops: Vec<CommitOperation> = additions
-            .into_iter()
-            .map(CommitOperation::Add)
-            .collect();
+        let mut final_ops: Vec<CommitOperation> =
+            additions.into_iter().map(CommitOperation::Add).collect();
         final_ops.extend(other_ops);
 
         commit::create_commit_request(
@@ -1951,7 +1926,11 @@ mod tests {
             assert!(downloaded_path.exists());
             let downloaded_content = std::fs::read(&downloaded_path).unwrap();
             let actual_sha = Sha256::digest(&downloaded_content);
-            assert_eq!(actual_sha[..], expected_sha[..], "SHA256 mismatch after round-trip");
+            assert_eq!(
+                actual_sha[..],
+                expected_sha[..],
+                "SHA256 mismatch after round-trip"
+            );
             assert_eq!(
                 std::str::from_utf8(&downloaded_content).unwrap(),
                 content,
@@ -2010,10 +1989,16 @@ mod tests {
             let path_b = format!("{remote_prefix}/subdir/file_b.txt");
 
             let downloaded_a = repo.download(&path_a).await.unwrap();
-            assert_eq!(std::fs::read_to_string(&downloaded_a).unwrap(), "file a content");
+            assert_eq!(
+                std::fs::read_to_string(&downloaded_a).unwrap(),
+                "file a content"
+            );
 
             let downloaded_b = repo.download(&path_b).await.unwrap();
-            assert_eq!(std::fs::read_to_string(&downloaded_b).unwrap(), "file b content");
+            assert_eq!(
+                std::fs::read_to_string(&downloaded_b).unwrap(),
+                "file b content"
+            );
 
             // Clean up
             let _ = repo
@@ -2070,10 +2055,7 @@ mod tests {
             let commit_response = repo
                 .create_commit(CreateCommitParams {
                     operations: vec![
-                        CommitOperation::Add(CommitOperationAdd::new(
-                            add_path.clone(),
-                            new_file,
-                        )),
+                        CommitOperation::Add(CommitOperationAdd::new(add_path.clone(), new_file)),
                         CommitOperation::Delete(CommitOperationDelete {
                             path_in_repo: delete_path.clone(),
                         }),
