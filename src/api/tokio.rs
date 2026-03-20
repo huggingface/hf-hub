@@ -1016,7 +1016,7 @@ impl ApiRepo {
                 .xet_session(
                     self.repo.repo_type_prefix(),
                     self.repo.repo_id(),
-                    self.repo.revision(),
+                    &self.repo.url_revision(),
                 )
                 .await?;
             xet::xet_download(&session, xet_data, metadata.size, &blob_path).await?;
@@ -1158,10 +1158,15 @@ impl ApiRepo {
             }
         }
 
-        // 1. Compute UploadInfo for each Add
-        for add in &mut additions {
-            let info = lfs::UploadInfo::from_path(&add.local_path).await?;
-            add.upload_info = Some(info);
+        // 1. Compute UploadInfo for each Add (concurrently, bounded by semaphore)
+        let paths: Vec<(usize, PathBuf)> = additions
+            .iter()
+            .enumerate()
+            .map(|(i, add)| (i, add.local_path.clone()))
+            .collect();
+        let infos = lfs::compute_upload_infos(&paths).await?;
+        for (idx, info) in infos {
+            additions[idx].upload_info = Some(info);
         }
 
         // 2. Fetch upload modes from server
@@ -1214,7 +1219,7 @@ impl ApiRepo {
                     .xet_session_with_token_type(
                         repo_type,
                         repo_id,
-                        self.repo.revision(),
+                        &self.repo.url_revision(),
                         xet::XetTokenType::Write,
                     )
                     .await?;
@@ -1321,11 +1326,13 @@ async fn walkdir(dir: &Path) -> Result<Vec<PathBuf>, ApiError> {
         let mut entries = tokio::fs::read_dir(&current).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.is_dir() {
+            let metadata = tokio::fs::symlink_metadata(&path).await?;
+            if metadata.is_dir() {
                 stack.push(path);
-            } else {
+            } else if metadata.is_file() {
                 files.push(path);
             }
+            // Skip symlinks and other special file types
         }
     }
     files.sort();
