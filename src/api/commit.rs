@@ -82,6 +82,7 @@ pub struct CommitResponse {
 /// Sends file paths, sizes, and SHA256 samples in chunks of 256.
 /// Server returns "regular" or "lfs" per file, plus shouldIgnore and oid.
 /// Mutates each CommitOperationAdd with its upload_mode.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn fetch_upload_modes(
     client: &Client,
     endpoint: &str,
@@ -150,6 +151,7 @@ pub(crate) async fn fetch_upload_modes(
 /// - regular files inline (base64 content)
 /// - LFS files as pointer metadata (after xet upload)
 /// - deletions and copies as operations
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_commit_request(
     client: &Client,
     endpoint: &str,

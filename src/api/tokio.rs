@@ -1870,4 +1870,238 @@ mod tests {
             repo.download("config.json").await.unwrap();
         }
     }
+
+    /// Tests for xet upload/download functionality.
+    /// These require:
+    /// - The `xet` feature enabled
+    /// - `HF_TOKEN` env var set with a valid token
+    /// - `HF_TEST_XET_REPO` env var set to a writable repo (e.g. "user/test-repo")
+    #[cfg(feature = "xet")]
+    mod xet_tests {
+        use super::*;
+
+        fn xet_test_setup() -> Option<(Api, String, String)> {
+            let token = std::env::var("HF_TOKEN").ok()?;
+            let repo_id = std::env::var("HF_TEST_XET_REPO").ok()?;
+            let tmp = TempDir::new();
+            let api = ApiBuilder::new()
+                .with_progress(false)
+                .with_token(Some(token))
+                .with_cache_dir(tmp.path.clone())
+                .build()
+                .unwrap();
+            // Leak TempDir so it isn't cleaned up before async operations finish
+            let path = tmp.path.clone();
+            std::mem::forget(tmp);
+            Some((api, repo_id, path.to_string_lossy().to_string()))
+        }
+
+        fn cleanup_temp(path: &str) {
+            let _ = std::fs::remove_dir_all(path);
+        }
+
+        fn random_suffix() -> String {
+            rand::rng()
+                .sample_iter(&Alphanumeric)
+                .take(8)
+                .map(char::from)
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn xet_upload_file_and_download() {
+            let Some((api, repo_id, tmp_path)) = xet_test_setup() else {
+                return;
+            };
+
+            let repo = api.model(repo_id);
+            let suffix = random_suffix();
+            let remote_path = format!("test_upload_{suffix}.txt");
+            let content = format!("Hello from hf-hub xet integration test {suffix}");
+
+            // Create a local temp file to upload
+            let local_file = PathBuf::from(&tmp_path).join("upload_test.txt");
+            std::fs::write(&local_file, content.as_bytes()).unwrap();
+            let expected_sha = Sha256::digest(content.as_bytes());
+
+            // Upload the file
+            let commit_response = repo
+                .upload_file(UploadFileParams {
+                    local_path: &local_file,
+                    path_in_repo: &remote_path,
+                    commit_message: "test: upload file for xet integration test",
+                    commit_description: None,
+                    parent_commit: None,
+                    create_pr: false,
+                })
+                .await
+                .unwrap();
+            assert!(!commit_response.commit_id.is_empty());
+            assert!(!commit_response.commit_url.is_empty());
+
+            // Download it back
+            let downloaded_path = repo.download(&remote_path).await.unwrap();
+            assert!(downloaded_path.exists());
+            let downloaded_content = std::fs::read(&downloaded_path).unwrap();
+            let actual_sha = Sha256::digest(&downloaded_content);
+            assert_eq!(actual_sha[..], expected_sha[..], "SHA256 mismatch after round-trip");
+            assert_eq!(
+                std::str::from_utf8(&downloaded_content).unwrap(),
+                content,
+                "Content mismatch after round-trip"
+            );
+
+            // Clean up: delete the uploaded file
+            let _ = repo
+                .create_commit(CreateCommitParams {
+                    operations: vec![CommitOperation::Delete(CommitOperationDelete {
+                        path_in_repo: remote_path,
+                    })],
+                    commit_message: "test: cleanup xet integration test file",
+                    commit_description: None,
+                    parent_commit: None,
+                    create_pr: false,
+                })
+                .await;
+
+            cleanup_temp(&tmp_path);
+        }
+
+        #[tokio::test]
+        async fn xet_upload_folder() {
+            let Some((api, repo_id, tmp_path)) = xet_test_setup() else {
+                return;
+            };
+
+            let repo = api.model(repo_id);
+            let suffix = random_suffix();
+
+            // Create a local folder structure
+            let folder = PathBuf::from(&tmp_path).join("upload_folder");
+            std::fs::create_dir_all(folder.join("subdir")).unwrap();
+            std::fs::write(folder.join("file_a.txt"), "file a content").unwrap();
+            std::fs::write(folder.join("subdir").join("file_b.txt"), "file b content").unwrap();
+
+            let remote_prefix = format!("test_folder_{suffix}");
+
+            // Upload the folder
+            let commit_response = repo
+                .upload_folder(UploadFolderParams {
+                    local_folder: &folder,
+                    path_in_repo: &remote_prefix,
+                    commit_message: "test: upload folder for xet integration test",
+                    commit_description: None,
+                    parent_commit: None,
+                    create_pr: false,
+                })
+                .await
+                .unwrap();
+            assert!(!commit_response.commit_id.is_empty());
+
+            // Download individual files and verify
+            let path_a = format!("{remote_prefix}/file_a.txt");
+            let path_b = format!("{remote_prefix}/subdir/file_b.txt");
+
+            let downloaded_a = repo.download(&path_a).await.unwrap();
+            assert_eq!(std::fs::read_to_string(&downloaded_a).unwrap(), "file a content");
+
+            let downloaded_b = repo.download(&path_b).await.unwrap();
+            assert_eq!(std::fs::read_to_string(&downloaded_b).unwrap(), "file b content");
+
+            // Clean up
+            let _ = repo
+                .create_commit(CreateCommitParams {
+                    operations: vec![
+                        CommitOperation::Delete(CommitOperationDelete {
+                            path_in_repo: path_a,
+                        }),
+                        CommitOperation::Delete(CommitOperationDelete {
+                            path_in_repo: path_b,
+                        }),
+                    ],
+                    commit_message: "test: cleanup xet folder integration test",
+                    commit_description: None,
+                    parent_commit: None,
+                    create_pr: false,
+                })
+                .await;
+
+            cleanup_temp(&tmp_path);
+        }
+
+        #[tokio::test]
+        async fn xet_create_commit_mixed_operations() {
+            let Some((api, repo_id, tmp_path)) = xet_test_setup() else {
+                return;
+            };
+
+            let repo = api.model(repo_id);
+            let suffix = random_suffix();
+
+            // First, upload a file that we'll later delete
+            let local_file = PathBuf::from(&tmp_path).join("to_delete.txt");
+            std::fs::write(&local_file, "this file will be deleted").unwrap();
+            let delete_path = format!("test_mixed_delete_{suffix}.txt");
+
+            repo.upload_file(UploadFileParams {
+                local_path: &local_file,
+                path_in_repo: &delete_path,
+                commit_message: "test: setup file for mixed operations test",
+                commit_description: None,
+                parent_commit: None,
+                create_pr: false,
+            })
+            .await
+            .unwrap();
+
+            // Now create a commit that adds a new file and deletes the old one
+            let new_file = PathBuf::from(&tmp_path).join("new_file.txt");
+            let new_content = format!("new file content {suffix}");
+            std::fs::write(&new_file, new_content.as_bytes()).unwrap();
+            let add_path = format!("test_mixed_add_{suffix}.txt");
+
+            let commit_response = repo
+                .create_commit(CreateCommitParams {
+                    operations: vec![
+                        CommitOperation::Add(CommitOperationAdd::new(
+                            add_path.clone(),
+                            new_file,
+                        )),
+                        CommitOperation::Delete(CommitOperationDelete {
+                            path_in_repo: delete_path.clone(),
+                        }),
+                    ],
+                    commit_message: "test: mixed add+delete commit",
+                    commit_description: Some("Integration test for mixed operations"),
+                    parent_commit: None,
+                    create_pr: false,
+                })
+                .await
+                .unwrap();
+            assert!(!commit_response.commit_id.is_empty());
+
+            // Verify the new file exists and has correct content
+            let downloaded = repo.download(&add_path).await.unwrap();
+            assert_eq!(std::fs::read_to_string(&downloaded).unwrap(), new_content);
+
+            // Verify the deleted file is gone (download should fail)
+            let result = repo.download(&delete_path).await;
+            assert!(result.is_err(), "Deleted file should not be downloadable");
+
+            // Clean up
+            let _ = repo
+                .create_commit(CreateCommitParams {
+                    operations: vec![CommitOperation::Delete(CommitOperationDelete {
+                        path_in_repo: add_path,
+                    })],
+                    commit_message: "test: cleanup mixed operations test",
+                    commit_description: None,
+                    parent_commit: None,
+                    create_pr: false,
+                })
+                .await;
+
+            cleanup_temp(&tmp_path);
+        }
+    }
 }

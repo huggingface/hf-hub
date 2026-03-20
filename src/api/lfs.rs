@@ -40,11 +40,13 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+#[allow(dead_code)]
 pub(crate) struct LfsBatchResponse {
     pub transfer: String,
     pub objects: Vec<LfsObject>,
 }
 
+#[allow(dead_code)]
 pub(crate) struct LfsObject {
     pub oid: String,
     pub size: u64,

@@ -5,7 +5,7 @@ use reqwest::Client;
 use std::path::Path;
 use std::sync::Arc;
 
-pub(crate) use xet::xet_session::XetSession;
+pub(crate) use xet::xet_session::{UniqueID, XetSession};
 use xet::xet_session::{
     Sha256Policy, XetFileInfo, XetSessionBuilder,
 };
@@ -181,6 +181,7 @@ pub(crate) async fn xet_download(
 
     download_group
         .download_file_to_path(file_info, dest_path.to_path_buf())
+        .await
         .map_err(ApiError::XetError)?;
 
     let results = download_group
@@ -189,7 +190,7 @@ pub(crate) async fn xet_download(
         .map_err(ApiError::XetError)?;
 
     // Check for any download errors
-    for (_id, result) in &results {
+    for result in results.values() {
         if let Err(e) = result.as_ref() {
             return Err(ApiError::XetError(xet::XetError::Internal(e.to_string())));
         }
@@ -198,6 +199,7 @@ pub(crate) async fn xet_download(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) struct XetUploadResult {
     pub path_in_repo: String,
     pub xet_hash: String,
@@ -215,7 +217,7 @@ pub(crate) async fn xet_upload(
         .await
         .map_err(ApiError::XetError)?;
 
-    let mut task_ids_and_paths: Vec<(ulid::Ulid, String)> = Vec::new();
+    let mut task_ids_and_paths: Vec<(UniqueID, String)> = Vec::new();
 
     for file in files {
         if file.should_ignore {
