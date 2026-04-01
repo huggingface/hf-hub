@@ -6,6 +6,7 @@ use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
 use indicatif::ProgressBar;
 use rand::Rng;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::io::Read;
 use std::io::Seek;
@@ -824,6 +825,60 @@ impl ApiRepo {
         format!("{endpoint}/{repo_id}/resolve/{revision}/{filename}")
     }
 
+    /// Get metadata for a file in this repo without downloading it.
+    pub fn file_metadata(&self, filename: &str) -> Result<Metadata, ApiError> {
+        self.api.metadata(&self.url(filename))
+    }
+
+    /// Check whether a file exists in this repo.
+    ///
+    /// Returns `Ok(false)` for a missing file and propagates other request
+    /// failures.
+    pub fn file_exists(&self, filename: &str) -> Result<bool, ApiError> {
+        match self.file_metadata(filename) {
+            Ok(_) => Ok(true),
+            Err(ApiError::RequestError(err))
+                if matches!(err.as_ref(), ureq::Error::StatusCode(404)) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Read a remote file into memory without writing it into the cache.
+    pub fn read_bytes(&self, filename: &str) -> Result<Vec<u8>, ApiError> {
+        let mut response = self
+            .api
+            .client
+            .get(&self.url(filename))
+            .call()
+            .map_err(Box::new)?;
+        Ok(response.body_mut().read_to_vec().map_err(Box::new)?)
+    }
+
+    /// Read a remote text file without writing it into the cache.
+    pub fn read_text(&self, filename: &str) -> Result<String, ApiError> {
+        let mut response = self
+            .api
+            .client
+            .get(&self.url(filename))
+            .call()
+            .map_err(Box::new)?;
+        Ok(response.body_mut().read_to_string().map_err(Box::new)?)
+    }
+
+    /// Read and deserialize a remote JSON file without writing it into the cache.
+    pub fn read_json<T: DeserializeOwned>(&self, filename: &str) -> Result<T, ApiError> {
+        let mut response = self
+            .api
+            .client
+            .get(&self.url(filename))
+            .call()
+            .map_err(Box::new)?;
+        Ok(response.body_mut().read_json().map_err(Box::new)?)
+    }
+
     /// This will attempt the fetch the file locally first, then [`Api.download`]
     /// if the file is not present.
     /// ```no_run
@@ -956,7 +1011,6 @@ impl ApiRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::Siblings;
     use crate::assert_no_diff;
     use hex_literal::hex;
     use rand::{distr::Alphanumeric, Rng};
@@ -1218,58 +1272,59 @@ mod tests {
             "refs/convert/parquet".to_string(),
         );
         let model_info = api.repo(repo).info().unwrap();
+        assert_eq!(model_info.id.as_deref(), Some("Salesforce/wikitext"));
+        assert_eq!(model_info.author.as_deref(), Some("Salesforce"));
+        assert_eq!(model_info.sha, "3f68cd45302c7b4b532d933e71d9e6e54b1c7d5e");
+        assert!(model_info
+            .siblings
+            .iter()
+            .any(|sibling| sibling.rfilename == "wikitext-103-v1/test/0000.parquet"));
+        assert!(model_info.downloads.unwrap_or(0) > 0);
+        assert!(model_info.likes.unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn file_metadata_and_exists() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = api.model("julien-c/dummy-unknown".to_string());
+
+        let metadata = repo.file_metadata("config.json").unwrap();
         assert_eq!(
-            model_info,
-            RepoInfo {
-                siblings: vec![
-                    Siblings {
-                        rfilename: ".gitattributes".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-raw-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-raw-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-raw-v1/train/0001.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-raw-v1/validation/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/train/0001.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/validation/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-raw-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-raw-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-raw-v1/validation/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/validation/0000.parquet".to_string()
-                    }
-                ],
-                sha: "3f68cd45302c7b4b532d933e71d9e6e54b1c7d5e".to_string()
-            }
+            metadata.commit_hash(),
+            "60b8d3fe22aebb024b573f1cca224db3126d10f3"
+        );
+        assert!(!metadata.etag().is_empty());
+        assert!(metadata.size() > 0);
+
+        assert!(repo.file_exists("config.json").unwrap());
+        assert!(!repo.file_exists("missing-does-not-exist.json").unwrap());
+    }
+
+    #[test]
+    fn read_remote_files() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = api.model("julien-c/dummy-unknown".to_string());
+
+        let text = repo.read_text("config.json").unwrap();
+        assert!(text.contains("\"architectures\""));
+
+        let bytes = repo.read_bytes("config.json").unwrap();
+        assert!(!bytes.is_empty());
+
+        let value: Value = repo.read_json("config.json").unwrap();
+        assert_eq!(
+            value.get("model_type").and_then(Value::as_str),
+            Some("roberta")
         );
     }
 

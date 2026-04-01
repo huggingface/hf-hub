@@ -66,13 +66,57 @@ pub struct Siblings {
 }
 
 /// The description of the repo given by the hub
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct RepoInfo {
+    /// Canonical repo id such as `openai-community/gpt2`.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Legacy model id field returned by some Hub endpoints.
+    #[serde(default, rename = "modelId")]
+    pub model_id: Option<String>,
+    /// Owning user or organization when returned by the endpoint.
+    #[serde(default)]
+    pub author: Option<String>,
     /// See [`Siblings`]
     pub siblings: Vec<Siblings>,
-
     /// The commit sha of the repo.
     pub sha: String,
+    /// Creation timestamp from the Hub API.
+    #[serde(default, rename = "createdAt")]
+    pub created_at: Option<String>,
+    /// Last modified timestamp from the Hub API.
+    #[serde(default, rename = "lastModified")]
+    pub last_modified: Option<String>,
+    /// Number of downloads when available.
+    #[serde(default)]
+    pub downloads: Option<u64>,
+    /// Number of likes when available.
+    #[serde(default)]
+    pub likes: Option<u64>,
+    /// Whether the repo is private.
+    #[serde(default)]
+    pub private: bool,
+    /// Whether the repo is gated.
+    #[serde(default)]
+    pub gated: Option<bool>,
+    /// Whether the repo is disabled.
+    #[serde(default)]
+    pub disabled: Option<bool>,
+    /// Hub tags returned by the endpoint.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Optional repo description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Model pipeline tag when returned by the endpoint.
+    #[serde(default, rename = "pipeline_tag")]
+    pub pipeline_tag: Option<String>,
+    /// Model library name when returned by the endpoint.
+    #[serde(default, rename = "library_name")]
+    pub library_name: Option<String>,
+    /// Space SDK when returned by the endpoint.
+    #[serde(default)]
+    pub sdk: Option<String>,
 }
 
 /// A summarized repository returned from Hub search endpoints.

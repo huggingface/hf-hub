@@ -14,6 +14,7 @@ use reqwest::{
     redirect::Policy,
     Client, Error as ReqwestError, RequestBuilder,
 };
+use serde::de::DeserializeOwned;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::num::ParseIntError;
@@ -723,6 +724,67 @@ impl ApiRepo {
         format!("{endpoint}/{repo_id}/resolve/{revision}/{filename}")
     }
 
+    /// Get metadata for a file in this repo without downloading it.
+    pub async fn file_metadata(&self, filename: &str) -> Result<Metadata, ApiError> {
+        self.api.metadata(&self.url(filename)).await
+    }
+
+    /// Check whether a file exists in this repo.
+    ///
+    /// Returns `Ok(false)` for a missing file and propagates other request
+    /// failures.
+    pub async fn file_exists(&self, filename: &str) -> Result<bool, ApiError> {
+        match self.file_metadata(filename).await {
+            Ok(_) => Ok(true),
+            Err(ApiError::RequestError(err))
+                if err.status() == Some(reqwest::StatusCode::NOT_FOUND) =>
+            {
+                Ok(false)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Read a remote file into memory without writing it into the cache.
+    pub async fn read_bytes(&self, filename: &str) -> Result<Vec<u8>, ApiError> {
+        Ok(self
+            .api
+            .client
+            .get(self.url(filename))
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?
+            .to_vec())
+    }
+
+    /// Read a remote text file without writing it into the cache.
+    pub async fn read_text(&self, filename: &str) -> Result<String, ApiError> {
+        self.api
+            .client
+            .get(self.url(filename))
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await
+            .map_err(ApiError::from)
+    }
+
+    /// Read and deserialize a remote JSON file without writing it into the cache.
+    pub async fn read_json<T: DeserializeOwned>(&self, filename: &str) -> Result<T, ApiError> {
+        self.api
+            .client
+            .get(self.url(filename))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+            .map_err(ApiError::from)
+    }
+
     async fn download_tempfile<P: Progress + Clone + Send + Sync + 'static>(
         &self,
         url: &str,
@@ -1036,7 +1098,6 @@ impl ApiRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::Siblings;
     use crate::assert_no_diff;
     use core::panic;
     use hex_literal::hex;
@@ -1352,58 +1413,62 @@ mod tests {
             "refs/convert/parquet".to_string(),
         );
         let model_info = api.repo(repo).info().await.unwrap();
+        assert_eq!(model_info.id.as_deref(), Some("Salesforce/wikitext"));
+        assert_eq!(model_info.author.as_deref(), Some("Salesforce"));
+        assert_eq!(model_info.sha, "3f68cd45302c7b4b532d933e71d9e6e54b1c7d5e");
+        assert!(model_info
+            .siblings
+            .iter()
+            .any(|sibling| sibling.rfilename == "wikitext-103-v1/test/0000.parquet"));
+        assert!(model_info.downloads.unwrap_or(0) > 0);
+        assert!(model_info.likes.unwrap_or(0) > 0);
+    }
+
+    #[tokio::test]
+    async fn file_metadata_and_exists() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = api.model("julien-c/dummy-unknown".to_string());
+
+        let metadata = repo.file_metadata("config.json").await.unwrap();
         assert_eq!(
-            model_info,
-            RepoInfo {
-                siblings: vec![
-                    Siblings {
-                        rfilename: ".gitattributes".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-raw-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-raw-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-raw-v1/train/0001.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-raw-v1/validation/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/train/0001.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-103-v1/validation/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-raw-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-raw-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-raw-v1/validation/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/test/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/train/0000.parquet".to_string()
-                    },
-                    Siblings {
-                        rfilename: "wikitext-2-v1/validation/0000.parquet".to_string()
-                    }
-                ],
-                sha: "3f68cd45302c7b4b532d933e71d9e6e54b1c7d5e".to_string()
-            }
+            metadata.commit_hash(),
+            "60b8d3fe22aebb024b573f1cca224db3126d10f3"
+        );
+        assert!(!metadata.etag().is_empty());
+        assert!(metadata.size() > 0);
+
+        assert!(repo.file_exists("config.json").await.unwrap());
+        assert!(!repo
+            .file_exists("missing-does-not-exist.json")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn read_remote_files() {
+        let tmp = TempDir::new();
+        let api = ApiBuilder::new()
+            .with_progress(false)
+            .with_cache_dir(tmp.path.clone())
+            .build()
+            .unwrap();
+        let repo = api.model("julien-c/dummy-unknown".to_string());
+
+        let text = repo.read_text("config.json").await.unwrap();
+        assert!(text.contains("\"architectures\""));
+
+        let bytes = repo.read_bytes("config.json").await.unwrap();
+        assert!(!bytes.is_empty());
+
+        let value: Value = repo.read_json("config.json").await.unwrap();
+        assert_eq!(
+            value.get("model_type").and_then(Value::as_str),
+            Some("roberta")
         );
     }
 
