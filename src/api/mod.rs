@@ -1,5 +1,6 @@
 use std::{collections::VecDeque, time::Duration};
 
+use crate::{Repo, RepoType};
 use indicatif::{style::ProgressTracker, HumanBytes, ProgressBar, ProgressStyle};
 use serde::Deserialize;
 
@@ -72,6 +73,142 @@ pub struct RepoInfo {
 
     /// The commit sha of the repo.
     pub sha: String,
+}
+
+/// A summarized repository returned from Hub search endpoints.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RepoSummary {
+    /// Canonical repo id such as `openai-community/gpt2`.
+    pub id: String,
+    /// Owning user or organization when returned by the endpoint.
+    #[serde(default)]
+    pub author: Option<String>,
+    /// Commit hash when returned by the endpoint.
+    #[serde(default)]
+    pub sha: Option<String>,
+    /// Creation timestamp from the Hub API.
+    #[serde(default, rename = "createdAt")]
+    pub created_at: Option<String>,
+    /// Last modified timestamp from the Hub API.
+    #[serde(default, rename = "lastModified")]
+    pub last_modified: Option<String>,
+    /// Number of downloads when available.
+    #[serde(default)]
+    pub downloads: Option<u64>,
+    /// Number of likes when available.
+    #[serde(default)]
+    pub likes: Option<u64>,
+    /// Trending score when available.
+    #[serde(default, rename = "trendingScore")]
+    pub trending_score: Option<i64>,
+    /// Whether the repo is private.
+    #[serde(default)]
+    pub private: bool,
+    /// Whether the repo is gated.
+    #[serde(default)]
+    pub gated: Option<bool>,
+    /// Whether the repo is disabled.
+    #[serde(default)]
+    pub disabled: Option<bool>,
+    /// Hub tags returned by the search endpoint.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Optional repo description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Model pipeline tag when searching models.
+    #[serde(default, rename = "pipeline_tag")]
+    pub pipeline_tag: Option<String>,
+    /// Model library name when searching models.
+    #[serde(default, rename = "library_name")]
+    pub library_name: Option<String>,
+    /// Space SDK when searching spaces.
+    #[serde(default)]
+    pub sdk: Option<String>,
+    #[serde(skip)]
+    repo_type: Option<RepoType>,
+}
+
+impl RepoSummary {
+    pub(crate) fn with_repo_type(mut self, repo_type: RepoType) -> Self {
+        self.repo_type = Some(repo_type);
+        self
+    }
+
+    /// The repo kind used for this search result.
+    pub fn repo_type(&self) -> RepoType {
+        self.repo_type.expect("repo_type is set by search results")
+    }
+
+    /// Convert the summary into a [`Repo`] targeting the default branch.
+    pub fn repo(&self) -> Repo {
+        Repo::new(self.id.clone(), self.repo_type())
+    }
+}
+
+/// Query builder shared by the sync and async search APIs.
+#[derive(Debug, Clone)]
+pub struct SearchQuery {
+    repo_type: RepoType,
+    query: Option<String>,
+    author: Option<String>,
+    filters: Vec<String>,
+    limit: Option<usize>,
+}
+
+impl SearchQuery {
+    pub(crate) fn new(repo_type: RepoType) -> Self {
+        Self {
+            repo_type,
+            query: None,
+            author: None,
+            filters: Vec::new(),
+            limit: None,
+        }
+    }
+
+    pub(crate) fn repo_type(&self) -> RepoType {
+        self.repo_type
+    }
+
+    pub(crate) fn with_query(mut self, query: impl Into<String>) -> Self {
+        self.query = Some(query.into());
+        self
+    }
+
+    pub(crate) fn with_author(mut self, author: impl Into<String>) -> Self {
+        self.author = Some(author.into());
+        self
+    }
+
+    pub(crate) fn with_filter(mut self, filter: impl Into<String>) -> Self {
+        self.filters.push(filter.into());
+        self
+    }
+
+    pub(crate) fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    pub(crate) fn query_pairs(&self) -> Vec<(&'static str, String)> {
+        let mut pairs = Vec::new();
+
+        if let Some(query) = &self.query {
+            pairs.push(("search", query.clone()));
+        }
+        if let Some(author) = &self.author {
+            pairs.push(("author", author.clone()));
+        }
+        for filter in &self.filters {
+            pairs.push(("filter", filter.clone()));
+        }
+        if let Some(limit) = self.limit {
+            pairs.push(("limit", limit.to_string()));
+        }
+
+        pairs
+    }
 }
 
 #[derive(Clone, Default)]

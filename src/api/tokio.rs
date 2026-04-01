@@ -1,5 +1,5 @@
 use super::Progress as SyncProgress;
-use super::RepoInfo;
+use super::{RepoInfo, RepoSummary, SearchQuery};
 use crate::constants::{DEFAULT_ENDPOINT, HF_ENDPOINT};
 use crate::{Cache, Repo, RepoType};
 use futures::stream::FuturesUnordered;
@@ -608,6 +608,88 @@ impl Api {
     /// ```
     pub fn space(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
+    }
+
+    /// Creates a search builder for the given repository kind.
+    ///
+    /// ```
+    /// # use hf_hub::{api::tokio::Api, RepoType};
+    /// # tokio_test::block_on(async {
+    /// let api = Api::new().unwrap();
+    /// let results = api
+    ///     .search(RepoType::Model)
+    ///     .with_query("gpt2")
+    ///     .with_limit(5)
+    ///     .run()
+    ///     .await
+    ///     .unwrap();
+    /// assert!(!results.is_empty());
+    /// # })
+    /// ```
+    pub fn search(&self, repo_type: RepoType) -> Search {
+        Search::new(self.clone(), SearchQuery::new(repo_type))
+    }
+}
+
+/// Builder for Hub search requests.
+#[derive(Debug)]
+pub struct Search {
+    api: Api,
+    query: SearchQuery,
+}
+
+impl Search {
+    fn new(api: Api, query: SearchQuery) -> Self {
+        Self { api, query }
+    }
+
+    /// Restrict results using the Hub `search` parameter.
+    pub fn with_query(mut self, query: impl Into<String>) -> Self {
+        self.query = self.query.with_query(query);
+        self
+    }
+
+    /// Restrict results to a given author or organization.
+    pub fn with_author(mut self, author: impl Into<String>) -> Self {
+        self.query = self.query.with_author(author);
+        self
+    }
+
+    /// Add a Hub filter tag.
+    pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
+        self.query = self.query.with_filter(filter);
+        self
+    }
+
+    /// Cap the number of returned results.
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.query = self.query.with_limit(limit);
+        self
+    }
+
+    /// Execute the search request and collect the results.
+    pub async fn run(&self) -> Result<Vec<RepoSummary>, ApiError> {
+        let url = format!(
+            "{}/api/{}",
+            self.api.endpoint,
+            self.query.repo_type().plural()
+        );
+        let params = self.query.query_pairs();
+        let repo_type = self.query.repo_type();
+        let results: Vec<RepoSummary> = self
+            .api
+            .client
+            .get(url)
+            .query(&params)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        Ok(results
+            .into_iter()
+            .map(|result| result.with_repo_type(repo_type))
+            .collect())
     }
 }
 
@@ -1435,6 +1517,27 @@ mod tests {
             env!("CARGO_PKG_VERSION")
         );
         assert_eq!(headers.get(USER_AGENT), Some(&expected.try_into().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn search() {
+        let results = Api::new()
+            .unwrap()
+            .search(RepoType::Dataset)
+            .with_query("imdb")
+            .with_author("stanfordnlp")
+            .with_limit(5)
+            .run()
+            .await
+            .unwrap();
+
+        assert!(results.iter().any(|result| result.id == "stanfordnlp/imdb"));
+        assert!(results
+            .iter()
+            .all(|result| result.repo_type() == RepoType::Dataset));
+        assert!(results
+            .iter()
+            .all(|result| result.repo().folder_name().starts_with("datasets--")));
     }
 
     #[tokio::test]

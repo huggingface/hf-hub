@@ -1,4 +1,4 @@
-use super::RepoInfo;
+use super::{RepoInfo, RepoSummary, SearchQuery};
 use crate::api::sync::ApiError::InvalidHeader;
 use crate::api::Progress;
 use crate::constants::{DEFAULT_ENDPOINT, HF_ENDPOINT};
@@ -702,6 +702,81 @@ impl Api {
     pub fn space(&self, model_id: String) -> ApiRepo {
         self.repo(Repo::new(model_id, RepoType::Space))
     }
+
+    /// Creates a search builder for the given repository kind.
+    ///
+    /// ```
+    /// # use hf_hub::{api::sync::Api, RepoType};
+    /// let api = Api::new().unwrap();
+    /// let results = api
+    ///     .search(RepoType::Model)
+    ///     .with_query("gpt2")
+    ///     .with_limit(5)
+    ///     .run()
+    ///     .unwrap();
+    /// assert!(!results.is_empty());
+    /// ```
+    pub fn search(&self, repo_type: RepoType) -> Search {
+        Search::new(self.clone(), SearchQuery::new(repo_type))
+    }
+}
+
+/// Builder for Hub search requests.
+#[derive(Debug)]
+pub struct Search {
+    api: Api,
+    query: SearchQuery,
+}
+
+impl Search {
+    fn new(api: Api, query: SearchQuery) -> Self {
+        Self { api, query }
+    }
+
+    /// Restrict results using the Hub `search` parameter.
+    pub fn with_query(mut self, query: impl Into<String>) -> Self {
+        self.query = self.query.with_query(query);
+        self
+    }
+
+    /// Restrict results to a given author or organization.
+    pub fn with_author(mut self, author: impl Into<String>) -> Self {
+        self.query = self.query.with_author(author);
+        self
+    }
+
+    /// Add a Hub filter tag.
+    pub fn with_filter(mut self, filter: impl Into<String>) -> Self {
+        self.query = self.query.with_filter(filter);
+        self
+    }
+
+    /// Cap the number of returned results.
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.query = self.query.with_limit(limit);
+        self
+    }
+
+    /// Execute the search request and collect the results.
+    pub fn run(&self) -> Result<Vec<RepoSummary>, ApiError> {
+        let url = format!(
+            "{}/api/{}",
+            self.api.endpoint,
+            self.query.repo_type().plural()
+        );
+        let mut request = self.api.client.get(&url);
+        for (key, value) in self.query.query_pairs() {
+            request = request.query(key, &value);
+        }
+        let mut response = request.call().map_err(Box::new)?;
+        let repo_type = self.query.repo_type();
+        let results: Vec<RepoSummary> = response.body_mut().read_json().map_err(Box::new)?;
+
+        Ok(results
+            .into_iter()
+            .map(|result| result.with_repo_type(repo_type))
+            .collect())
+    }
 }
 
 /// Shorthand for accessing things within a particular repo
@@ -1334,6 +1409,28 @@ mod tests {
             env!("CARGO_PKG_VERSION")
         );
         assert_eq!(headers.get(USER_AGENT), Some(&expected));
+    }
+
+    #[test]
+    fn search() {
+        let results = Api::new()
+            .unwrap()
+            .search(RepoType::Model)
+            .with_query("gpt2")
+            .with_author("openai-community")
+            .with_limit(5)
+            .run()
+            .unwrap();
+
+        assert!(results
+            .iter()
+            .any(|result| result.id == "openai-community/gpt2"));
+        assert!(results
+            .iter()
+            .all(|result| result.repo_type() == RepoType::Model));
+        assert!(results
+            .iter()
+            .all(|result| result.repo().folder_name().starts_with("models--")));
     }
 
     // #[test]
