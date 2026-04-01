@@ -171,6 +171,23 @@ fn expand_path(value: &str) -> Option<PathBuf> {
     Some(PathBuf::from(expand_vars(&value)))
 }
 
+#[cfg(feature = "cache-manager")]
+pub(crate) fn normalize_path(path: &Path) -> Option<PathBuf> {
+    let expanded = expand_tilde(&path.to_string_lossy())?;
+    let path = PathBuf::from(expanded);
+
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        env::current_dir().ok()?.join(path)
+    };
+
+    match std::fs::canonicalize(&absolute) {
+        Ok(path) => Some(path),
+        Err(_) => Some(absolute),
+    }
+}
+
 fn expand_tilde(value: &str) -> Option<String> {
     if value == "~" {
         return Some(dirs::home_dir()?.to_string_lossy().into_owned());
@@ -201,6 +218,8 @@ fn expand_vars(value: &str) -> String {
                         let name: String = chars[index + 2..index + 2 + end].iter().collect();
                         if let Ok(expanded) = env::var(&name) {
                             output.push_str(&expanded);
+                        } else {
+                            output.push_str(&value[index..index + end + 3]);
                         }
                         index += end + 3;
                         continue;
@@ -217,6 +236,8 @@ fn expand_vars(value: &str) -> String {
                     let name: String = chars[index + 1..end].iter().collect();
                     if let Ok(expanded) = env::var(&name) {
                         output.push_str(&expanded);
+                    } else {
+                        output.push_str(&value[index..end]);
                     }
                     index = end;
                     continue;
@@ -240,4 +261,42 @@ fn expand_vars(value: &str) -> String {
     }
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn expand_vars_preserves_unknown_posix_variables() {
+        assert_eq!(
+            expand_vars("${HF_HUB_MISSING}/hub"),
+            "${HF_HUB_MISSING}/hub"
+        );
+        assert_eq!(expand_vars("$HF_HUB_MISSING/hub"), "$HF_HUB_MISSING/hub");
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn expand_vars_preserves_unknown_windows_variables() {
+        assert_eq!(
+            expand_vars("%HF_HUB_MISSING%\\hub"),
+            "%HF_HUB_MISSING%\\hub"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "cache-manager")]
+    #[cfg(not(target_os = "windows"))]
+    fn normalize_path_expands_tilde_and_resolves_relative_paths() {
+        let cwd = env::current_dir().unwrap();
+        let home = dirs::home_dir().unwrap();
+
+        let tilde = normalize_path(Path::new("~/hf-hub-cache")).unwrap();
+        assert_eq!(tilde, home.join("hf-hub-cache"));
+
+        let relative = normalize_path(Path::new("hf-hub-cache")).unwrap();
+        assert_eq!(relative, cwd.join("hf-hub-cache"));
+    }
 }

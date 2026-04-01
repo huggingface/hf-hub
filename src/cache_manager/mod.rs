@@ -18,7 +18,7 @@ use walkdir::WalkDir;
 use comfy_table::Table;
 
 use crate::{
-    paths::{get_hub_dir, get_ref_path, is_locks_dir, refs_dir, snapshots_dir},
+    paths::{get_hub_dir, get_ref_path, is_locks_dir, normalize_path, refs_dir, snapshots_dir},
     Cache, Repo,
 };
 
@@ -810,7 +810,11 @@ impl CacheInfo {
     /// TODO: rest of docs
     pub fn scan_dir(cache_dir: Option<&Path>) -> Result<Self, CorruptedCacheError> {
         let cache_dir = match cache_dir {
-            Some(cache_dir) => cache_dir.to_path_buf(),
+            Some(cache_dir) => {
+                normalize_path(cache_dir).ok_or(CorruptedCacheError::MissingCacheDir {
+                    path: cache_dir.to_path_buf(),
+                })?
+            }
             None => get_hub_dir().ok_or(CorruptedCacheError::MissingCacheDir {
                 path: PathBuf::new(),
             })?,
@@ -869,5 +873,19 @@ fn try_delete_path(path: &Path, path_type: &str) {
 
     if let Err(e) = result {
         log::warn!("Couldn't delete {}: {} ({:?})", path_type, e, path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CacheInfo;
+    use std::path::Path;
+
+    #[test]
+    fn scan_dir_resolves_relative_paths() {
+        let current_dir = std::env::current_dir().unwrap();
+        let cache_info = CacheInfo::scan_dir(Some(Path::new("."))).unwrap();
+
+        assert_eq!(cache_info.cache.path(), &current_dir);
     }
 }
