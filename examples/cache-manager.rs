@@ -18,12 +18,12 @@
 //! cargo run --example cache-manager --features="cache-manager,cache-manager-display"
 //! ```
 
-use hf_hub::cache_manager::HFCacheInfo;
+use hf_hub::cache::CacheInfo;
 
 fn main() {
     let revision = std::env::args().nth(1);
 
-    let cache_info = HFCacheInfo::scan_cache_dir(None).unwrap();
+    let cache_info = CacheInfo::scan_dir(None).unwrap();
 
     #[cfg(not(feature = "cache-manager-display"))]
     {

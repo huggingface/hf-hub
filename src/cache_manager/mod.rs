@@ -125,7 +125,7 @@ impl From<walkdir::Error> for CorruptedCacheError {
 /// > are using. See [python documentation](https://docs.python.org/3/library/os.html#os.stat_result)
 /// > for more details.
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub struct CachedFileInfo {
+pub struct CachedFile {
     /// Name of the file. Example: `config.json`.
     pub file_name: String,
     /// Path of the file in the `snapshots` directory. The file path is a symlink
@@ -141,7 +141,7 @@ pub struct CachedFileInfo {
     pub blob_last_modified: Option<SystemTime>,
 }
 
-impl CachedFileInfo {
+impl CachedFile {
     /// Timestamp of the last time the blob file has been accessed (from any
     /// revision), returned as a human-readable string.
     ///
@@ -187,15 +187,15 @@ impl CachedFileInfo {
 /// > duplicated files. Besides, only blobs are taken into account, not the (negligible)
 /// > size of folders and symlinks.
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub struct CachedRevisionInfo {
+pub struct CachedRevision {
     /// Hash of the revision (unique).
     /// Example: `"9338f7b671827df886678df2bdd7cc7b4f36dffd"`.
     pub commit_hash: String,
     /// Path to the revision directory in the `snapshots` folder. It contains the
     /// exact tree structure as the repo on the Hub.
     pub snapshot_path: PathBuf,
-    /// "Set" of [`~CachedFileInfo`] describing all files contained in the snapshot.
-    pub files: BTreeSet<CachedFileInfo>,
+    /// "Set" of cached files contained in the snapshot.
+    pub files: BTreeSet<CachedFile>,
     /// "Set" of `refs` pointing to this revision. If the revision has no `refs`, it
     /// is considered detached.
     /// Example: `{"main", "2.4.0"}` or `{"refs/pr/1"}`.
@@ -206,7 +206,7 @@ pub struct CachedRevisionInfo {
     pub last_modified: Option<SystemTime>,
 }
 
-impl CachedRevisionInfo {
+impl CachedRevision {
     /// Timestamp of the last time the blob file has been modified, returned
     /// as a human-readable string.
     ///
@@ -243,7 +243,7 @@ impl CachedRevisionInfo {
 /// > See [python documentation](https://docs.python.org/3/library/os.html#os.stat_result)
 /// > for more details.
 #[derive(Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub struct CachedRepoInfo {
+pub struct CachedRepo {
     /// Repo struct that holds information like id, type and path
     pub repo: Repo,
     /// Local path to the cached repo.
@@ -252,15 +252,15 @@ pub struct CachedRepoInfo {
     pub size_on_disk: u64,
     /// Total number of blob files in the cached repo.
     pub nb_files: usize,
-    /// "Set" of [`~CachedRevisionInfo`] describing all revisions cached in the repo.
-    pub revisions: BTreeSet<CachedRevisionInfo>,
+    /// "Set" of cached revisions describing all revisions cached in the repo.
+    pub revisions: BTreeSet<CachedRevision>,
     /// Timestamp of the last time a blob file of the repo has been accessed.
     pub last_accessed: Option<SystemTime>,
     /// Timestamp of the last time a blob file of the repo has been modified/created.
     pub last_modified: Option<SystemTime>,
 }
 
-impl CachedRepoInfo {
+impl CachedRepo {
     /// Timestamp of the last time the blob file has been accessed (from any
     /// revision), returned as a human-readable string.
     ///
@@ -296,7 +296,7 @@ impl CachedRepoInfo {
     }
 
     /// Mapping between `refs` and revision data structures.
-    pub fn refs(&self) -> BTreeMap<&str, &CachedRevisionInfo> {
+    pub fn refs(&self) -> BTreeMap<&str, &CachedRevision> {
         let mut refs = BTreeMap::new();
 
         for revision in self.revisions.iter() {
@@ -467,7 +467,7 @@ impl CachedRepoInfo {
                     .to_string_lossy()
                     .into_owned();
 
-                cached_files.insert(CachedFileInfo {
+                cached_files.insert(CachedFile {
                     file_name: blob_file_name,
                     file_path: revision_file_entry_path.to_path_buf(),
                     blob_path,
@@ -512,7 +512,7 @@ impl CachedRepoInfo {
                 .into_iter()
                 .collect();
 
-            cached_revisions.insert(CachedRevisionInfo {
+            cached_revisions.insert(CachedRevision {
                 commit_hash,
                 snapshot_path: cached_revision_dir_path.to_path_buf(),
                 size_on_disk: revision_size_on_disk,
@@ -573,9 +573,9 @@ impl CachedRepoInfo {
 /// Holds the strategy to delete cached revisions.
 ///
 /// This object is not meant to be instantiated programmatically but to be returned by
-/// [`HFCacheInfo.delete_revisions`]. See documentation for usage example.
+/// [`CacheInfo::delete_revisions`]. See documentation for usage example.
 #[derive(Debug)]
-pub struct DeleteCacheStrategy {
+pub struct CacheDeletionPlan {
     /// Expected freed size once strategy is executed.
     pub expected_freed_size: u64,
     /// Set of blob file paths to be deleted.
@@ -588,7 +588,7 @@ pub struct DeleteCacheStrategy {
     pub snapshots: BTreeSet<PathBuf>,
 }
 
-impl DeleteCacheStrategy {
+impl CacheDeletionPlan {
     /// Expected size that will be freed as a human-readable string.
     ///
     /// Example: "42.2K".
@@ -637,12 +637,12 @@ impl DeleteCacheStrategy {
 /// > Here `size_on_disk` is equal to the sum of all repo sizes (only blobs). However if
 /// > some cached repos are corrupted, their sizes are not taken into account.
 #[derive(Debug)]
-pub struct HFCacheInfo {
+pub struct CacheInfo {
     /// Sum of all valid repo sizes in the cache-system.
     pub size_on_disk: u64,
-    /// "Set" of [`~CachedRepoInfo`] describing all valid cached repos found on the
+    /// "Set" of cached repos describing all valid cached repos found on the
     /// cache-system while scanning.
-    pub repos: BTreeSet<CachedRepoInfo>,
+    pub repos: BTreeSet<CachedRepo>,
     /// List of [`~CorruptedCacheException`] that occurred while scanning the cache.
     /// Those exceptions (errors) are captured so that the scan can continue. Corrupted repos
     /// are skipped from the scan.
@@ -651,7 +651,7 @@ pub struct HFCacheInfo {
     pub cache: Cache,
 }
 
-impl HFCacheInfo {
+impl CacheInfo {
     /// Sum of all valid repo sizes in the cache-system as a human-readable string.
     ///
     /// Example: "42.2K".
@@ -668,16 +668,14 @@ impl HFCacheInfo {
     /// TODO: examples docs
     ///
     /// > [!WARNING]
-    /// > `delete_revisions` returns a [`~utils.DeleteCacheStrategy`] object that needs to
-    /// > be executed. The [`~utils.DeleteCacheStrategy`] is not meant to be modified but
+    /// > `delete_revisions` returns a [`CacheDeletionPlan`] object that needs to
+    /// > be executed. The [`CacheDeletionPlan`] is not meant to be modified but
     /// > allows having a dry run before actually executing the deletion.
-    pub fn delete_revisions(&self, revisions: &[&str]) -> DeleteCacheStrategy {
+    pub fn delete_revisions(&self, revisions: &[&str]) -> CacheDeletionPlan {
         let mut hashes_to_delete: BTreeSet<&str> = revisions.iter().copied().collect();
 
-        let mut repos_with_revisions_to_delete: BTreeMap<
-            &CachedRepoInfo,
-            BTreeSet<&CachedRevisionInfo>,
-        > = BTreeMap::new();
+        let mut repos_with_revisions_to_delete: BTreeMap<&CachedRepo, BTreeSet<&CachedRevision>> =
+            BTreeMap::new();
 
         for repo in self.repos.iter() {
             for revision in repo.revisions.iter() {
@@ -708,9 +706,9 @@ impl HFCacheInfo {
         let mut delete_strategy_expected_freed_size = 0;
 
         for (affected_repo, revisions_to_delete) in repos_with_revisions_to_delete {
-            let other_revisions: Vec<&CachedRevisionInfo> = affected_repo
+            let other_revisions: Vec<&CachedRevision> = affected_repo
                 .revisions
-                .iter() // Yields &CachedRevisionInfo
+                .iter()
                 .filter(|repo_revision| !revisions_to_delete.contains(repo_revision))
                 .collect();
 
@@ -762,7 +760,7 @@ impl HFCacheInfo {
             }
         }
 
-        DeleteCacheStrategy {
+        CacheDeletionPlan {
             expected_freed_size: delete_strategy_expected_freed_size,
             blobs: delete_strategy_blobs,
             refs: delete_strategy_refs,
@@ -771,13 +769,13 @@ impl HFCacheInfo {
         }
     }
 
-    // /// Generate a table from the [`HFCacheInfo`] object.
+    // /// Generate a table from the [`CacheInfo`] object.
     // pub fn export_as_table(&self) {
     //     todo!("`export_as_table` strictly compatible with python version not yet implemented yet");
     // }
 
     #[cfg(feature = "cache-manager-display")]
-    /// Generate a table from the [`HFCacheInfo`] object.
+    /// Generate a table from the [`CacheInfo`] object.
     pub fn export_as_table_comfy(&self) -> String {
         let mut table = Table::new();
 
@@ -802,15 +800,15 @@ impl HFCacheInfo {
         table.to_string()
     }
 
-    /// Scan the entire HF cache-system and return a [`~HFCacheInfo`] structure.
+    /// Scan the entire HF cache-system and return a [`CacheInfo`] structure.
     ///
-    /// Use `scan_cache_dir` in order to programmatically scan your cache-system. The cache
+    /// Use `scan_dir` in order to programmatically scan your cache-system. The cache
     /// will be scanned repo by repo. If a repo is corrupted, a [`~CorruptedCacheException`]
-    /// will be thrown internally but captured and returned in the [`~HFCacheInfo`]
+    /// will be thrown internally but captured and returned in the [`CacheInfo`]
     /// structure. Only valid repos get a proper report.
     ///
     /// TODO: rest of docs
-    pub fn scan_cache_dir(cache_dir: Option<&Path>) -> Result<Self, CorruptedCacheError> {
+    pub fn scan_dir(cache_dir: Option<&Path>) -> Result<Self, CorruptedCacheError> {
         let cache_dir = match cache_dir {
             Some(cache_dir) => cache_dir.to_path_buf(),
             None => get_hub_dir().ok_or(CorruptedCacheError::MissingCacheDir {
@@ -833,7 +831,7 @@ impl HFCacheInfo {
 
             // Use a match statement instead of `?` so we can keep scanning and not
             // fail / return on first error
-            match CachedRepoInfo::scan_cached_repo(cache_dir_entry.path()) {
+            match CachedRepo::scan_cached_repo(cache_dir_entry.path()) {
                 Ok(cached_repo) => {
                     repos.insert(cached_repo);
                 }
@@ -859,7 +857,7 @@ impl HFCacheInfo {
 ///
 /// If the path does not exist, error is logged as a warning and then ignored.
 ///
-/// TODO: move under HFCacheInfo struct? DeleteCacheStrat?
+/// TODO: move under CacheInfo struct? Deletion plan?
 fn try_delete_path(path: &Path, path_type: &str) {
     log::info!("Delete {}: {:?}", path_type, path);
 

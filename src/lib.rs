@@ -14,7 +14,8 @@ use std::path::Path;
 #[cfg(any(feature = "tokio", feature = "ureq"))]
 pub mod api;
 #[cfg(feature = "cache-manager")]
-pub mod cache_manager;
+#[path = "cache_manager/mod.rs"]
+pub mod cache;
 pub mod paths;
 
 /// Configuration constants
@@ -158,16 +159,16 @@ impl Cache {
     #[cfg(feature = "cache-manager")]
     pub(crate) fn validate_cache_dir_path(
         cache_dir: &Path,
-    ) -> Result<(), cache_manager::CorruptedCacheError> {
+    ) -> Result<(), cache::CorruptedCacheError> {
         // TODO: replace with is_dir call since that checks exists too?
         if !cache_dir.exists() {
-            return Err(cache_manager::CorruptedCacheError::MissingCacheDir {
+            return Err(cache::CorruptedCacheError::MissingCacheDir {
                 path: cache_dir.to_path_buf(),
             });
         }
 
         if cache_dir.is_file() {
-            return Err(cache_manager::CorruptedCacheError::CacheDirCantBeFile {
+            return Err(cache::CorruptedCacheError::CacheDirCantBeFile {
                 path: cache_dir.to_path_buf(),
             });
         }

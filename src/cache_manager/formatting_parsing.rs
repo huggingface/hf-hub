@@ -37,9 +37,12 @@ pub fn parse_repo_folder_name(name: &str) -> Result<(RepoType, String), RepoFold
         .split_once(constants::FLAT_SEPARATOR)
         .ok_or(RepoFolderParseError::MissingSeparator)?;
 
-    let repo_type = repo_type_str
-        .parse::<RepoType>()
-        .map_err(|_| RepoFolderParseError::InvalidType(repo_type_str.to_string()))?;
+    let repo_type = match repo_type_str {
+        "models" => RepoType::Model,
+        "datasets" => RepoType::Dataset,
+        "spaces" => RepoType::Space,
+        _ => return Err(RepoFolderParseError::InvalidType(repo_type_str.to_string())),
+    };
 
     let repo_id = repo_id_str.replace(constants::FLAT_SEPARATOR, constants::REPO_ID_SEPARATOR);
 
