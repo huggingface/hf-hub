@@ -5,16 +5,17 @@
     doc = "Documentation is meant to be compiled with default features (at least ureq)"
 )]
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The actual Api to interact with the hub.
 #[cfg(any(feature = "tokio", feature = "ureq"))]
 pub mod api;
 
 const HF_HOME: &str = "HF_HOME";
+const HF_HUB_CACHE: &str = "HF_HUB_CACHE";
 
 /// The type of repo to interact with
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum RepoType {
     /// This is a model, usually it consists of weight files and some configuration
     /// files
@@ -26,9 +27,53 @@ pub enum RepoType {
 }
 
 /// A local struct used to fetch information from the cache folder.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Cache {
     path: PathBuf,
+}
+
+/// A named cached ref and the commit hash it resolves to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CacheRef {
+    name: String,
+    commit_hash: String,
+}
+
+impl CacheRef {
+    /// The ref name, relative to the repo's `refs/` directory.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The commit hash this ref points to.
+    pub fn commit_hash(&self) -> &str {
+        &self.commit_hash
+    }
+}
+
+/// Parsed metadata for a path inside a cached snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CachePath {
+    repo: Repo,
+    commit_hash: String,
+    relative_path: String,
+}
+
+impl CachePath {
+    /// The repo this path belongs to.
+    pub fn repo(&self) -> &Repo {
+        &self.repo
+    }
+
+    /// The snapshot commit hash.
+    pub fn commit_hash(&self) -> &str {
+        &self.commit_hash
+    }
+
+    /// The path relative to the snapshot root.
+    pub fn relative_path(&self) -> &str {
+        &self.relative_path
+    }
 }
 
 impl Cache {
@@ -37,9 +82,17 @@ impl Cache {
         Self { path }
     }
 
-    /// Creates cache from environment variable HF_HOME (if defined) otherwise
-    /// defaults to [`home_dir`]/.cache/huggingface/
+    /// Creates cache from environment.
+    ///
+    /// This honors `HF_HUB_CACHE` first, then `HF_HOME`, and otherwise
+    /// defaults to [`home_dir`]/.cache/huggingface/hub.
     pub fn from_env() -> Self {
+        if let Ok(path) = std::env::var(HF_HUB_CACHE) {
+            let path = path.trim();
+            if !path.is_empty() {
+                return Self::new(path.into());
+            }
+        }
         match std::env::var(HF_HOME) {
             Ok(home) => {
                 let mut path: PathBuf = home.into();
@@ -53,6 +106,53 @@ impl Cache {
     /// Creates a new cache object location
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+
+    /// Enumerates cached repos present under this cache root.
+    pub fn repos(&self) -> Result<Vec<CacheRepo>, std::io::Error> {
+        let mut repos = Vec::new();
+        if !self.path.exists() {
+            return Ok(repos);
+        }
+
+        for entry in std::fs::read_dir(&self.path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let Some(repo) = Repo::from_folder_name(name) else {
+                continue;
+            };
+            repos.push(self.repo(repo));
+        }
+
+        repos.sort_by(|left, right| left.repo.folder_name().cmp(&right.repo.folder_name()));
+        Ok(repos)
+    }
+
+    /// Parses a path inside this cache root and returns its repo and snapshot metadata.
+    pub fn path_info<P: AsRef<Path>>(&self, path: P) -> Option<CachePath> {
+        let relative = path.as_ref().strip_prefix(&self.path).ok()?;
+        let mut components = relative.components();
+        let repo_dir = components.next()?.as_os_str().to_str()?;
+        let repo = Repo::from_folder_name(repo_dir)?;
+        if components.next()?.as_os_str() != "snapshots" {
+            return None;
+        }
+        let commit_hash = components.next()?.as_os_str().to_str()?.to_string();
+        let relative_path = components
+            .map(|component| component.as_os_str().to_str())
+            .collect::<Option<Vec<_>>>()?
+            .join("/");
+        Some(CachePath {
+            repo,
+            commit_hash,
+            relative_path,
+        })
     }
 
     /// Returns the location of the token file
@@ -125,7 +225,7 @@ impl Cache {
 }
 
 /// Shorthand for accessing things within a particular repo
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CacheRepo {
     cache: Cache,
     repo: Repo,
@@ -134,6 +234,11 @@ pub struct CacheRepo {
 impl CacheRepo {
     fn new(cache: Cache, repo: Repo) -> Self {
         Self { cache, repo }
+    }
+
+    /// The repo handle for this cached repo.
+    pub fn repo(&self) -> &Repo {
+        &self.repo
     }
 
     /// This will get the location of the file within the cache for the remote
@@ -163,6 +268,18 @@ impl CacheRepo {
         ref_path
     }
 
+    /// Lists all cached refs for this repo.
+    pub fn refs(&self) -> Result<Vec<CacheRef>, std::io::Error> {
+        let refs_dir = self.path().join("refs");
+        let mut refs = Vec::new();
+        if !refs_dir.is_dir() {
+            return Ok(refs);
+        }
+        collect_ref_files(&refs_dir, &refs_dir, &mut refs)?;
+        refs.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(refs)
+    }
+
     /// Creates a reference in the cache directory that points branches to the correct
     /// commits within the blobs.
     pub fn create_ref(&self, commit_hash: &str) -> Result<(), std::io::Error> {
@@ -187,7 +304,6 @@ impl CacheRepo {
         blob_path
     }
 
-
     /// Get the path of the snapshot with the given commit hash.
     ///
     /// This path contains symlink pointers to the files for this commit.
@@ -196,6 +312,18 @@ impl CacheRepo {
         pointer_path.push("snapshots");
         pointer_path.push(commit_hash);
         pointer_path
+    }
+
+    /// Lists files relative to the snapshot root for a cached commit.
+    pub fn files(&self, commit_hash: &str) -> Result<Vec<String>, std::io::Error> {
+        let root = self.pointer_path(commit_hash);
+        let mut files = Vec::new();
+        if !root.is_dir() {
+            return Ok(files);
+        }
+        collect_snapshot_files(&root, &root, &mut files)?;
+        files.sort();
+        Ok(files)
     }
 }
 
@@ -210,7 +338,7 @@ impl Default for Cache {
 }
 
 /// The representation of a repo on the hub.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Repo {
     repo_id: String,
     repo_type: RepoType,
@@ -230,6 +358,19 @@ impl Repo {
             repo_type,
             revision,
         }
+    }
+
+    fn from_folder_name(name: &str) -> Option<Self> {
+        let (repo_type, repo_id) = if let Some(repo_id) = name.strip_prefix("models--") {
+            (RepoType::Model, repo_id)
+        } else if let Some(repo_id) = name.strip_prefix("datasets--") {
+            (RepoType::Dataset, repo_id)
+        } else if let Some(repo_id) = name.strip_prefix("spaces--") {
+            (RepoType::Space, repo_id)
+        } else {
+            return None;
+        };
+        Some(Self::new(repo_id.replace("--", "/"), repo_type))
     }
 
     /// Shortcut for [`Repo::new`] with [`RepoType::Model`]
@@ -260,6 +401,16 @@ impl Repo {
     /// The revision
     pub fn revision(&self) -> &str {
         &self.revision
+    }
+
+    /// The repo id.
+    pub fn repo_id(&self) -> &str {
+        &self.repo_id
+    }
+
+    /// The repo type.
+    pub fn repo_type(&self) -> RepoType {
+        self.repo_type
     }
 
     /// The actual URL part of the repo
@@ -294,9 +445,101 @@ impl Repo {
     }
 }
 
+fn collect_ref_files(
+    root: &Path,
+    dir: &Path,
+    refs: &mut Vec<CacheRef>,
+) -> Result<(), std::io::Error> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_ref_files(root, &path, refs)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let name = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let Some(commit_hash) = read_trimmed_file(&path)? else {
+            continue;
+        };
+        refs.push(CacheRef { name, commit_hash });
+    }
+    Ok(())
+}
+
+fn collect_snapshot_files(
+    root: &Path,
+    dir: &Path,
+    files: &mut Vec<String>,
+) -> Result<(), std::io::Error> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_snapshot_files(root, &path, files)?;
+            continue;
+        }
+        if !file_type.is_file() && !file_type.is_symlink() {
+            continue;
+        }
+        let file = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.push(file);
+    }
+    Ok(())
+}
+
+fn read_trimmed_file(path: &Path) -> Result<Option<String>, std::io::Error> {
+    let value = std::fs::read_to_string(path)?.trim().to_string();
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new() -> Self {
+            let mut path = std::env::temp_dir();
+            let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+            path.push(format!("hf-hub-tests-{}-{id}", std::process::id()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     /// Internal macro used to show cleaners errors
     /// on the payloads received from the hub.
@@ -338,7 +581,12 @@ mod tests {
     fn token_path() {
         let cache = Cache::from_env();
         let token_path = cache.token_path().to_str().unwrap().to_string();
-        if let Ok(hf_home) = std::env::var(HF_HOME) {
+        if let Ok(hf_hub_cache) = std::env::var(HF_HUB_CACHE) {
+            let mut expected = PathBuf::from(hf_hub_cache);
+            expected.pop();
+            expected.push("token");
+            assert_eq!(token_path, expected.to_string_lossy());
+        } else if let Ok(hf_home) = std::env::var(HF_HOME) {
             assert_eq!(token_path, format!("{hf_home}/token"));
         } else {
             let n = "huggingface/token".len();
@@ -351,11 +599,141 @@ mod tests {
     fn token_path() {
         let cache = Cache::from_env();
         let token_path = cache.token_path().to_str().unwrap().to_string();
-        if let Ok(hf_home) = std::env::var(HF_HOME) {
+        if let Ok(hf_hub_cache) = std::env::var(HF_HUB_CACHE) {
+            let mut expected = PathBuf::from(hf_hub_cache);
+            expected.pop();
+            expected.push("token");
+            assert_eq!(token_path, expected.to_string_lossy());
+        } else if let Ok(hf_home) = std::env::var(HF_HOME) {
             assert_eq!(token_path, format!("{hf_home}\\token"));
         } else {
             let n = "huggingface/token".len();
             assert_eq!(&token_path[token_path.len() - n..], "huggingface\\token");
+        }
+    }
+
+    #[test]
+    fn from_env_prefers_hf_hub_cache() {
+        let tmp = TestDir::new();
+        let prev_hub_cache = std::env::var_os(HF_HUB_CACHE);
+        let prev_hf_home = std::env::var_os(HF_HOME);
+        std::env::set_var(HF_HUB_CACHE, tmp.path());
+        std::env::set_var(HF_HOME, "/tmp/ignored-hf-home");
+
+        let cache = Cache::from_env();
+        assert_eq!(cache.path(), &tmp.path().to_path_buf());
+
+        restore_env(HF_HUB_CACHE, prev_hub_cache);
+        restore_env(HF_HOME, prev_hf_home);
+    }
+
+    #[test]
+    fn repos_lists_cached_repos() {
+        let tmp = TestDir::new();
+        std::fs::create_dir_all(tmp.path().join("models--gpt2")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("datasets--org--corpus")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("spaces--org--demo")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("not-a-repo")).unwrap();
+
+        let cache = Cache::new(tmp.path().to_path_buf());
+        let repos = cache.repos().unwrap();
+        let names: Vec<_> = repos
+            .iter()
+            .map(|repo| {
+                (
+                    repo.repo().repo_type(),
+                    repo.repo().repo_id().to_string(),
+                    repo.repo().revision().to_string(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            names,
+            vec![
+                (
+                    RepoType::Dataset,
+                    "org/corpus".to_string(),
+                    "main".to_string()
+                ),
+                (RepoType::Model, "gpt2".to_string(), "main".to_string()),
+                (RepoType::Space, "org/demo".to_string(), "main".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn refs_list_nested_ref_names() {
+        let tmp = TestDir::new();
+        let cache = Cache::new(tmp.path().to_path_buf());
+        let repo = cache.repo(Repo::model("org/model".to_string()));
+        let main = repo.path().join("refs").join("main");
+        std::fs::create_dir_all(main.parent().unwrap()).unwrap();
+        std::fs::write(&main, "commit-main\n").unwrap();
+        let pr = repo.path().join("refs").join("refs").join("pr").join("1");
+        std::fs::create_dir_all(pr.parent().unwrap()).unwrap();
+        std::fs::write(&pr, "commit-pr\n").unwrap();
+
+        let refs = repo.refs().unwrap();
+        let refs: Vec<_> = refs
+            .into_iter()
+            .map(|cache_ref| {
+                (
+                    cache_ref.name().to_string(),
+                    cache_ref.commit_hash().to_string(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            refs,
+            vec![
+                ("main".to_string(), "commit-main".to_string()),
+                ("refs/pr/1".to_string(), "commit-pr".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn files_list_snapshot_contents() {
+        let tmp = TestDir::new();
+        let cache = Cache::new(tmp.path().to_path_buf());
+        let repo = cache.repo(Repo::model("org/model".to_string()));
+        let root = repo.pointer_path("commit-hash");
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("config.json"), "{}").unwrap();
+        std::fs::write(root.join("nested").join("model.gguf"), "x").unwrap();
+
+        let files = repo.files("commit-hash").unwrap();
+        assert_eq!(
+            files,
+            vec!["config.json".to_string(), "nested/model.gguf".to_string()]
+        );
+    }
+
+    #[test]
+    fn path_info_parses_snapshot_paths() {
+        let tmp = TestDir::new();
+        let cache = Cache::new(tmp.path().to_path_buf());
+        let path = tmp
+            .path()
+            .join("models--org--model")
+            .join("snapshots")
+            .join("abc123")
+            .join("weights")
+            .join("model.gguf");
+
+        let info = cache.path_info(&path).unwrap();
+        assert_eq!(info.repo().repo_type(), RepoType::Model);
+        assert_eq!(info.repo().repo_id(), "org/model");
+        assert_eq!(info.commit_hash(), "abc123");
+        assert_eq!(info.relative_path(), "weights/model.gguf");
+    }
+
+    fn restore_env(key: &str, value: Option<OsString>) {
+        match value {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
         }
     }
 }
