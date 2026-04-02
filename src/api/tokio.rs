@@ -14,7 +14,6 @@ use reqwest::{
     redirect::Policy,
     Client, Error as ReqwestError, RequestBuilder,
 };
-use serde::de::DeserializeOwned;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::num::ParseIntError;
@@ -745,46 +744,6 @@ impl ApiRepo {
         }
     }
 
-    /// Read a remote file into memory without writing it into the cache.
-    pub async fn read_bytes(&self, filename: &str) -> Result<Vec<u8>, ApiError> {
-        Ok(self
-            .api
-            .client
-            .get(self.url(filename))
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?
-            .to_vec())
-    }
-
-    /// Read a remote text file without writing it into the cache.
-    pub async fn read_text(&self, filename: &str) -> Result<String, ApiError> {
-        self.api
-            .client
-            .get(self.url(filename))
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await
-            .map_err(ApiError::from)
-    }
-
-    /// Read and deserialize a remote JSON file without writing it into the cache.
-    pub async fn read_json<T: DeserializeOwned>(&self, filename: &str) -> Result<T, ApiError> {
-        self.api
-            .client
-            .get(self.url(filename))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await
-            .map_err(ApiError::from)
-    }
-
     async fn download_tempfile<P: Progress + Clone + Send + Sync + 'static>(
         &self,
         url: &str,
@@ -1447,29 +1406,6 @@ mod tests {
             .file_exists("missing-does-not-exist.json")
             .await
             .unwrap());
-    }
-
-    #[tokio::test]
-    async fn read_remote_files() {
-        let tmp = TempDir::new();
-        let api = ApiBuilder::new()
-            .with_progress(false)
-            .with_cache_dir(tmp.path.clone())
-            .build()
-            .unwrap();
-        let repo = api.model("julien-c/dummy-unknown".to_string());
-
-        let text = repo.read_text("config.json").await.unwrap();
-        assert!(text.contains("\"architectures\""));
-
-        let bytes = repo.read_bytes("config.json").await.unwrap();
-        assert!(!bytes.is_empty());
-
-        let value: Value = repo.read_json("config.json").await.unwrap();
-        assert_eq!(
-            value.get("model_type").and_then(Value::as_str),
-            Some("roberta")
-        );
     }
 
     #[tokio::test]

@@ -6,7 +6,6 @@ use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
 use indicatif::ProgressBar;
 use rand::Rng;
-use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::io::Read;
 use std::io::Seek;
@@ -846,39 +845,6 @@ impl ApiRepo {
         }
     }
 
-    /// Read a remote file into memory without writing it into the cache.
-    pub fn read_bytes(&self, filename: &str) -> Result<Vec<u8>, ApiError> {
-        let mut response = self
-            .api
-            .client
-            .get(&self.url(filename))
-            .call()
-            .map_err(Box::new)?;
-        Ok(response.body_mut().read_to_vec().map_err(Box::new)?)
-    }
-
-    /// Read a remote text file without writing it into the cache.
-    pub fn read_text(&self, filename: &str) -> Result<String, ApiError> {
-        let mut response = self
-            .api
-            .client
-            .get(&self.url(filename))
-            .call()
-            .map_err(Box::new)?;
-        Ok(response.body_mut().read_to_string().map_err(Box::new)?)
-    }
-
-    /// Read and deserialize a remote JSON file without writing it into the cache.
-    pub fn read_json<T: DeserializeOwned>(&self, filename: &str) -> Result<T, ApiError> {
-        let mut response = self
-            .api
-            .client
-            .get(&self.url(filename))
-            .call()
-            .map_err(Box::new)?;
-        Ok(response.body_mut().read_json().map_err(Box::new)?)
-    }
-
     /// This will attempt the fetch the file locally first, then [`Api.download`]
     /// if the file is not present.
     /// ```no_run
@@ -1303,29 +1269,6 @@ mod tests {
 
         assert!(repo.file_exists("config.json").unwrap());
         assert!(!repo.file_exists("missing-does-not-exist.json").unwrap());
-    }
-
-    #[test]
-    fn read_remote_files() {
-        let tmp = TempDir::new();
-        let api = ApiBuilder::new()
-            .with_progress(false)
-            .with_cache_dir(tmp.path.clone())
-            .build()
-            .unwrap();
-        let repo = api.model("julien-c/dummy-unknown".to_string());
-
-        let text = repo.read_text("config.json").unwrap();
-        assert!(text.contains("\"architectures\""));
-
-        let bytes = repo.read_bytes("config.json").unwrap();
-        assert!(!bytes.is_empty());
-
-        let value: Value = repo.read_json("config.json").unwrap();
-        assert_eq!(
-            value.get("model_type").and_then(Value::as_str),
-            Some("roberta")
-        );
     }
 
     #[test]
