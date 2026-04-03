@@ -31,6 +31,8 @@ reqwest = { version = "0.12.2", optional = true, default-features = false, featu
 ] }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
+sha1 = "0.10"
+sha2 = "0.10"
 thiserror = { version = "2", optional = true }
 tokio = { version = "1.29.1", optional = true, features = ["fs", "macros"] }
 ureq = { version = "3", optional = true, features = ["json", "socks-proxy"] }
@@ -91,7 +93,6 @@ ureq = [
 
 [dev-dependencies]
 hex-literal = "1.0"
-sha2 = "0.10"
 tokio-test = "0.4.2"
 
 [[example]]

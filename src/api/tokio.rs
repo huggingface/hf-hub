@@ -180,6 +180,15 @@ pub enum ApiError {
     #[error("I/O error {0}")]
     IoError(#[from] std::io::Error),
 
+    /// Downloaded file did not match the advertised checksum
+    #[error("Checksum mismatch: expected {expected}, got {actual}")]
+    ChecksumMismatch {
+        /// Expected SHA-256 digest advertised by the Hub.
+        expected: String,
+        /// Actual SHA-256 digest computed from the downloaded file.
+        actual: String,
+    },
+
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
@@ -918,6 +927,21 @@ impl ApiRepo {
         Ok((start, stop))
     }
 
+    async fn verify_downloaded_file(path: &Path, etag: &str) -> Result<(), ApiError> {
+        let Some(digest) = super::expected_digest_for_etag(etag) else {
+            return Ok(());
+        };
+        let expected = digest.expected().to_string();
+        let path = path.to_path_buf();
+        let actual =
+            tokio::task::spawn_blocking(move || super::file_digest_hex(&path, &digest)).await??;
+        if actual.eq_ignore_ascii_case(&expected) {
+            Ok(())
+        } else {
+            Err(ApiError::ChecksumMismatch { expected, actual })
+        }
+    }
+
     /// This will attempt the fetch the file locally first, then [`Api.download`]
     /// if the file is not present.
     /// ```no_run
@@ -999,11 +1023,25 @@ impl ApiRepo {
 
         let lock = lock_file(blob_path.clone()).await?;
         progress.init(metadata.size, filename).await;
-        let mut tmp_path = blob_path.clone();
-        tmp_path.set_extension(EXTENSION);
-        let tmp_filename = self
-            .download_tempfile(&url, metadata.size, tmp_path, progress)
-            .await?;
+        let mut checksum_retry = false;
+        let tmp_filename = loop {
+            let mut tmp_path = blob_path.clone();
+            tmp_path.set_extension(EXTENSION);
+            let tmp_filename = self
+                .download_tempfile(&url, metadata.size, tmp_path, progress.clone())
+                .await?;
+            match Self::verify_downloaded_file(&tmp_filename, &metadata.etag).await {
+                Ok(()) => break tmp_filename,
+                Err(ApiError::ChecksumMismatch { .. }) if !checksum_retry => {
+                    checksum_retry = true;
+                    let _ = tokio::fs::remove_file(&tmp_filename).await;
+                }
+                Err(err) => {
+                    let _ = tokio::fs::remove_file(&tmp_filename).await;
+                    return Err(err);
+                }
+            }
+        };
 
         tokio::fs::rename(&tmp_filename, &blob_path).await?;
         drop(lock);
@@ -1278,8 +1316,7 @@ mod tests {
         assert_eq!(downloaded_path, new_downloaded_path);
         assert_eq!(
             val[..],
-            // Corrupted sha
-            hex!("32b83c94ee55a8d43d68b03a859975f6789d647342ddeb2326fcd5e0127035b5")
+            hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
         );
     }
 

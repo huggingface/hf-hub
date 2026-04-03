@@ -189,6 +189,15 @@ pub enum ApiError {
     #[error("I/O error {0}")]
     IoError(#[from] std::io::Error),
 
+    /// Downloaded file did not match the advertised checksum
+    #[error("Checksum mismatch: expected {expected}, got {actual}")]
+    ChecksumMismatch {
+        /// Expected SHA-256 digest advertised by the Hub.
+        expected: String,
+        /// Actual SHA-256 digest computed from the downloaded file.
+        actual: String,
+    },
+
     /// We tried to download chunk too many times
     #[error("Too many retries: {0}")]
     TooManyRetries(Box<ApiError>),
@@ -859,6 +868,22 @@ impl ApiRepo {
         }
     }
 
+    fn verify_downloaded_file(path: &Path, etag: &str) -> Result<(), ApiError> {
+        let Some(digest) = super::expected_digest_for_etag(etag) else {
+            return Ok(());
+        };
+        let actual = super::file_digest_hex(path, &digest)?;
+        let expected = digest.expected();
+        if actual.eq_ignore_ascii_case(expected) {
+            Ok(())
+        } else {
+            Err(ApiError::ChecksumMismatch {
+                expected: expected.to_string(),
+                actual,
+            })
+        }
+    }
+
     /// This function is used to download a file with a custom progress function.
     /// It uses the [`Progress`] trait and can be used in more complex use
     /// cases like downloading a showing progress in a UI.
@@ -891,7 +916,7 @@ impl ApiRepo {
     pub fn download_with_progress<P: Progress>(
         &self,
         filename: &str,
-        progress: P,
+        mut progress: P,
     ) -> Result<PathBuf, ApiError> {
         let url = self.url(filename);
         let metadata = self.api.metadata(&url)?;
@@ -904,11 +929,29 @@ impl ApiRepo {
         std::fs::create_dir_all(blob_path.parent().unwrap())?;
 
         let lock = lock_file(blob_path.clone())?;
-        let mut tmp_path = blob_path.clone();
-        tmp_path.set_extension(EXTENSION);
-        let tmp_filename =
-            self.api
-                .download_tempfile(&url, metadata.size, progress, tmp_path, filename)?;
+        let mut checksum_retry = false;
+        let tmp_filename = loop {
+            let mut tmp_path = blob_path.clone();
+            tmp_path.set_extension(EXTENSION);
+            let tmp_filename = self.api.download_tempfile(
+                &url,
+                metadata.size,
+                &mut progress,
+                tmp_path,
+                filename,
+            )?;
+            match Self::verify_downloaded_file(&tmp_filename, &metadata.etag) {
+                Ok(()) => break tmp_filename,
+                Err(ApiError::ChecksumMismatch { .. }) if !checksum_retry => {
+                    checksum_retry = true;
+                    let _ = std::fs::remove_file(&tmp_filename);
+                }
+                Err(err) => {
+                    let _ = std::fs::remove_file(&tmp_filename);
+                    return Err(err);
+                }
+            }
+        };
 
         std::fs::rename(tmp_filename, &blob_path)?;
         drop(lock);
@@ -1111,8 +1154,7 @@ mod tests {
         println!("Corrupted {val:#x}");
         assert_eq!(
             val[..],
-            // Corrupted sha
-            hex!("32b83c94ee55a8d43d68b03a859975f6789d647342ddeb2326fcd5e0127035b5")
+            hex!("b908f2b7227d4d31a2105dfa31095e28d304f9bc938bfaaa57ee2cacf1f62d32")
         );
     }
 

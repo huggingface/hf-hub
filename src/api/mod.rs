@@ -1,8 +1,10 @@
-use std::{collections::VecDeque, time::Duration};
+use std::{collections::VecDeque, io::Read, path::Path, time::Duration};
 
 use crate::{Repo, RepoType};
 use indicatif::{style::ProgressTracker, HumanBytes, ProgressBar, ProgressStyle};
 use serde::Deserialize;
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
 
 /// The asynchronous version of the API
 #[cfg(feature = "tokio")]
@@ -29,6 +31,20 @@ impl Progress for () {
     fn init(&mut self, _size: usize, _filename: &str) {}
     fn update(&mut self, _size: usize) {}
     fn finish(&mut self) {}
+}
+
+impl<T: Progress + ?Sized> Progress for &mut T {
+    fn init(&mut self, size: usize, filename: &str) {
+        (**self).init(size, filename);
+    }
+
+    fn update(&mut self, size: usize) {
+        (**self).update(size);
+    }
+
+    fn finish(&mut self) {
+        (**self).finish();
+    }
 }
 
 impl Progress for ProgressBar {
@@ -296,6 +312,64 @@ impl ProgressTracker for MovingAvgRate {
                 write!(w, "{}/s", HumanBytes(rate)).unwrap()
             }
             _ => write!(w, "-").unwrap(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum EtagDigest {
+    GitSha1(String),
+    Sha256(String),
+}
+
+impl EtagDigest {
+    pub(crate) fn expected(&self) -> &str {
+        match self {
+            Self::GitSha1(expected) | Self::Sha256(expected) => expected,
+        }
+    }
+}
+
+pub(crate) fn expected_digest_for_etag(etag: &str) -> Option<EtagDigest> {
+    if etag.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        match etag.len() {
+            40 => Some(EtagDigest::GitSha1(etag.to_string())),
+            64 => Some(EtagDigest::Sha256(etag.to_string())),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+pub(crate) fn file_digest_hex(path: &Path, digest: &EtagDigest) -> Result<String, std::io::Error> {
+    let file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut reader = std::io::BufReader::new(file);
+    let mut buffer = [0u8; 1024 * 1024];
+    match digest {
+        EtagDigest::GitSha1(_) => {
+            let mut hasher = Sha1::new();
+            hasher.update(format!("blob {len}\0").as_bytes());
+            loop {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
+            Ok(format!("{:x}", hasher.finalize()))
+        }
+        EtagDigest::Sha256(_) => {
+            let mut hasher = Sha256::new();
+            loop {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
+            Ok(format!("{:x}", hasher.finalize()))
         }
     }
 }
