@@ -573,18 +573,17 @@ impl Api {
         } else {
             response
         };
-        let content_range = response
-            .headers()
-            .get(CONTENT_RANGE)
-            .ok_or(ApiError::MissingHeader(CONTENT_RANGE))?;
-        let content_range = std::str::from_utf8(content_range.as_bytes())
-            .map_err(|_| ApiError::InvalidHeader(CONTENT_RANGE))?;
-
-        let size = content_range
-            .split('/')
-            .next_back()
-            .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
-            .parse()?;
+        let size = if let Some(content_range) = response.headers().get(CONTENT_RANGE) {
+            let content_range = std::str::from_utf8(content_range.as_bytes())
+                .map_err(|_| ApiError::InvalidHeader(CONTENT_RANGE))?;
+            content_range
+                .split('/')
+                .next_back()
+                .ok_or(ApiError::InvalidHeader(CONTENT_RANGE))?
+                .parse()?
+        } else {
+            response.into_body().read_to_vec().map_err(Box::new)?.len()
+        };
         Ok(Metadata {
             commit_hash,
             etag,
