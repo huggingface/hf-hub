@@ -337,6 +337,22 @@ impl ApiBuilder {
         self
     }
 
+    /// Sets how many concurrent chunk failures can be retried in parallel.
+    ///
+    /// `0` disables retry loops for chunk failures.
+    pub fn with_parallel_failures(mut self, parallel_failures: usize) -> Self {
+        self.parallel_failures = parallel_failures;
+        self
+    }
+
+    /// Sets how many retries are attempted for a failed chunk download.
+    ///
+    /// Retries use exponential backoff with jitter.
+    pub fn with_retries(mut self, max_retries: usize) -> Self {
+        self.max_retries = max_retries;
+        self
+    }
+
     /// Sets the size of each chunk
     pub fn with_chunk_size(mut self, chunk_size: Option<usize>) -> Self {
         self.chunk_size = chunk_size;
@@ -1149,6 +1165,17 @@ mod tests {
         // Make sure the file is now seeable without connection
         let cache_path = api.cache.repo(repo.clone()).get("config.json").unwrap();
         assert_eq!(cache_path, downloaded_path);
+    }
+
+    #[test]
+    fn builder_exposes_retry_configuration() {
+        let api = ApiBuilder::new()
+            .with_parallel_failures(2)
+            .with_retries(5)
+            .build()
+            .unwrap();
+        assert_eq!(api.parallel_failures, 2);
+        assert_eq!(api.max_retries, 5);
     }
 
     #[tokio::test]
