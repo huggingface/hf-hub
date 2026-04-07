@@ -79,6 +79,9 @@ impl Progress for ProgressBar {
 pub struct Siblings {
     /// The path within the repo.
     pub rfilename: String,
+    /// Optional blob size in bytes (present when querying with `blobs=true`).
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 /// The description of the repo given by the hub
@@ -436,5 +439,22 @@ mod tests {
         }"#;
         let parsed: RepoSummary = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.trending_score, Some(0.7000000000000001));
+    }
+
+    #[test]
+    fn repo_info_siblings_accept_blob_sizes() {
+        let json = r#"{
+            "id":"org/repo",
+            "siblings":[
+                {"rfilename":"Q4/model-00001-of-00002.gguf","size":123},
+                {"rfilename":"Q4/model-00002-of-00002.gguf","size":456}
+            ],
+            "sha":"abc",
+            "private":false
+        }"#;
+        let parsed: RepoInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.siblings.len(), 2);
+        assert_eq!(parsed.siblings[0].size, Some(123));
+        assert_eq!(parsed.siblings[1].size, Some(456));
     }
 }
