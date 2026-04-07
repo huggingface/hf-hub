@@ -2,7 +2,7 @@ use std::{collections::VecDeque, io::Read, path::Path, time::Duration};
 
 use crate::{Repo, RepoType};
 use indicatif::{style::ProgressTracker, HumanBytes, ProgressBar, ProgressStyle};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
@@ -113,7 +113,7 @@ pub struct RepoInfo {
     #[serde(default)]
     pub private: bool,
     /// Whether the repo is gated.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_gated_flag")]
     pub gated: Option<bool>,
     /// Whether the repo is disabled.
     #[serde(default)]
@@ -165,7 +165,7 @@ pub struct RepoSummary {
     #[serde(default)]
     pub private: bool,
     /// Whether the repo is gated.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_gated_flag")]
     pub gated: Option<bool>,
     /// Whether the repo is disabled.
     #[serde(default)]
@@ -204,6 +204,31 @@ impl RepoSummary {
     pub fn repo(&self) -> Repo {
         Repo::new(self.id.clone(), self.repo_type())
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum GatedFlag {
+    Bool(bool),
+    String(String),
+}
+
+fn deserialize_gated_flag<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let parsed = Option::<GatedFlag>::deserialize(deserializer)?;
+    Ok(parsed.map(|value| match value {
+        GatedFlag::Bool(flag) => flag,
+        GatedFlag::String(raw) => {
+            let normalized = raw.trim().to_ascii_lowercase();
+            !normalized.is_empty()
+                && normalized != "false"
+                && normalized != "0"
+                && normalized != "none"
+                && normalized != "no"
+        }
+    }))
 }
 
 /// Query builder shared by the sync and async search APIs.
@@ -371,5 +396,34 @@ pub(crate) fn file_digest_hex(path: &Path, digest: &EtagDigest) -> Result<String
             }
             Ok(format!("{:x}", hasher.finalize()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RepoInfo, RepoSummary};
+
+    #[test]
+    fn repo_info_accepts_string_gated_flag() {
+        let json = r#"{
+            "id":"org/repo",
+            "siblings":[],
+            "sha":"abc",
+            "private":false,
+            "gated":"manual"
+        }"#;
+        let parsed: RepoInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.gated, Some(true));
+    }
+
+    #[test]
+    fn repo_summary_accepts_string_gated_flag() {
+        let json = r#"{
+            "id":"org/repo",
+            "private":false,
+            "gated":"manual"
+        }"#;
+        let parsed: RepoSummary = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.gated, Some(true));
     }
 }
