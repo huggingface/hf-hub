@@ -160,7 +160,7 @@ pub struct RepoSummary {
     pub likes: Option<u64>,
     /// Trending score when available.
     #[serde(default, rename = "trendingScore")]
-    pub trending_score: Option<i64>,
+    pub trending_score: Option<f64>,
     /// Whether the repo is private.
     #[serde(default)]
     pub private: bool,
@@ -425,5 +425,16 @@ mod tests {
         }"#;
         let parsed: RepoSummary = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.gated, Some(true));
+    }
+
+    #[test]
+    fn repo_summary_accepts_floating_trending_score() {
+        let json = r#"{
+            "id":"org/repo",
+            "private":false,
+            "trendingScore":0.7000000000000001
+        }"#;
+        let parsed: RepoSummary = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.trending_score, Some(0.7000000000000001));
     }
 }
