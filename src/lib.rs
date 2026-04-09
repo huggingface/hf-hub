@@ -7,14 +7,57 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+#[cfg(feature = "cache-manager")]
+use std::path::Path;
+
 /// The actual Api to interact with the hub.
 #[cfg(any(feature = "tokio", feature = "ureq"))]
 pub mod api;
+#[cfg(feature = "cache-manager")]
+pub mod cache_manager;
+pub mod paths;
 
-const HF_HOME: &str = "HF_HOME";
+/// Configuration constants
+pub(crate) mod constants {
+    /// HF home env var
+    pub(crate) const HF_HOME: &str = "HF_HOME";
+    /// HF endpoint env var
+    pub(crate) const HF_ENDPOINT: &str = "HF_ENDPOINT";
+    /// HF endpoint
+    pub(crate) const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
+
+    /// Path separator used in repository names and URLs.
+    pub(crate) const REPO_ID_SEPARATOR: &str = "/";
+    /// Flattened separator used to replace path separators in repo names.
+    pub(crate) const FLAT_SEPARATOR: &str = "--";
+    /// URL-encoded separator.
+    pub(crate) const ENCODED_SEPARATOR: &str = "%2F";
+
+    /// Default cache directory name relative to the user's home directory.
+    pub(crate) const CACHE_DIR: &str = ".cache";
+    /// Top-level Hugging Face directory name within the cache.
+    pub(crate) const TOP_LEVEL_HF_DIR: &str = "huggingface";
+    /// Hub-specific directory name for storing data.
+    pub(crate) const HUB_DIR: &str = "hub";
+    /// Directory name for storing refs.
+    pub(crate) const REFS_DIR: &str = "refs";
+    /// Directory name for storing snapshots.
+    pub(crate) const SNAPSHOTS_DIR: &str = "snapshots";
+    /// Directory name for storing blobs.
+    pub(crate) const BLOBS_DIR: &str = "blobs";
+    #[cfg(feature = "cache-manager")]
+    /// Directory name for locks dir (to manage concurrent file access during downloads)
+    pub(crate) const LOCKS_DIR: &str = ".locks";
+
+    /// Filename for storing authentication token.
+    pub(crate) const TOKEN_FILE: &str = "token";
+
+    /// Default branch name to use when none is specified.
+    pub(crate) const DEFAULT_BRANCH: &str = "main";
+}
 
 /// The type of repo to interact with
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub enum RepoType {
     /// This is a model, usually it consists of weight files and some configuration
     /// files
@@ -23,6 +66,42 @@ pub enum RepoType {
     Dataset,
     /// This is a space, usually a demo showcashing a given model or dataset
     Space,
+}
+
+impl RepoType {
+    /// Returns the plural form used in API routes, URLs, and cache folder names.
+    pub fn plural(&self) -> &'static str {
+        match self {
+            RepoType::Model => "models",
+            RepoType::Dataset => "datasets",
+            RepoType::Space => "spaces",
+        }
+    }
+}
+
+/// Display is for human-facing output (CLI logs, errors).
+impl std::fmt::Display for RepoType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RepoType::Model => write!(f, "model"),
+            RepoType::Dataset => write!(f, "dataset"),
+            RepoType::Space => write!(f, "space"),
+        }
+    }
+}
+
+/// Allows parsing from CLI args or config strings.
+impl std::str::FromStr for RepoType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "model" | "models" => Ok(RepoType::Model),
+            "dataset" | "datasets" => Ok(RepoType::Dataset),
+            "space" | "spaces" => Ok(RepoType::Space),
+            _ => Err(format!("Invalid repo type: '{}'", s)),
+        }
+    }
 }
 
 /// A local struct used to fetch information from the cache folder.
@@ -37,17 +116,67 @@ impl Cache {
         Self { path }
     }
 
+    /// Creates a `Cache` using the default hub directory, returning `None` if the
+    /// home directory cannot be determined.
+    ///
+    /// Prefer this over [`Cache::default`] in environments where the home
+    /// directory may not be available.
+    pub fn try_default() -> Option<Self> {
+        paths::get_hub_dir().map(Self::new)
+    }
+
     /// Creates cache from environment variable HF_HOME (if defined) otherwise
     /// defaults to [`home_dir`]/.cache/huggingface/
+    ///
+    /// # Panics
+    ///
+    /// Panics if `HF_HOME` is not set and the home directory cannot be
+    /// determined (which is needed for the `Cache::default` call).
+    /// Use [`Cache::try_from_env`] to avoid this.
     pub fn from_env() -> Self {
-        match std::env::var(HF_HOME) {
+        match std::env::var(constants::HF_HOME) {
             Ok(home) => {
                 let mut path: PathBuf = home.into();
-                path.push("hub");
+                path.push(constants::HUB_DIR);
                 Self::new(path)
             }
             Err(_) => Self::default(),
         }
+    }
+
+    /// Like [`Cache::from_env`] but returns an Option.
+    ///
+    /// Creates cache from environment variable HF_HOME (if defined) otherwise
+    /// defaults to [`home_dir`]/.cache/huggingface/.
+    pub fn try_from_env() -> Option<Self> {
+        match std::env::var(constants::HF_HOME) {
+            Ok(home) => {
+                let mut path: PathBuf = home.into();
+                path.push(constants::HUB_DIR);
+                Some(Self::new(path))
+            }
+            Err(_) => Self::try_default(),
+        }
+    }
+
+    #[cfg(feature = "cache-manager")]
+    pub(crate) fn validate_cache_dir_path(
+        cache_dir: &Path,
+    ) -> Result<(), cache_manager::CorruptedCacheError> {
+        // TODO: replace with is_dir call since that checks exists too?
+        if !cache_dir.exists() {
+            return Err(cache_manager::CorruptedCacheError::MissingCacheDir {
+                path: cache_dir.to_path_buf(),
+            });
+        }
+
+        if cache_dir.is_file() {
+            return Err(cache_manager::CorruptedCacheError::CacheDirCantBeFile {
+                path: cache_dir.to_path_buf(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Creates a new cache object location
@@ -57,11 +186,7 @@ impl Cache {
 
     /// Returns the location of the token file
     pub fn token_path(&self) -> PathBuf {
-        let mut path = self.path.clone();
-        // Remove `"hub"`
-        path.pop();
-        path.push("token");
-        path
+        paths::token_path(&self.path)
     }
 
     /// Returns the token value if it exists in the cache
@@ -124,6 +249,23 @@ impl Cache {
     }
 }
 
+impl Default for Cache {
+    /// Default for Cache
+    ///
+    /// # Panics
+    ///
+    /// Panics if the call to [`paths::get_hub_dir`] returns `None`, likely if
+    /// the user's home directory cannot be determined. This typically
+    /// only happens in very restricted environments or when the HOME environment
+    /// variable is not set.
+    fn default() -> Self {
+        let path = paths::get_hub_dir().expect(
+            "Hub directory cannot be found, possibly because HOME directory cannot be found.",
+        );
+        Self::new(path)
+    }
+}
+
 /// Shorthand for accessing things within a particular repo
 #[derive(Debug)]
 pub struct CacheRepo {
@@ -151,14 +293,13 @@ impl CacheRepo {
     }
 
     fn path(&self) -> PathBuf {
-        let mut ref_path = self.cache.path.clone();
-        ref_path.push(self.repo.folder_name());
-        ref_path
+        let mut cache_repo_path = self.cache.path.clone();
+        cache_repo_path.push(self.repo.folder_name());
+        cache_repo_path
     }
 
     fn ref_path(&self) -> PathBuf {
-        let mut ref_path = self.path();
-        ref_path.push("refs");
+        let mut ref_path = paths::refs_dir(&self.path());
         ref_path.push(self.repo.revision());
         ref_path
     }
@@ -181,36 +322,23 @@ impl CacheRepo {
     /// Get the path of the blob with the given etag.
     #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn blob_path(&self, etag: &str) -> PathBuf {
-        let mut blob_path = self.path();
-        blob_path.push("blobs");
+        let mut blob_path = paths::blobs_dir(&self.path());
         blob_path.push(etag);
         blob_path
     }
-
 
     /// Get the path of the snapshot with the given commit hash.
     ///
     /// This path contains symlink pointers to the files for this commit.
     pub fn pointer_path(&self, commit_hash: &str) -> PathBuf {
-        let mut pointer_path = self.path();
-        pointer_path.push("snapshots");
+        let mut pointer_path = paths::snapshots_dir(&self.path());
         pointer_path.push(commit_hash);
         pointer_path
     }
 }
 
-impl Default for Cache {
-    fn default() -> Self {
-        let mut path = dirs::home_dir().expect("Cache directory cannot be found");
-        path.push(".cache");
-        path.push("huggingface");
-        path.push("hub");
-        Self::new(path)
-    }
-}
-
 /// The representation of a repo on the hub.
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Repo {
     repo_id: String,
     repo_type: RepoType,
@@ -220,7 +348,7 @@ pub struct Repo {
 impl Repo {
     /// Repo with the default branch ("main").
     pub fn new(repo_id: String, repo_type: RepoType) -> Self {
-        Self::with_revision(repo_id, repo_type, "main".to_string())
+        Self::with_revision(repo_id, repo_type, constants::DEFAULT_BRANCH.to_string())
     }
 
     /// fully qualified Repo
@@ -247,14 +375,9 @@ impl Repo {
         Self::new(repo_id, RepoType::Space)
     }
 
-    /// The normalized folder nameof the repo within the cache directory
+    /// The flattened folder name of the repo within the cache directory
     pub fn folder_name(&self) -> String {
-        let prefix = match self.repo_type {
-            RepoType::Model => "models",
-            RepoType::Dataset => "datasets",
-            RepoType::Space => "spaces",
-        };
-        format!("{prefix}--{}", self.repo_id).replace('/', "--")
+        paths::flattened_repo_folder_name(&self.repo_type, &self.repo_id)
     }
 
     /// The revision
@@ -267,30 +390,25 @@ impl Repo {
     pub fn url(&self) -> String {
         match self.repo_type {
             RepoType::Model => self.repo_id.to_string(),
-            RepoType::Dataset => {
-                format!("datasets/{}", self.repo_id)
-            }
-            RepoType::Space => {
-                format!("spaces/{}", self.repo_id)
-            }
+            _ => format!("{}/{}", self.repo_type.plural(), self.repo_id),
         }
     }
 
     /// Revision needs to be url escaped before being used in a URL
     #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn url_revision(&self) -> String {
-        self.revision.replace('/', "%2F")
+        paths::encode_separator(&self.revision)
     }
 
     /// Used to compute the repo's url part when accessing the metadata of the repo
     #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn api_url(&self) -> String {
-        let prefix = match self.repo_type {
-            RepoType::Model => "models",
-            RepoType::Dataset => "datasets",
-            RepoType::Space => "spaces",
-        };
-        format!("{prefix}/{}/revision/{}", self.repo_id, self.url_revision())
+        format!(
+            "{}/{}/revision/{}",
+            self.repo_type.plural(),
+            self.repo_id,
+            self.url_revision()
+        )
     }
 }
 
@@ -338,7 +456,7 @@ mod tests {
     fn token_path() {
         let cache = Cache::from_env();
         let token_path = cache.token_path().to_str().unwrap().to_string();
-        if let Ok(hf_home) = std::env::var(HF_HOME) {
+        if let Ok(hf_home) = std::env::var(constants::HF_HOME) {
             assert_eq!(token_path, format!("{hf_home}/token"));
         } else {
             let n = "huggingface/token".len();

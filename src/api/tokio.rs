@@ -1,5 +1,6 @@
 use super::Progress as SyncProgress;
-use super::{RepoInfo, HF_ENDPOINT};
+use super::RepoInfo;
+use crate::constants::{DEFAULT_ENDPOINT, HF_ENDPOINT};
 use crate::{Cache, Repo, RepoType};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
@@ -285,7 +286,7 @@ impl ApiBuilder {
         ];
 
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint: DEFAULT_ENDPOINT.to_string(),
             cache,
             token,
             max_files: 1,
