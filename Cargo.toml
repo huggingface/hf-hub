@@ -86,6 +86,12 @@ ureq = [
 ]
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 hex-literal = "1.0"
+rand = "0.9"
 sha2 = "0.10"
 tokio-test = "0.4.2"
+
+[[bench]]
+name = "sync_api"
+harness = false

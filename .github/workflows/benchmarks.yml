@@ -1,0 +1,44 @@
+name: Benchmarks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+
+      - name: Run benchmarks
+        run: cargo bench --bench sync_api -- --output-format bencher 2>&1 | tee bench_output.txt
+
+      - name: Compare against baseline
+        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372  # v1.22.0
+        with:
+          tool: cargo
+          output-file-path: bench_output.txt
+          # On main pushes: update the gh-pages baseline
+          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # On PRs: post a comment with the comparison
+          comment-on-alert: true
+          alert-comment-cc-users: '@mcpotato'
+          # Fail the PR check if any benchmark regresses by more than 30%
+          alert-threshold: '130%'
+          fail-on-alert: ${{ github.event_name == 'pull_request' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          benchmark-data-dir-path: dev/bench
+          gh-pages-branch: gh-pages
