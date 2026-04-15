@@ -4,7 +4,7 @@ use crate::api::Progress;
 use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
 use indicatif::ProgressBar;
-use rand::Rng;
+use rand::RngExt;
 use std::collections::HashMap;
 use std::io::Read;
 use std::io::Seek;
@@ -884,7 +884,7 @@ mod tests {
     use crate::api::Siblings;
     use crate::assert_no_diff;
     use hex_literal::hex;
-    use rand::{distr::Alphanumeric, Rng};
+    use rand::{distr::Alphanumeric, RngExt};
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
     use std::io::{Seek, SeekFrom, Write};
@@ -1013,7 +1013,10 @@ mod tests {
         let val = Sha256::digest(std::fs::read(&*new_downloaded_path).unwrap());
         assert_eq!(downloaded_path, new_downloaded_path);
         println!("{new_downloaded_path:?}");
-        println!("Corrupted {val:#x}");
+        println!(
+            "Corrupted {}",
+            val.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
         assert_eq!(
             val[..],
             // Corrupted sha

@@ -4,7 +4,7 @@ use crate::{Cache, Repo, RepoType};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use indicatif::ProgressBar;
-use rand::Rng;
+use rand::RngExt;
 use reqwest::{
     header::{
         HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,

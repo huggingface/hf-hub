@@ -306,7 +306,7 @@ mod tests {
             let left = serde_json::to_string_pretty(&$left).unwrap();
             let right = serde_json::to_string_pretty(&$right).unwrap();
             if left != right {
-                use rand::Rng;
+                use rand::RngExt;
                 use std::io::Write;
                 use std::process::Command;
                 let rand_string: String = rand::rng()
