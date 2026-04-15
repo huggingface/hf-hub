@@ -4,7 +4,7 @@ use crate::{Cache, Repo, RepoType};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use indicatif::ProgressBar;
-use rand::Rng;
+use rand::RngExt;
 use reqwest::{
     header::{
         HeaderMap, HeaderName, HeaderValue, InvalidHeaderValue, ToStrError, AUTHORIZATION,
@@ -1420,9 +1420,12 @@ mod tests {
         assert_eq!(
             headers.get(USER_AGENT),
             Some(
-                &"unknown/None; hf-hub/0.4.3; rust/unknown"
-                    .try_into()
-                    .unwrap()
+                &format!(
+                    "unknown/None; hf-hub/{}; rust/unknown",
+                    env!("CARGO_PKG_VERSION")
+                )
+                .try_into()
+                .unwrap()
             )
         );
     }
@@ -1436,9 +1439,12 @@ mod tests {
         assert_eq!(
             headers.get(USER_AGENT),
             Some(
-                &"unknown/None; hf-hub/0.4.3; rust/unknown; origin/custom"
-                    .try_into()
-                    .unwrap()
+                &format!(
+                    "unknown/None; hf-hub/{}; rust/unknown; origin/custom",
+                    env!("CARGO_PKG_VERSION")
+                )
+                .try_into()
+                .unwrap()
             )
         );
     }
