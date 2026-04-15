@@ -1317,7 +1317,10 @@ mod tests {
         let headers = api.client.headers;
         assert_eq!(
             headers.get(USER_AGENT),
-            Some(&"unknown/None; hf-hub/0.4.3; rust/unknown".to_string())
+            Some(&format!(
+                "unknown/None; hf-hub/{}; rust/unknown",
+                env!("CARGO_PKG_VERSION")
+            ))
         );
     }
 
@@ -1330,7 +1333,10 @@ mod tests {
         let headers = api.client.headers;
         assert_eq!(
             headers.get(USER_AGENT),
-            Some(&"unknown/None; hf-hub/0.4.3; rust/unknown; origin/custom".to_string())
+            Some(&format!(
+                "unknown/None; hf-hub/{}; rust/unknown; origin/custom",
+                env!("CARGO_PKG_VERSION")
+            ))
         );
     }
 
