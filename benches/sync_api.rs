@@ -1,26 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use hf_hub::api::sync::ApiBuilder;
 use hf_hub::{Cache, Repo, RepoType};
-use std::path::PathBuf;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn bench_cache_dir() -> PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!("hf_hub_bench_{}", std::process::id()));
-    std::fs::create_dir_all(&path).ok();
-    path
-}
-
-fn fresh_cache_dir() -> PathBuf {
-    let mut path = bench_cache_dir();
-    let suffix: u64 = rand::random();
-    path.push(format!("run_{suffix}"));
-    std::fs::create_dir_all(&path).ok();
-    path
-}
+use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
 // Download benchmarks
@@ -32,11 +13,11 @@ fn bench_download_small_file(c: &mut Criterion) {
 
     group.bench_function("small file (cold cache)", |b| {
         b.iter_with_setup(
-            fresh_cache_dir,
-            |cache_dir| {
+            || TempDir::new().unwrap(),
+            |tmp| {
                 let api = ApiBuilder::new()
                     .with_progress(false)
-                    .with_cache_dir(cache_dir)
+                    .with_cache_dir(tmp.path().to_path_buf())
                     .build()
                     .unwrap();
                 api.model("julien-c/dummy-unknown".to_string())
@@ -55,11 +36,11 @@ fn bench_download_with_revision(c: &mut Criterion) {
 
     group.bench_function("with revision (cold cache)", |b| {
         b.iter_with_setup(
-            fresh_cache_dir,
-            |cache_dir| {
+            || TempDir::new().unwrap(),
+            |tmp| {
                 let api = ApiBuilder::new()
                     .with_progress(false)
-                    .with_cache_dir(cache_dir)
+                    .with_cache_dir(tmp.path().to_path_buf())
                     .build()
                     .unwrap();
                 let repo = Repo::with_revision(
@@ -80,11 +61,11 @@ fn bench_download_with_revision(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_get_warm_cache(c: &mut Criterion) {
-    // Pre-populate cache
-    let cache_dir = fresh_cache_dir();
+    // Pre-populate cache (kept alive for the whole benchmark)
+    let tmp = TempDir::new().unwrap();
     let api = ApiBuilder::new()
         .with_progress(false)
-        .with_cache_dir(cache_dir.clone())
+        .with_cache_dir(tmp.path().to_path_buf())
         .build()
         .unwrap();
     api.model("julien-c/dummy-unknown".to_string())
@@ -97,7 +78,7 @@ fn bench_get_warm_cache(c: &mut Criterion) {
         b.iter(|| {
             let api = ApiBuilder::new()
                 .with_progress(false)
-                .with_cache_dir(cache_dir.clone())
+                .with_cache_dir(tmp.path().to_path_buf())
                 .build()
                 .unwrap();
             api.model("julien-c/dummy-unknown".to_string())
@@ -111,17 +92,17 @@ fn bench_get_warm_cache(c: &mut Criterion) {
 
 fn bench_cache_repo_get(c: &mut Criterion) {
     // Pre-populate cache
-    let cache_dir = fresh_cache_dir();
+    let tmp = TempDir::new().unwrap();
     let api = ApiBuilder::new()
         .with_progress(false)
-        .with_cache_dir(cache_dir.clone())
+        .with_cache_dir(tmp.path().to_path_buf())
         .build()
         .unwrap();
     api.model("julien-c/dummy-unknown".to_string())
         .download("config.json")
         .unwrap();
 
-    let cache = Cache::new(cache_dir);
+    let cache = Cache::new(tmp.path().to_path_buf());
     let repo = cache.repo(Repo::model("julien-c/dummy-unknown".to_string()));
 
     let mut group = c.benchmark_group("cache");
