@@ -2,6 +2,7 @@ use std::{collections::VecDeque, time::Duration};
 
 use indicatif::{style::ProgressTracker, HumanBytes, ProgressBar, ProgressStyle};
 use serde::Deserialize;
+use unicode_width::UnicodeWidthChar;
 
 /// The asynchronous version of the API
 #[cfg(feature = "tokio")]
@@ -42,11 +43,31 @@ impl Progress for ProgressBar {
                     ,
             );
         let maxlength = 30;
-        let message = if filename.len() > maxlength {
-            format!("..{}", &filename[filename.len() - maxlength..])
-        } else {
+        // This width is display length, not byte length, CJK fonts in terminal always width=2
+        let display_width: usize = filename.chars().map(|c| c.width().unwrap_or(0)).sum();
+
+        let message = if display_width <= maxlength {
             filename.to_string()
+        } else {
+            let target_width = maxlength - 2; // Change width to 28 for the ".." prefix
+            let mut current_width = 0;
+            let mut start_index = filename.len();
+
+            for (i, c) in filename.char_indices().rev() {
+                let char_width = c.width().unwrap_or(0);
+
+                // if add this character exceeds target width, stop
+                if current_width + char_width > target_width {
+                    break;
+                }
+
+                current_width += char_width;
+                start_index = i;
+            }
+
+            format!("..{}", &filename[start_index..])
         };
+
         self.set_message(message);
     }
 
