@@ -1,6 +1,7 @@
-use super::{RepoInfo, HF_ENDPOINT};
+use super::RepoInfo;
 use crate::api::sync::ApiError::InvalidHeader;
 use crate::api::Progress;
+use crate::constants::{DEFAULT_ENDPOINT, HF_ENDPOINT};
 use crate::{Cache, Repo, RepoType};
 use http::{StatusCode, Uri};
 use indicatif::ProgressBar;
@@ -265,7 +266,7 @@ impl ApiBuilder {
         let max_retries = 0;
         let progress = true;
 
-        let endpoint = "https://huggingface.co".to_string();
+        let endpoint = DEFAULT_ENDPOINT.to_string();
 
         let user_agent = vec![
             ("unknown".to_string(), "None".to_string()),
