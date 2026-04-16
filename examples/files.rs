@@ -1,7 +1,7 @@
 //! File operations: listing, downloading, uploading, and committing.
 //!
 //! Requires HF_TOKEN environment variable.
-//! Run: cargo run -p hf-hub --example files
+//! Run: cargo run -p examples --example files
 
 use futures::StreamExt;
 use hf_hub::types::{AddSource, CommitOperation, RepoTreeEntry};

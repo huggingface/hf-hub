@@ -1,7 +1,7 @@
 //! Repository operations: info, listing, existence checks, and CRUD.
 //!
 //! Requires HF_TOKEN environment variable.
-//! Run: cargo run -p hf-hub --example repo
+//! Run: cargo run -p examples --example repo
 
 use futures::StreamExt;
 use hf_hub::{

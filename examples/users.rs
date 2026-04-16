@@ -1,7 +1,7 @@
 //! User operations: authentication, user info, and social features.
 //!
 //! Requires HF_TOKEN environment variable.
-//! Run: cargo run -p hf-hub --example users
+//! Run: cargo run -p examples --example users
 
 use futures::StreamExt;
 use hf_hub::HFClient;

@@ -3,7 +3,7 @@
 //! Creates a temporary repo, uploads files, manages branches, and cleans up.
 //!
 //! Requires HF_TOKEN environment variable.
-//! Run: cargo run -p hf-hub --features blocking --example blocking_write
+//! Run: cargo run -p examples --features blocking --example blocking_write
 
 use hf_hub::{
     AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, HFClientSync, RepoCreateBranchParams,

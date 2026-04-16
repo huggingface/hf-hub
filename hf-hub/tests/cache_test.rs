@@ -2,10 +2,8 @@
 //!
 //! Tests require HF_TOKEN and network access, skip if not set.
 //! Interop tests additionally require python3, skip if not found.
-//! Xet cache tests require --features xet.
 //!
 //! Run: HF_TOKEN=hf_xxx cargo test -p hf-hub --test cache_test
-//! Run with xet: HF_TOKEN=hf_xxx cargo test -p hf-hub --features xet --test cache_test
 
 use std::path::Path;
 
@@ -1319,10 +1317,9 @@ print("ALL_CHECKS_PASSED")
 }
 
 // =============================================================================
-// Xet cache tests (require --features xet)
+// Xet cache tests
 // =============================================================================
 
-#[cfg(feature = "xet")]
 #[tokio::test]
 async fn test_xet_download_to_cache() {
     let Some(_) = api() else { return };
@@ -1399,7 +1396,6 @@ async fn test_xet_download_to_cache() {
     assert_eq!(path, path3);
 }
 
-#[cfg(feature = "xet")]
 #[tokio::test]
 async fn test_xet_snapshot_download_to_cache() {
     let Some(_) = api() else { return };
@@ -1433,7 +1429,6 @@ async fn test_xet_snapshot_download_to_cache() {
     assert!(!files.is_empty(), "Snapshot should contain files");
 }
 
-#[cfg(feature = "xet")]
 #[tokio::test]
 async fn test_xet_cache_hit_second_download() {
     let Some(_) = api() else { return };

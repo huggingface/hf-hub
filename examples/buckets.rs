@@ -2,7 +2,7 @@
 //! and fetching bucket info via an HFBucket handle.
 //!
 //! Requires a valid HF_TOKEN with write access.
-//! Run: HF_TOKEN=hf_xxx cargo run -p hf-hub --example buckets
+//! Run: HF_TOKEN=hf_xxx cargo run -p examples --example buckets
 
 use futures::TryStreamExt;
 use hf_hub::{BucketInfo, CreateBucketParams, HFClient, ListBucketTreeParams};

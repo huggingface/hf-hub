@@ -52,7 +52,6 @@ pub struct HFSpaceSync {
 ///
 /// Holds a reference to the underlying async handle and the shared tokio runtime.
 /// Blocking API methods are defined via the `sync_api!` macro in `api/buckets.rs`.
-#[cfg(feature = "buckets")]
 #[derive(Clone)]
 pub struct HFBucketSync {
     pub(crate) inner: Arc<crate::bucket::HFBucket>,
@@ -80,7 +79,6 @@ impl fmt::Debug for HFSpaceSync {
     }
 }
 
-#[cfg(feature = "buckets")]
 impl fmt::Debug for HFBucketSync {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HFBucketSync").field("inner", &self.inner).finish()
@@ -140,7 +138,6 @@ impl HFClientSync {
     }
 
     /// Creates a blocking handle for a bucket.
-    #[cfg(feature = "buckets")]
     pub fn bucket(&self, owner: impl Into<String>, name: impl Into<String>) -> HFBucketSync {
         HFBucketSync::new(self.clone(), owner, name)
     }
@@ -201,7 +198,6 @@ impl Deref for HFSpaceSync {
     }
 }
 
-#[cfg(feature = "buckets")]
 impl HFBucketSync {
     /// Creates a blocking bucket handle from a client, owner, and name.
     pub fn new(client: HFClientSync, owner: impl Into<String>, name: impl Into<String>) -> Self {
@@ -212,7 +208,6 @@ impl HFBucketSync {
     }
 }
 
-#[cfg(feature = "buckets")]
 impl Deref for HFBucketSync {
     type Target = crate::bucket::HFBucket;
 

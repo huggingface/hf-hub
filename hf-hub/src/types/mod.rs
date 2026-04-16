@@ -1,6 +1,4 @@
-#[cfg(feature = "buckets")]
 pub mod bucket_params;
-#[cfg(feature = "buckets")]
 pub mod buckets;
 pub mod cache;
 pub mod commit;
@@ -11,9 +9,7 @@ pub mod repo_params;
 pub mod spaces;
 pub mod user;
 
-#[cfg(feature = "buckets")]
 pub use bucket_params::*;
-#[cfg(feature = "buckets")]
 pub use buckets::*;
 pub use commit::*;
 pub use params::*;

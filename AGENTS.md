@@ -11,7 +11,7 @@ Key capabilities:
 - Commit creation, commit history, diffs between revisions
 - Branch and tag management
 - User and organization info
-- Xet high-performance transfers (behind the `xet` feature flag)
+- Xet high-performance transfers
 
 ## Code Standards
 
@@ -89,7 +89,7 @@ hf-hub/
 │   │   ├── pagination.rs           # Generic paginate<T>() with Link header parsing
 │   │   ├── cache.rs                # Cache path computation, locking, ref read/write, symlink, scan, delete
 │   │   ├── diff.rs                 # Raw diff parsing (parse_raw_diff, stream_raw_diff), HFFileDiff, GitStatus
-│   │   ├── xet.rs                  # Xet high-performance transfer stubs (behind "xet" feature)
+│   │   ├── xet.rs                  # Xet high-performance transfer stubs
 │   │   ├── types/
 │   │   │   ├── mod.rs              # Module declarations, re-exports
 │   │   │   ├── cache.rs            # CachedFileInfo, CachedRepoInfo, HFCacheInfo, DeleteCacheRevision
@@ -113,18 +113,25 @@ hf-hub/
 │   │       └── buckets/
 │   │           ├── mod.rs          # All bucket API methods (create, delete, list, move, tree, batch, download)
 │   │           └── sync.rs         # HFBucket::sync() — plan computation and execution
-│   ├── src/bin/hfrs/commands/buckets/  # CLI bucket subcommands
-│   │   ├── mod.rs
-│   │   ├── create.rs
-│   │   ├── list.rs
-│   │   ├── info.rs
-│   │   ├── delete.rs
-│   │   ├── remove.rs
-│   │   ├── move_bucket.rs
-│   │   ├── cp.rs
-│   │   └── sync.rs
 │   └── tests/
 │       └── integration_test.rs     # Integration tests against live Hub API
+├── examples/                       # Example programs crate (package: examples)
+│   ├── Cargo.toml                  # Crate manifest; each example declared with explicit path
+│   └── *.rs                        # Flat example source files (repo, files, commits, buckets, blocking_*, ...)
+└── hfrs/                           # CLI crate (package: hfrs)
+    ├── Cargo.toml                  # Crate manifest, binary dependencies
+    ├── src/
+    │   ├── main.rs                 # Binary entry point
+    │   ├── cli.rs                  # Clap definitions, Command enum, OutputFormat
+    │   ├── output.rs               # JSON/table rendering for command results
+    │   ├── progress.rs             # CliProgressHandler for upload/download progress
+    │   ├── util/                   # Token management helpers
+    │   └── commands/               # Subcommand implementations (auth, buckets, cache,
+    │                               #   datasets, download, env, models, repos, spaces,
+    │                               #   upload, version)
+    └── tests/
+        ├── cli_comparison.rs       # CLI behavioral parity tests
+        └── helpers.rs              # Test harness for invoking hfrs binary
 ```
 
 ## Feature Development
@@ -136,7 +143,7 @@ Before writing any code:
 
 When changing public interfaces or adding user-facing capabilities:
 
-- ALWAYS update the relevant examples in `hf-hub/examples/` and any affected README snippets so they match the current public API.
+- ALWAYS update the relevant examples in `examples/` and any affected README snippets so they match the current public API.
 - ALWAYS add at least one example for new functionality unless an existing example already demonstrates that exact workflow clearly.
 - Prefer examples that show the intended high-level interface, not just the lowest-level parameter structs, especially for new ergonomic APIs like repo handles.
 

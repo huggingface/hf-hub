@@ -1,13 +1,10 @@
-#![cfg(feature = "buckets")]
-
 //! Integration tests for bucket sync operations.
 //!
 //! Requires:
 //!   - HF_TOKEN environment variable
 //!   - HF_TEST_WRITE=1 (creates and deletes buckets)
-//!   - Compiled with --features xet
 //!
-//! Run: HF_TOKEN=hf_xxx HF_TEST_WRITE=1 cargo test -p hf-hub --features xet --test bucket_sync_test --
+//! Run: HF_TOKEN=hf_xxx HF_TEST_WRITE=1 cargo test -p hf-hub --test bucket_sync_test --
 //! --nocapture
 
 use std::sync::atomic::{AtomicU32, Ordering};

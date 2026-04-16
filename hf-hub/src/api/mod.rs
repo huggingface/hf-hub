@@ -1,4 +1,3 @@
-#[cfg(feature = "buckets")]
 pub mod buckets;
 pub mod commits;
 pub mod files;

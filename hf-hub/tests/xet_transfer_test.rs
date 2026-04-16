@@ -1,5 +1,3 @@
-#![cfg(feature = "xet")]
-
 //! Integration tests for xet-based file transfers.
 //!
 //! Tests uploading large/binary files that require xet storage, and
@@ -8,9 +6,8 @@
 //! Requires:
 //!   - HF_TOKEN environment variable
 //!   - HF_TEST_WRITE=1 (creates and deletes repos)
-//!   - Compiled with --features xet
 //!
-//! Run: source ~/hf/prod_token && HF_TEST_WRITE=1 cargo test -p hf-hub --features xet --test xet_transfer_test
+//! Run: source ~/hf/prod_token && HF_TEST_WRITE=1 cargo test -p hf-hub --test xet_transfer_test
 //! -- --nocapture
 //!
 //! These tests are slow (uploading large files) and create real repositories.

@@ -741,6 +741,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "examples"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "hf-hub",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1043,15 +1054,11 @@ dependencies = [
  "async-trait",
  "base64",
  "bytes",
- "clap",
- "comfy-table",
  "fs4",
  "futures",
  "globset",
  "hf-xet",
- "indicatif",
  "libc",
- "owo-colors",
  "pathdiff",
  "rand 0.9.2",
  "reqwest",
@@ -1066,7 +1073,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-subscriber",
  "typed-builder",
  "url",
 ]
@@ -1100,6 +1106,28 @@ dependencies = [
  "xet-core-structures",
  "xet-data",
  "xet-runtime",
+]
+
+[[package]]
+name = "hfrs"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "comfy-table",
+ "futures",
+ "globset",
+ "hf-hub",
+ "indicatif",
+ "libc",
+ "owo-colors",
+ "rand 0.9.2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

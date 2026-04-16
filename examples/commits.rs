@@ -1,7 +1,7 @@
 //! Commit operations: listing commits, refs, diffs, and branch/tag management.
 //!
 //! Requires HF_TOKEN environment variable.
-//! Run: cargo run -p hf-hub --example commits
+//! Run: cargo run -p examples --example commits
 
 use futures::StreamExt;
 use hf_hub::{

@@ -4,7 +4,7 @@
 //! paginated endpoints — all without an async runtime.
 //!
 //! Requires HF_TOKEN environment variable.
-//! Run: cargo run -p hf-hub --features blocking --example blocking_read
+//! Run: cargo run -p examples --features blocking --example blocking_read
 
 use hf_hub::{
     HFClientSync, ListDatasetsParams, ListModelsParams, RepoDownloadFileParams, RepoGetPathsInfoParams, RepoInfo,

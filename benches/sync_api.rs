@@ -189,6 +189,6 @@ fn bench_info(c: &mut Criterion) {
 
 criterion_group!(download, bench_download_small_file, bench_download_with_revision);
 criterion_group!(cache, bench_get_warm_cache, bench_cache_repo_get);
-criterion_group!(api, bench_info, bench_metadata);
+criterion_group!(api, bench_info); // TODO: re-enable bench_metadata
 
 criterion_main!(download, cache, api);

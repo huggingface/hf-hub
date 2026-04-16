@@ -1,7 +1,7 @@
 //! Space operations: runtime info, secrets, variables, and lifecycle management.
 //!
 //! Requires HF_TOKEN and the "spaces" feature.
-//! Run: cargo run -p hf-hub --features spaces --example spaces
+//! Run: cargo run -p examples --example spaces
 
 use hf_hub::{
     CreateRepoParams, DeleteRepoParams, HFClient, RepoType, SpaceSecretDeleteParams, SpaceSecretParams,

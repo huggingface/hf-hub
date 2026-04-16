@@ -3,7 +3,7 @@
 //! Demonstrates implementing the `ProgressHandler` trait to receive
 //! real-time progress callbacks during file transfers.
 //!
-//! Run: cargo run -p hf-hub --example progress
+//! Run: cargo run -p examples --example progress
 
 use std::sync::Arc;
 
@@ -26,11 +26,7 @@ impl ProgressHandler for PrintProgressHandler {
                 },
                 DownloadEvent::Progress { files } => {
                     for f in files {
-                        let pct = if f.total_bytes > 0 {
-                            f.bytes_completed * 100 / f.total_bytes
-                        } else {
-                            0
-                        };
+                        let pct = (f.bytes_completed * 100).checked_div(f.total_bytes).unwrap_or(0);
                         let status = match f.status {
                             FileStatus::Started => "started",
                             FileStatus::InProgress => "downloading",
@@ -86,11 +82,7 @@ impl ProgressHandler for PrintProgressHandler {
                             FileStatus::InProgress => "uploading",
                             FileStatus::Complete => "complete",
                         };
-                        let pct = if f.total_bytes > 0 {
-                            f.bytes_completed * 100 / f.total_bytes
-                        } else {
-                            0
-                        };
+                        let pct = (f.bytes_completed * 100).checked_div(f.total_bytes).unwrap_or(0);
                         println!("    {}: {pct}% ({}/{}) [{status}]", f.filename, f.bytes_completed, f.total_bytes);
                     }
                 },

@@ -203,9 +203,6 @@ fn format_hf_error(err: &HFError) -> String {
                 },
             }
         },
-        HFError::XetNotEnabled => {
-            "Xet transfer protocol required but not enabled. Rebuild with the 'xet' feature.".to_string()
-        },
         HFError::LocalEntryNotFound { path } => {
             format!("File not found in local cache: {path}. Try downloading it first.")
         },

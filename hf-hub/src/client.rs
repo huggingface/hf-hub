@@ -7,7 +7,7 @@ use reqwest_retry::policies::ExponentialBackoff;
 use tracing::debug;
 
 use crate::constants;
-use crate::error::{HFError, Result};
+use crate::error::{HFError, NotFoundContext, Result};
 
 /// Async client for the Hugging Face Hub API.
 ///
@@ -45,13 +45,12 @@ pub(crate) struct HFClientInner {
     pub(crate) token: Option<String>,
     pub(crate) cache_dir: std::path::PathBuf,
     pub(crate) cache_enabled: bool,
-    #[cfg(feature = "xet")]
     pub(crate) xet_state: std::sync::Mutex<crate::xet::XetState>,
 }
 
 /// Builder for [`HFClient`].
 ///
-/// Obtain one via [`HFClient::builder()`] or [`HFClientBuilder::new()`].
+/// Get one via [`HFClient::builder()`] or [`HFClientBuilder::new()`].
 /// Call [`build()`](HFClientBuilder::build) when all options are set.
 pub struct HFClientBuilder {
     endpoint: Option<String>,
@@ -129,7 +128,7 @@ impl HFClientBuilder {
     /// # Errors
     ///
     /// Returns an error if the endpoint URL is not a valid URL or if the `reqwest` client
-    /// cannot be constructed (e.g. an invalid `User-Agent` string was provided).
+    /// cannot be constructed (e.g., an invalid `User-Agent` string was provided).
     pub fn build(self) -> Result<HFClient> {
         let endpoint = self
             .endpoint
@@ -184,7 +183,6 @@ impl HFClientBuilder {
                 token,
                 cache_dir,
                 cache_enabled: self.cache_enabled.unwrap_or(true),
-                #[cfg(feature = "xet")]
                 xet_state: std::sync::Mutex::new(crate::xet::XetState::default()),
             }),
         })
@@ -263,13 +261,11 @@ impl HFClient {
     }
 
     /// Create an [`HFBucket`](crate::bucket::HFBucket) handle for a bucket.
-    #[cfg(feature = "buckets")]
     pub fn bucket(&self, owner: impl Into<String>, name: impl Into<String>) -> crate::bucket::HFBucket {
         crate::bucket::HFBucket::new(self.clone(), owner, name)
     }
 
     /// Build a bucket API URL: `{endpoint}/api/buckets/{bucket_id}`
-    #[cfg(feature = "buckets")]
     pub(crate) fn bucket_api_url(&self, bucket_id: &str) -> String {
         format!("{}/api/buckets/{}", self.endpoint(), bucket_id)
     }
@@ -286,7 +282,7 @@ impl HFClient {
         &self,
         response: reqwest::Response,
         repo_id: Option<&str>,
-        not_found_ctx: crate::error::NotFoundContext,
+        not_found_ctx: NotFoundContext,
     ) -> Result<reqwest::Response> {
         let status = response.status();
         if status.is_success() {
@@ -301,18 +297,17 @@ impl HFClient {
             401 => Err(HFError::AuthRequired),
             403 => Err(HFError::Forbidden),
             404 => match not_found_ctx {
-                crate::error::NotFoundContext::Repo => Err(HFError::RepoNotFound { repo_id: repo_id_str }),
-                #[cfg(feature = "buckets")]
-                crate::error::NotFoundContext::Bucket => Err(HFError::BucketNotFound { bucket_id: repo_id_str }),
-                crate::error::NotFoundContext::Entry { path } => Err(HFError::EntryNotFound {
+                NotFoundContext::Repo => Err(HFError::RepoNotFound { repo_id: repo_id_str }),
+                NotFoundContext::Bucket => Err(HFError::BucketNotFound { bucket_id: repo_id_str }),
+                NotFoundContext::Entry { path } => Err(HFError::EntryNotFound {
                     path,
                     repo_id: repo_id_str,
                 }),
-                crate::error::NotFoundContext::Revision { revision } => Err(HFError::RevisionNotFound {
+                NotFoundContext::Revision { revision } => Err(HFError::RevisionNotFound {
                     revision,
                     repo_id: repo_id_str,
                 }),
-                crate::error::NotFoundContext::Generic => Err(HFError::Http { status, url, body }),
+                NotFoundContext::Generic => Err(HFError::Http { status, url, body }),
             },
             409 => Err(HFError::Conflict(body)),
             429 => Err(HFError::RateLimited),
@@ -321,7 +316,6 @@ impl HFClient {
     }
 }
 
-#[cfg(feature = "xet")]
 impl HFClient {
     /// Get or lazily create the cached XetSession.
     ///
@@ -423,7 +417,6 @@ mod tests {
         assert!(path_str.contains("huggingface") && path_str.ends_with("hub"));
     }
 
-    #[cfg(feature = "xet")]
     #[test]
     fn test_xet_session_lazy_creation() {
         let client = HFClientBuilder::new().build().unwrap();
@@ -432,7 +425,6 @@ mod tests {
         assert!(client.inner.xet_state.lock().unwrap().session.is_some());
     }
 
-    #[cfg(feature = "xet")]
     #[test]
     fn test_xet_session_shared_across_clones() {
         let client = HFClientBuilder::new().build().unwrap();
@@ -441,7 +433,6 @@ mod tests {
         assert!(clone.inner.xet_state.lock().unwrap().session.is_some());
     }
 
-    #[cfg(feature = "xet")]
     #[test]
     fn test_xet_session_recovers_after_abort() {
         let client = HFClientBuilder::new().build().unwrap();
@@ -458,7 +449,6 @@ mod tests {
         assert!(recovered.new_file_download_group().is_ok());
     }
 
-    #[cfg(feature = "xet")]
     #[test]
     fn test_xet_session_recovers_after_sigint_abort() {
         let client = HFClientBuilder::new().build().unwrap();
@@ -476,7 +466,6 @@ mod tests {
     /// 1. Get session + generation, factory call fails
     /// 2. Call replace_xet_session(generation) to drop the bad session
     /// 3. Get fresh session, factory call succeeds
-    #[cfg(feature = "xet")]
     #[test]
     fn test_replace_and_retry_after_abort() {
         let client = HFClientBuilder::new().build().unwrap();
@@ -502,7 +491,6 @@ mod tests {
     }
 
     /// Verifies that replace_xet_session with a stale generation is a no-op.
-    #[cfg(feature = "xet")]
     #[test]
     fn test_replace_with_stale_generation_is_noop() {
         let client = HFClientBuilder::new().build().unwrap();
@@ -526,7 +514,6 @@ mod tests {
         assert!(still_fresh.new_file_download_group().is_ok());
     }
 
-    #[cfg(feature = "xet")]
     #[test]
     fn test_xet_session_reuse_without_replacement() {
         let client = HFClientBuilder::new().build().unwrap();

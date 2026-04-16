@@ -1,7 +1,7 @@
 //! Diff streaming: fetch and parse raw diffs as a stream of typed entries.
 //!
 //! Requires HF_TOKEN environment variable.
-//! Run: cargo run -p hf-hub --example diff
+//! Run: cargo run -p examples --example diff
 
 use futures::StreamExt;
 use hf_hub::{HFClient, RepoGetRawDiffParams};

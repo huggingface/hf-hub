@@ -1,8 +1,4 @@
 //! Xet high-performance transfer support.
-//!
-//! This module is only compiled when the "xet" feature is enabled.
-//! When xet headers are detected during download/upload but the feature
-//! is not enabled, HFError::XetNotEnabled is returned at the call site.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -649,7 +645,6 @@ impl HFRepository {
     }
 }
 
-#[cfg(feature = "buckets")]
 impl crate::bucket::HFBucket {
     pub(crate) async fn xet_upload(
         &self,

@@ -1,5 +1,5 @@
 [workspace]
-members = ["hf-hub", "benches"]
+members = ["hf-hub", "hfrs", "benches", "examples"]
 resolver = "2"
 
 [profile.test]

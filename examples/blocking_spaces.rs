@@ -3,7 +3,7 @@
 //! Demonstrates runtime info, secrets, variables, and lifecycle management.
 //!
 //! Requires HF_TOKEN and the "blocking" + "spaces" features.
-//! Run: cargo run -p hf-hub --features "blocking spaces" --example blocking_spaces
+//! Run: cargo run -p examples --features blocking --example blocking_spaces
 
 use hf_hub::{
     CreateRepoParams, DeleteRepoParams, HFClientSync, RepoType, SpaceSecretDeleteParams, SpaceSecretParams,

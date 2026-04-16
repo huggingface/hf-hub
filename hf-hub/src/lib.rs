@@ -21,7 +21,6 @@ mod macros;
 pub mod api;
 #[cfg(feature = "blocking")]
 pub mod blocking;
-#[cfg(feature = "buckets")]
 pub mod bucket;
 pub mod cache;
 pub mod client;
@@ -31,19 +30,16 @@ pub mod error;
 pub mod pagination;
 pub mod repository;
 pub mod types;
-#[cfg(feature = "xet")]
-pub mod xet;
+mod xet;
 
 pub mod test_utils;
 
-#[cfg(all(feature = "blocking", feature = "buckets"))]
+#[cfg(feature = "blocking")]
 pub use blocking::HFBucketSync;
 #[cfg(feature = "blocking")]
 pub use blocking::{HFClientSync, HFRepoSync, HFRepositorySync, HFSpaceSync};
-#[cfg(feature = "buckets")]
 pub use bucket::*;
 pub use client::{HFClient, HFClientBuilder};
-#[cfg(feature = "cli")]
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, Result};

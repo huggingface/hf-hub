@@ -8,8 +8,8 @@ use crate::client::HFClient;
 use crate::error::{HFError, NotFoundContext, Result};
 use crate::types::progress::{self, DownloadEvent, Progress, ProgressEvent, UploadEvent};
 use crate::types::{
-    BatchBucketFilesParams, BucketFileMetadata, BucketInfo, BucketSyncParams, BucketTreeEntry, BucketUrl,
-    CreateBucketParams, ListBucketTreeParams, SyncPlan,
+    BatchBucketFilesParams, BucketFileMetadata, BucketInfo, BucketTreeEntry, BucketUrl, CreateBucketParams,
+    ListBucketTreeParams,
 };
 
 const BUCKET_BATCH_CHUNK_SIZE: usize = 1000;
@@ -295,7 +295,6 @@ impl HFBucket {
     /// Upload local files to the bucket.
     ///
     /// Uploads file contents to xet, then registers them via the batch endpoint.
-    #[cfg(feature = "xet")]
     pub async fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Progress) -> Result<()> {
         if files.is_empty() {
             return Ok(());
@@ -353,16 +352,9 @@ impl HFBucket {
         Ok(())
     }
 
-    /// Upload local files to the bucket (stub when xet feature is disabled).
-    #[cfg(not(feature = "xet"))]
-    pub async fn upload_files(&self, _files: &[(std::path::PathBuf, String)], _progress: &Progress) -> Result<()> {
-        Err(HFError::XetNotEnabled)
-    }
-
     /// Download files from the bucket to local paths.
     ///
     /// Resolves xet hashes via `get_paths_info`, then downloads via xet.
-    #[cfg(feature = "xet")]
     pub async fn download_files(
         &self,
         params: &crate::types::BucketDownloadFilesParams,
@@ -425,16 +417,6 @@ impl HFBucket {
         progress::emit(progress, ProgressEvent::Download(DownloadEvent::Complete));
         Ok(())
     }
-
-    /// Download files from the bucket (stub when xet feature is disabled).
-    #[cfg(not(feature = "xet"))]
-    pub async fn download_files(
-        &self,
-        _params: &crate::types::BucketDownloadFilesParams,
-        _progress: &Progress,
-    ) -> Result<()> {
-        Err(HFError::XetNotEnabled)
-    }
 }
 
 sync_api! {
@@ -460,7 +442,6 @@ sync_api! {
         fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Progress) -> Result<()>;
         fn download_files(&self, params: &crate::types::BucketDownloadFilesParams, progress: &Progress) -> Result<()>;
         fn delete_files(&self, paths: &[String]) -> Result<()>;
-        fn sync(&self, params: &BucketSyncParams) -> Result<SyncPlan>;
     }
 }
 

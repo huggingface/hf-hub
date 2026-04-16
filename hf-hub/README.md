@@ -14,8 +14,8 @@ Async Rust client for the [Hugging Face Hub API](https://huggingface.co/docs/hub
 - **Branch and tag management** — create and delete branches and tags, list refs
 - **User and organization info** — whoami, user profiles, organization details, followers
 - **Streaming pagination** — list endpoints return `impl Stream<Item = Result<T>>` for lazy, memory-efficient iteration
-- **Bucket operations** — create, delete, list, and move buckets; upload, download, and delete files within buckets (upload/download require the `xet` feature)
-- **Xet high-performance transfers** — optional support for Hugging Face's Xet storage backend (behind the `xet` feature flag)
+- **Bucket operations** — create, delete, list, and move buckets; upload, download, and delete files within buckets
+- **Xet high-performance transfers** — support for Hugging Face's Xet storage backend
 
 ## Installation
 
@@ -27,19 +27,12 @@ hf-hub = { git = "https://github.com/huggingface/hf-hub.git" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-To enable Xet high-performance transfers:
-
-```toml
-[dependencies]
-hf-hub = { git = "https://github.com/huggingface/hf-hub.git", features = ["xet"] }
-```
-
 ## CLI Installation
 
 The `hfrs` command-line tool provides a terminal interface to the Hub. Install it with:
 
 ```sh
-cargo install --git https://github.com/huggingface/hf-hub.git --features cli hf-hub
+cargo install --git https://github.com/huggingface/hf-hub.git hfrs
 ```
 
 This builds in release mode by default. Once installed, run `hfrs --help` to see available commands.
@@ -223,7 +216,6 @@ All fallible operations return `Result<T, HFError>`. The `HFError` enum provides
 - `HFError::Forbidden` — 403 response, insufficient permissions
 - `HFError::Conflict` — 409 response, resource already exists or conflicts
 - `HFError::RateLimited` — 429 response, too many requests
-- `HFError::XetNotEnabled` — xet transfer required but `xet` feature is not enabled
 - `HFError::Http` — other HTTP errors with status code, URL, and response body
 
 ## License

@@ -8,7 +8,7 @@
 //! - Uploading a file from a local path
 //!
 //! Read operations require no auth. Write operations require HF_TOKEN.
-//! Run: cargo run -p hf-hub --example download_upload
+//! Run: cargo run -p examples --example download_upload
 
 use futures::StreamExt;
 use hf_hub::types::AddSource;

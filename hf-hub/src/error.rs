@@ -21,7 +21,6 @@ pub enum HFError {
     #[error("Entry not found: {path} in {repo_id}")]
     EntryNotFound { path: String, repo_id: String },
 
-    #[cfg(feature = "buckets")]
     #[error("Bucket not found: {bucket_id}")]
     BucketNotFound { bucket_id: String },
 
@@ -30,9 +29,6 @@ pub enum HFError {
         expected: crate::types::RepoType,
         actual: crate::types::RepoType,
     },
-
-    #[error("Xet feature required but not enabled")]
-    XetNotEnabled,
 
     #[error("Forbidden")]
     Forbidden,
@@ -110,7 +106,6 @@ pub(crate) enum NotFoundContext {
     /// 404 means the repository does not exist
     Repo,
     /// 404 means the bucket does not exist
-    #[cfg(feature = "buckets")]
     Bucket,
     /// 404 means a file/path does not exist within the repo
     Entry { path: String },

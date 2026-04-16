@@ -606,7 +606,6 @@ impl HFBucket {
         Ok(())
     }
 
-    #[cfg(feature = "xet")]
     pub async fn sync(&self, params: &BucketSyncParams) -> Result<SyncPlan> {
         validate_params(params)?;
 
@@ -642,10 +641,11 @@ impl HFBucket {
             },
         }
     }
+}
 
-    #[cfg(not(feature = "xet"))]
-    pub async fn sync(&self, _params: &BucketSyncParams) -> Result<SyncPlan> {
-        Err(HFError::XetNotEnabled)
+sync_api! {
+    impl HFBucket -> HFBucketSync {
+        fn sync(&self, params: &BucketSyncParams) -> Result<SyncPlan>;
     }
 }
 
