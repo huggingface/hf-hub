@@ -57,33 +57,13 @@ fn build_client(token: &str, endpoint: &str) -> HFClient {
         .expect("Failed to create HFClient")
 }
 
-fn test_org() -> &'static str {
-    "huggingface"
-}
-
-fn test_user() -> &'static str {
-    "julien-c"
-}
-
-fn test_model_author() -> &'static str {
-    "openai-community"
-}
-
-fn test_model_repo() -> &'static str {
-    "hf-internal-testing/tiny-gemma3"
-}
-
-fn test_space_repo() -> (&'static str, &'static str) {
-    ("huggingface-projects", "diffusers-gallery")
-}
-
-fn test_space_info_repo() -> &'static str {
-    "HuggingFaceFW/blogpost-fineweb-v1"
-}
-
-fn test_dataset_repo() -> &'static str {
-    "hf-internal-testing/cats_vs_dogs_sample"
-}
+const TEST_ORG: &str = "huggingface";
+const TEST_USER: &str = "julien-c";
+const TEST_MODEL_AUTHOR: &str = "openai-community";
+const TEST_MODEL_REPO: &str = "hf-internal-testing/tiny-gemma3";
+const TEST_SPACE_REPO: (&str, &str) = ("huggingface-projects", "diffusers-gallery");
+const TEST_SPACE_INFO_REPO: &str = "HuggingFaceFW/blogpost-fineweb-v1";
+const TEST_DATASET_REPO: &str = "hf-internal-testing/cats_vs_dogs_sample";
 
 /// Cached whoami username, fetched once and reused across write tests.
 async fn cached_username() -> &'static str {
@@ -120,7 +100,7 @@ fn repo_typed(api: &HFClient, repo_id: &str, repo_type: RepoType) -> HFRepositor
 #[tokio::test]
 async fn test_model_info() {
     let Some(api) = prod_api() else { return };
-    let model_repo = test_model_repo();
+    let model_repo = TEST_MODEL_REPO;
     let info = repo(&api, model_repo).info(&RepoInfoParams::default()).await.unwrap();
     match info {
         RepoInfo::Model(model) => assert!(model.id.contains("tiny-gemma3")),
@@ -131,7 +111,7 @@ async fn test_model_info() {
 #[tokio::test]
 async fn test_repo_handle_info_and_file_exists() {
     let Some(api) = prod_api() else { return };
-    let model_repo = test_model_repo();
+    let model_repo = TEST_MODEL_REPO;
     let repo = repo(&api, model_repo);
 
     let info = repo.info(&RepoInfoParams::default()).await.unwrap();
@@ -150,7 +130,7 @@ async fn test_repo_handle_info_and_file_exists() {
 #[tokio::test]
 async fn test_dataset_info() {
     let Some(api) = prod_api() else { return };
-    let dataset_repo = test_dataset_repo();
+    let dataset_repo = TEST_DATASET_REPO;
     let info = repo_typed(&api, dataset_repo, RepoType::Dataset)
         .info(&RepoInfoParams::default())
         .await
@@ -164,14 +144,14 @@ async fn test_dataset_info() {
 #[tokio::test]
 async fn test_repo_exists() {
     let Some(api) = prod_api() else { return };
-    assert!(repo(&api, test_model_repo()).exists().await.unwrap());
+    assert!(repo(&api, TEST_MODEL_REPO).exists().await.unwrap());
     assert!(!repo(&api, "this-repo-definitely-does-not-exist-12345").exists().await.unwrap());
 }
 
 #[tokio::test]
 async fn test_file_exists() {
     let Some(api) = prod_api() else { return };
-    let model_repo = test_model_repo();
+    let model_repo = TEST_MODEL_REPO;
     assert!(
         repo(&api, model_repo)
             .file_exists(&RepoFileExistsParams::builder().filename("config.json").build())
@@ -190,7 +170,7 @@ async fn test_file_exists() {
 #[tokio::test]
 async fn test_list_models() {
     let Some(api) = prod_api() else { return };
-    let author = test_model_author();
+    let author = TEST_MODEL_AUTHOR;
     let params = ListModelsParams::builder().author(author).limit(3_usize).build();
     let stream = api.list_models(&params).unwrap();
     futures::pin_mut!(stream);
@@ -207,7 +187,7 @@ async fn test_list_models() {
 #[tokio::test]
 async fn test_list_repo_files() {
     let Some(api) = prod_api() else { return };
-    let files = repo(&api, test_model_repo())
+    let files = repo(&api, TEST_MODEL_REPO)
         .list_files(&RepoListFilesParams::default())
         .await
         .unwrap();
@@ -218,7 +198,7 @@ async fn test_list_repo_files() {
 #[tokio::test]
 async fn test_list_repo_tree() {
     let Some(api) = prod_api() else { return };
-    let r = repo(&api, test_model_repo());
+    let r = repo(&api, TEST_MODEL_REPO);
     let stream = r.list_tree(&RepoListTreeParams::default()).unwrap();
     futures::pin_mut!(stream);
 
@@ -238,7 +218,7 @@ async fn test_list_repo_tree() {
 #[tokio::test]
 async fn test_list_repo_commits() {
     let Some(api) = prod_api() else { return };
-    let r = repo(&api, test_model_repo());
+    let r = repo(&api, TEST_MODEL_REPO);
     let stream = r.list_commits(&RepoListCommitsParams::default()).unwrap();
     futures::pin_mut!(stream);
 
@@ -250,7 +230,7 @@ async fn test_list_repo_commits() {
 #[tokio::test]
 async fn test_list_repo_refs() {
     let Some(api) = prod_api() else { return };
-    let refs = repo(&api, test_model_repo())
+    let refs = repo(&api, TEST_MODEL_REPO)
         .list_refs(&RepoListRefsParams::default())
         .await
         .unwrap();
@@ -262,7 +242,7 @@ async fn test_list_repo_refs() {
 #[tokio::test]
 async fn test_revision_exists() {
     let Some(api) = prod_api() else { return };
-    let model_repo = test_model_repo();
+    let model_repo = TEST_MODEL_REPO;
     assert!(
         repo(&api, model_repo)
             .revision_exists(&RepoRevisionExistsParams::builder().revision("main").build())
@@ -282,7 +262,7 @@ async fn test_revision_exists() {
 async fn test_download_file() {
     let Some(api) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
-    let path = repo(&api, test_model_repo())
+    let path = repo(&api, TEST_MODEL_REPO)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -315,7 +295,7 @@ async fn test_auth_check() {
 #[tokio::test]
 async fn test_get_user_overview() {
     let Some(api) = prod_api() else { return };
-    let username = test_user();
+    let username = TEST_USER;
     let user = api.get_user_overview(username).await.unwrap();
     assert_eq!(user.username, username);
 }
@@ -323,7 +303,7 @@ async fn test_get_user_overview() {
 #[tokio::test]
 async fn test_get_organization_overview() {
     let Some(api) = prod_api() else { return };
-    let org_name = test_org();
+    let org_name = TEST_ORG;
     let org = api.get_organization_overview(org_name).await.unwrap();
     assert_eq!(org.name, org_name);
 }
@@ -331,7 +311,7 @@ async fn test_get_organization_overview() {
 #[tokio::test]
 async fn test_list_user_followers() {
     let Some(api) = prod_api() else { return };
-    let stream = api.list_user_followers(test_user(), None).unwrap();
+    let stream = api.list_user_followers(TEST_USER, None).unwrap();
     futures::pin_mut!(stream);
     let first = stream.next().await;
     assert!(first.is_some());
@@ -341,7 +321,7 @@ async fn test_list_user_followers() {
 #[tokio::test]
 async fn test_list_user_following() {
     let Some(api) = prod_api() else { return };
-    let stream = api.list_user_following(test_user(), None).unwrap();
+    let stream = api.list_user_following(TEST_USER, None).unwrap();
     futures::pin_mut!(stream);
     let first = stream.next().await;
     assert!(first.is_some());
@@ -351,7 +331,7 @@ async fn test_list_user_following() {
 #[tokio::test]
 async fn test_list_organization_members() {
     let Some(api) = prod_api() else { return };
-    let stream = api.list_organization_members(test_org(), None).unwrap();
+    let stream = api.list_organization_members(TEST_ORG, None).unwrap();
     futures::pin_mut!(stream);
     let first = stream.next().await;
     assert!(first.is_some());
@@ -363,7 +343,7 @@ async fn test_list_organization_members() {
 #[tokio::test]
 async fn test_space_info() {
     let Some(api) = prod_api() else { return };
-    let space_repo = test_space_info_repo();
+    let space_repo = TEST_SPACE_INFO_REPO;
     let info = repo_typed(&api, space_repo, RepoType::Space)
         .info(&RepoInfoParams::default())
         .await
@@ -377,7 +357,7 @@ async fn test_space_info() {
 #[tokio::test]
 async fn test_list_datasets() {
     let Some(api) = prod_api() else { return };
-    let params = ListDatasetsParams::builder().author(test_org()).limit(3_usize).build();
+    let params = ListDatasetsParams::builder().author(TEST_ORG).limit(3_usize).build();
     let stream = api.list_datasets(&params).unwrap();
     futures::pin_mut!(stream);
 
@@ -392,7 +372,7 @@ async fn test_list_datasets() {
 #[tokio::test]
 async fn test_list_spaces() {
     let Some(api) = prod_api() else { return };
-    let params = ListSpacesParams::builder().author(test_org()).limit(3_usize).build();
+    let params = ListSpacesParams::builder().author(TEST_ORG).limit(3_usize).build();
     let stream = api.list_spaces(&params).unwrap();
     futures::pin_mut!(stream);
 
@@ -409,7 +389,7 @@ async fn test_list_spaces() {
 #[tokio::test]
 async fn test_get_paths_info() {
     let Some(api) = prod_api() else { return };
-    let entries = repo(&api, test_model_repo())
+    let entries = repo(&api, TEST_MODEL_REPO)
         .get_paths_info(
             &RepoGetPathsInfoParams::builder()
                 .paths(vec!["config.json".to_string(), "README.md".to_string()])
@@ -429,13 +409,77 @@ async fn test_get_paths_info() {
     assert!(paths.contains(&"README.md".to_string()));
 }
 
+#[tokio::test]
+async fn test_get_file_metadata() {
+    let Some(api) = prod_api() else { return };
+    let meta = repo(&api, TEST_MODEL_REPO)
+        .get_file_metadata(&RepoGetFileMetadataParams::builder().filepath("config.json").build())
+        .await
+        .unwrap();
+    assert_eq!(meta.filename, "config.json");
+    assert!(!meta.etag.is_empty());
+    assert!(!meta.commit_hash.is_empty());
+    assert!(meta.file_size > 0);
+}
+
+#[tokio::test]
+async fn test_get_file_metadata_with_revision() {
+    let Some(api) = prod_api() else { return };
+    let model = repo(&api, TEST_MODEL_REPO);
+    let meta_default = model
+        .get_file_metadata(&RepoGetFileMetadataParams::builder().filepath("config.json").build())
+        .await
+        .unwrap();
+    let meta_main = model
+        .get_file_metadata(
+            &RepoGetFileMetadataParams::builder()
+                .filepath("config.json")
+                .revision("main")
+                .build(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_default.commit_hash, meta_main.commit_hash);
+    assert_eq!(meta_default.etag, meta_main.etag);
+
+    let pinned = model
+        .get_file_metadata(
+            &RepoGetFileMetadataParams::builder()
+                .filepath("config.json")
+                .revision(meta_main.commit_hash.clone())
+                .build(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pinned.commit_hash, meta_main.commit_hash);
+}
+
+#[tokio::test]
+async fn test_get_file_metadata_missing() {
+    let Some(api) = prod_api() else { return };
+    let err = repo(&api, TEST_MODEL_REPO)
+        .get_file_metadata(
+            &RepoGetFileMetadataParams::builder()
+                .filepath("this-file-does-not-exist.bin")
+                .build(),
+        )
+        .await
+        .unwrap_err();
+    match err {
+        hf_hub::HFError::EntryNotFound { path, .. } => {
+            assert_eq!(path, "this-file-does-not-exist.bin");
+        },
+        other => panic!("expected EntryNotFound, got {other:?}"),
+    }
+}
+
 // --- Commit and diff tests ---
 
 #[tokio::test]
 async fn test_get_commit_diff() {
     let Some(api) = prod_api() else { return };
 
-    let gpt2 = repo(&api, test_model_repo());
+    let gpt2 = repo(&api, TEST_MODEL_REPO);
     let stream = gpt2.list_commits(&RepoListCommitsParams::default()).unwrap();
     futures::pin_mut!(stream);
 
@@ -457,7 +501,7 @@ async fn test_get_commit_diff() {
 async fn test_get_raw_diff() {
     let Some(api) = prod_api() else { return };
 
-    let gpt2 = repo(&api, test_model_repo());
+    let gpt2 = repo(&api, TEST_MODEL_REPO);
     let stream = gpt2.list_commits(&RepoListCommitsParams::default()).unwrap();
     futures::pin_mut!(stream);
 
@@ -823,7 +867,7 @@ async fn test_move_repo() {
 #[tokio::test]
 async fn test_get_space_runtime() {
     let Some(api) = prod_api() else { return };
-    let (owner, name) = test_space_repo();
+    let (owner, name) = TEST_SPACE_REPO;
     let space = api.space(owner, name);
     let runtime = space.runtime().await.unwrap();
     assert!(runtime.stage.is_some());

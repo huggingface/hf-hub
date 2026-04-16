@@ -5,3 +5,4 @@ target
 .claude
 .worktrees
 .DS_Store
+runslow

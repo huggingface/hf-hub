@@ -7,8 +7,8 @@ use futures::StreamExt;
 use hf_hub::types::{AddSource, CommitOperation, RepoTreeEntry};
 use hf_hub::{
     CreateRepoParams, DeleteRepoParams, HFClient, RepoCreateCommitParams, RepoDeleteFileParams, RepoDeleteFolderParams,
-    RepoDownloadFileParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams, RepoUploadFileParams,
-    RepoUploadFolderParams,
+    RepoDownloadFileParams, RepoGetFileMetadataParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams,
+    RepoUploadFileParams, RepoUploadFolderParams,
 };
 #[tokio::main]
 async fn main() -> hf_hub::Result<()> {
@@ -49,6 +49,14 @@ async fn main() -> hf_hub::Result<()> {
     for entry in &paths_info {
         println!("  {entry:?}");
     }
+
+    let metadata = model
+        .get_file_metadata(&RepoGetFileMetadataParams::builder().filepath("config.json").build())
+        .await?;
+    println!(
+        "\nMetadata for gpt2/config.json: commit={}, size={}, etag={}",
+        metadata.commit_hash, metadata.file_size, metadata.etag
+    );
 
     let tmp_dir = tempfile::tempdir().expect("failed to create tempdir");
     let downloaded = model

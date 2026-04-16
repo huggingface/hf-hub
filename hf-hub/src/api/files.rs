@@ -15,10 +15,10 @@ use crate::types::progress::{
     self, DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, UploadEvent, UploadPhase,
 };
 use crate::types::{
-    AddSource, CommitInfo, CommitOperation, RepoCreateCommitParams, RepoDeleteFileParams, RepoDeleteFolderParams,
-    RepoDownloadFileParams, RepoDownloadFileStreamParams, RepoDownloadFileToBytesParams, RepoGetPathsInfoParams,
-    RepoListFilesParams, RepoListTreeParams, RepoSnapshotDownloadParams, RepoTreeEntry, RepoType, RepoUploadFileParams,
-    RepoUploadFolderParams,
+    AddSource, CommitInfo, CommitOperation, FileMetadataInfo, RepoCreateCommitParams, RepoDeleteFileParams,
+    RepoDeleteFolderParams, RepoDownloadFileParams, RepoDownloadFileStreamParams, RepoDownloadFileToBytesParams,
+    RepoGetFileMetadataParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams,
+    RepoSnapshotDownloadParams, RepoTreeEntry, RepoType, RepoUploadFileParams, RepoUploadFolderParams,
 };
 use crate::{cache, constants};
 
@@ -96,6 +96,54 @@ impl HFRepository {
             )
             .await?;
         Ok(response.json().await?)
+    }
+
+    /// Fetch metadata for a single file via a HEAD request on its resolve URL.
+    ///
+    /// Returns the resolved commit hash, ETag, file size, and (if the file is Xet-backed)
+    /// the Xet content hash — without downloading the file contents.
+    ///
+    /// Endpoint: HEAD {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filepath}
+    pub async fn get_file_metadata(&self, params: &RepoGetFileMetadataParams) -> Result<FileMetadataInfo> {
+        let filename = params.filepath.clone();
+        let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
+        let repo_path = self.repo_path();
+        let url = self
+            .hf_client
+            .download_url(Some(self.repo_type), &repo_path, revision, &filename);
+
+        let response = self
+            .hf_client
+            .http_client()
+            .head(&url)
+            .headers(self.hf_client.auth_headers())
+            .send()
+            .await?;
+        let response = self
+            .hf_client
+            .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Entry { path: filename.clone() })
+            .await?;
+
+        let etag =
+            extract_etag(&response).ok_or_else(|| HFError::Other(format!("Missing ETag header for {filename}")))?;
+        let commit_hash = extract_commit_hash(&response)
+            .ok_or_else(|| HFError::Other(format!("Missing X-Repo-Commit header for {filename}")))?;
+        let xet_hash = extract_xet_hash(&response);
+        let file_size = extract_file_size(&response).unwrap_or_else(|| {
+            tracing::warn!(
+                file = %filename,
+                "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0"
+            );
+            0
+        });
+
+        Ok(FileMetadataInfo {
+            filename,
+            etag,
+            commit_hash,
+            xet_hash,
+            file_size,
+        })
     }
 }
 
@@ -672,14 +720,6 @@ impl HFRepository {
                     }],
                 }),
             );
-        }
-
-        struct FileMetadataInfo {
-            filename: String,
-            etag: String,
-            commit_hash: String,
-            xet_hash: Option<String>,
-            file_size: u64,
         }
 
         let repo_path = self.repo_path();
@@ -1689,6 +1729,7 @@ sync_api! {
     impl HFRepository -> HFRepositorySync {
         fn list_files(&self, params: &RepoListFilesParams) -> Result<Vec<String>>;
         fn get_paths_info(&self, params: &RepoGetPathsInfoParams) -> Result<Vec<RepoTreeEntry>>;
+        fn get_file_metadata(&self, params: &RepoGetFileMetadataParams) -> Result<FileMetadataInfo>;
         fn download_file(&self, params: &RepoDownloadFileParams) -> Result<PathBuf>;
         fn download_file_to_bytes(&self, params: &RepoDownloadFileToBytesParams) -> Result<bytes::Bytes>;
         fn snapshot_download(&self, params: &RepoSnapshotDownloadParams) -> Result<PathBuf>;

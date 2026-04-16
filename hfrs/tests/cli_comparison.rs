@@ -4,29 +4,12 @@ use std::sync::OnceLock;
 
 use helpers::{CliRunner, require_cli, require_token, require_write};
 
-fn test_model_repo() -> &'static str {
-    "hf-internal-testing/tiny-gemma3"
-}
-
-fn test_dataset_repo() -> &'static str {
-    "hf-internal-testing/cats_vs_dogs_sample"
-}
-
-fn test_dataset_download_repo() -> &'static str {
-    "hf-internal-testing/cats_vs_dogs_sample"
-}
-
-fn test_model_cache_fragment() -> &'static str {
-    "hf-internal-testing--tiny-gemma3"
-}
-
-fn test_dataset_search() -> &'static str {
-    "cats_vs_dogs_sample"
-}
-
-fn test_hf_endpoint() -> &'static str {
-    "https://huggingface.co"
-}
+const TEST_MODEL_REPO: &str = "hf-internal-testing/tiny-gemma3";
+const TEST_DATASET_REPO: &str = "hf-internal-testing/cats_vs_dogs_sample";
+const TEST_DATASET_DOWNLOAD_REPO: &str = "hf-internal-testing/cats_vs_dogs_sample";
+const TEST_MODEL_CACHE_FRAGMENT: &str = "hf-internal-testing--tiny-gemma3";
+const TEST_DATASET_SEARCH: &str = "cats_vs_dogs_sample";
+const TEST_HF_ENDPOINT: &str = "https://huggingface.co";
 
 /// Cached whoami username, fetched once and reused across all tests.
 fn whoami_username() -> &'static str {
@@ -139,7 +122,7 @@ fn models_info_returns_valid_json() {
     require_token();
     let hfrs = CliRunner::hfrs();
 
-    let out = hfrs.run_json(&["models", "info", test_model_repo()]).unwrap();
+    let out = hfrs.run_json(&["models", "info", TEST_MODEL_REPO]).unwrap();
 
     assert!(out.is_object(), "models info should return an object");
     let id = out.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -155,10 +138,10 @@ fn models_list_with_search_matches_hf() {
     require_cli(&hf);
 
     let hfrs_out = hfrs
-        .run_json(&["models", "list", "--search", test_model_repo(), "--limit", "3"])
+        .run_json(&["models", "list", "--search", TEST_MODEL_REPO, "--limit", "3"])
         .unwrap();
     let hf_out = hf
-        .run_json(&["models", "list", "--search", test_model_repo(), "--limit", "3"])
+        .run_json(&["models", "list", "--search", TEST_MODEL_REPO, "--limit", "3"])
         .unwrap();
 
     assert!(hfrs_out.is_array());
@@ -205,11 +188,11 @@ fn datasets_info_returns_valid_json() {
     require_token();
     let hfrs = CliRunner::hfrs();
 
-    let out = hfrs.run_json(&["datasets", "info", test_dataset_repo()]).unwrap();
+    let out = hfrs.run_json(&["datasets", "info", TEST_DATASET_REPO]).unwrap();
 
     assert!(out.is_object(), "datasets info should return an object");
     let id = out.get("id").and_then(|v| v.as_str()).unwrap_or("");
-    let expected_dataset = test_dataset_repo();
+    let expected_dataset = TEST_DATASET_REPO;
     assert!(
         id == expected_dataset || id.ends_with(expected_dataset),
         "dataset id should contain {expected_dataset}, got: {id}"
@@ -322,7 +305,7 @@ fn models_info_gpt2_has_expected_structure() {
     require_token();
     let hfrs = CliRunner::hfrs();
 
-    let out = hfrs.run_json(&["models", "info", test_model_repo()]).unwrap();
+    let out = hfrs.run_json(&["models", "info", TEST_MODEL_REPO]).unwrap();
 
     assert!(out.is_object(), "models info should return an object");
     for field in &["id", "author", "tags", "pipeline_tag", "library_name"] {
@@ -354,7 +337,7 @@ fn datasets_list_with_search() {
     let hfrs = CliRunner::hfrs();
 
     let out = hfrs
-        .run_json(&["datasets", "list", "--search", test_dataset_search(), "--limit", "3"])
+        .run_json(&["datasets", "list", "--search", TEST_DATASET_SEARCH, "--limit", "3"])
         .unwrap();
 
     let items = out.as_array().expect("datasets list should return an array");
@@ -403,7 +386,7 @@ fn repos_tag_list_gpt2() {
     require_token();
     let hfrs = CliRunner::hfrs();
 
-    let out = hfrs.run_json(&["repos", "tag", "list", test_model_repo()]).unwrap();
+    let out = hfrs.run_json(&["repos", "tag", "list", TEST_MODEL_REPO]).unwrap();
 
     assert!(out.is_array(), "repos tag list should return an array");
 }
@@ -439,10 +422,10 @@ fn datasets_list_with_search_matches_hf() {
     require_cli(&hf);
 
     let hfrs_out = hfrs
-        .run_json(&["datasets", "list", "--search", test_dataset_search(), "--limit", "3"])
+        .run_json(&["datasets", "list", "--search", TEST_DATASET_SEARCH, "--limit", "3"])
         .unwrap();
     let hf_out = hf
-        .run_json(&["datasets", "list", "--search", test_dataset_search(), "--limit", "3"])
+        .run_json(&["datasets", "list", "--search", TEST_DATASET_SEARCH, "--limit", "3"])
         .unwrap();
 
     assert!(hfrs_out.is_array());
@@ -511,7 +494,7 @@ fn download_cache_dir_is_respected() {
 
     let result = hfrs.run_raw(&[
         "download",
-        test_model_repo(),
+        TEST_MODEL_REPO,
         "config.json",
         "--cache-dir",
         cache_dir.to_str().unwrap(),
@@ -543,7 +526,7 @@ fn download_default_cache_dir_not_used_when_overridden() {
     // Download to custom cache dir
     let result = hfrs.run_raw(&[
         "download",
-        test_model_repo(),
+        TEST_MODEL_REPO,
         "config.json",
         "--cache-dir",
         cache_dir.to_str().unwrap(),
@@ -558,7 +541,7 @@ fn download_default_cache_dir_not_used_when_overridden() {
         .collect();
 
     assert!(
-        entries.iter().any(|name| name.contains(test_model_cache_fragment())),
+        entries.iter().any(|name| name.contains(TEST_MODEL_CACHE_FRAGMENT)),
         "cache dir should contain a model repo folder, found: {entries:?}"
     );
 }
@@ -1018,7 +1001,7 @@ fn download_single_file_basic() {
     let result = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "config.json",
             "--local-dir",
             tmp.path().to_str().unwrap(),
@@ -1041,7 +1024,7 @@ fn download_local_dir() {
 
     hfrs.run_raw(&[
         "download",
-        test_model_repo(),
+        TEST_MODEL_REPO,
         "config.json",
         "--local-dir",
         tmp.path().to_str().unwrap(),
@@ -1060,7 +1043,7 @@ fn download_specific_revision() {
 
     let result = hfrs.run_raw(&[
         "download",
-        test_model_repo(),
+        TEST_MODEL_REPO,
         "config.json",
         "--revision",
         "main",
@@ -1083,7 +1066,7 @@ fn download_caching_and_force() {
     let path1 = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "config.json",
             "--cache-dir",
             cache_dir,
@@ -1096,7 +1079,7 @@ fn download_caching_and_force() {
 
     // Second download should use cache and return same path
     let path2 = hfrs
-        .run_raw(&["download", test_model_repo(), "config.json", "--cache-dir", cache_dir])
+        .run_raw(&["download", TEST_MODEL_REPO, "config.json", "--cache-dir", cache_dir])
         .unwrap()
         .trim()
         .to_string();
@@ -1106,7 +1089,7 @@ fn download_caching_and_force() {
     let path3 = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "config.json",
             "--cache-dir",
             cache_dir,
@@ -1127,7 +1110,7 @@ fn download_quiet_mode() {
     let (code, stdout, _stderr) = hfrs
         .run_full(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "config.json",
             "--local-dir",
             tmp.path().to_str().unwrap(),
@@ -1145,7 +1128,7 @@ fn download_nonexistent_file() {
     let hfrs = CliRunner::hfrs();
 
     let (code, stderr) = hfrs
-        .run_expecting_failure(&["download", test_model_repo(), "nonexistent-file-xyz.txt"])
+        .run_expecting_failure(&["download", TEST_MODEL_REPO, "nonexistent-file-xyz.txt"])
         .unwrap();
     assert_ne!(code, 0);
     assert!(stderr.to_lowercase().contains("not found"), "should mention file not found, got: {stderr}");
@@ -1169,7 +1152,7 @@ fn download_wrong_repo_type() {
     let hfrs = CliRunner::hfrs();
 
     let (code, _stderr) = hfrs
-        .run_expecting_failure(&["download", test_model_repo(), "config.json", "--type", "dataset"])
+        .run_expecting_failure(&["download", TEST_MODEL_REPO, "config.json", "--type", "dataset"])
         .unwrap();
     assert_ne!(code, 0, "downloading model repo as dataset type should fail");
 }
@@ -1184,7 +1167,7 @@ fn download_snapshot_entire_repo() {
     let result = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "--include",
             "*.json",
             "--include",
@@ -1209,7 +1192,7 @@ fn download_snapshot_multiple_files() {
     let result = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "config.json",
             "tokenizer.json",
             "--local-dir",
@@ -1232,7 +1215,7 @@ fn download_snapshot_include_pattern() {
     let result = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "--include",
             "*.json",
             "--local-dir",
@@ -1265,7 +1248,7 @@ fn download_snapshot_exclude_pattern() {
     let result = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "--include",
             "*.json",
             "--exclude",
@@ -1302,7 +1285,7 @@ fn download_snapshot_include_exclude() {
     let result = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "--include",
             "*.json",
             "--exclude",
@@ -1340,7 +1323,7 @@ fn download_snapshot_cache_dir() {
     let result = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "--include",
             "config.json",
             "--local-dir",
@@ -1361,7 +1344,7 @@ fn download_snapshot_local_dir() {
 
     hfrs.run_raw(&[
         "download",
-        test_model_repo(),
+        TEST_MODEL_REPO,
         "--include",
         "config.json",
         "--local-dir",
@@ -1380,7 +1363,7 @@ fn download_dataset_type() {
 
     let result = hfrs.run_raw(&[
         "download",
-        test_dataset_download_repo(),
+        TEST_DATASET_DOWNLOAD_REPO,
         "README.md",
         "--type",
         "dataset",
@@ -1404,7 +1387,7 @@ fn download_local_dir_auto_create() {
 
     let result = hfrs.run_raw(&[
         "download",
-        test_model_repo(),
+        TEST_MODEL_REPO,
         "config.json",
         "--local-dir",
         nested_dir.to_str().unwrap(),
@@ -1421,7 +1404,7 @@ fn download_non_writable_location() {
     let (code, stderr) = hfrs
         .run_expecting_failure(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "config.json",
             "--local-dir",
             "/nonexistent_root_dir/download",
@@ -1441,7 +1424,7 @@ fn download_single_with_include_uses_snapshot() {
     let result = hfrs
         .run_raw(&[
             "download",
-            test_model_repo(),
+            TEST_MODEL_REPO,
             "config.json",
             "--include",
             "*.json",
@@ -2061,7 +2044,7 @@ fn no_color_env_suppresses_ansi() {
 #[test]
 fn hf_endpoint_override() {
     require_token();
-    let hfrs = CliRunner::hfrs().with_env("HF_ENDPOINT", test_hf_endpoint());
+    let hfrs = CliRunner::hfrs().with_env("HF_ENDPOINT", TEST_HF_ENDPOINT);
 
     let result = hfrs.run_json(&["auth", "whoami"]);
     assert!(result.is_ok(), "HF_ENDPOINT override should work: {:?}", result.err());

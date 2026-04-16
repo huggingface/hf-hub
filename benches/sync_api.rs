@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use hf_hub::{RepoDownloadFileParams, RepoInfoParams};
+use hf_hub::{RepoDownloadFileParams, RepoGetFileMetadataParams, RepoInfoParams};
 use tempfile::TempDir;
 // ---------------------------------------------------------------------------
 // Download benchmarks
@@ -13,13 +13,10 @@ fn bench_download_small_file(c: &mut Criterion) {
         b.iter_with_setup(
             || TempDir::new().unwrap(),
             |tmp| {
-                let client = hf_hub::HFClientSync::from_inner(
-                    hf_hub::HFClientBuilder::new()
-                        .cache_dir(tmp.path().to_path_buf())
-                        .build()
-                        .unwrap(),
-                )
-                .unwrap();
+                let client = hf_hub::HFClientBuilder::new()
+                    .cache_dir(tmp.path().to_path_buf())
+                    .build_sync()
+                    .unwrap();
                 client
                     .model("julien-c", "dummy-unknown")
                     .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
@@ -39,13 +36,10 @@ fn bench_download_with_revision(c: &mut Criterion) {
         b.iter_with_setup(
             || TempDir::new().unwrap(),
             |tmp| {
-                let client = hf_hub::HFClientSync::from_inner(
-                    hf_hub::HFClientBuilder::new()
-                        .cache_dir(tmp.path().to_path_buf())
-                        .build()
-                        .unwrap(),
-                )
-                .unwrap();
+                let client = hf_hub::HFClientBuilder::new()
+                    .cache_dir(tmp.path().to_path_buf())
+                    .build_sync()
+                    .unwrap();
                 client
                     .model("julien-c", "dummy-unknown")
                     .download_file(
@@ -69,13 +63,10 @@ fn bench_download_with_revision(c: &mut Criterion) {
 fn bench_get_warm_cache(c: &mut Criterion) {
     // Pre-populate cache (kept alive for the whole benchmark)
     let tmp = TempDir::new().unwrap();
-    let client = hf_hub::HFClientSync::from_inner(
-        hf_hub::HFClientBuilder::new()
-            .cache_dir(tmp.path().to_path_buf())
-            .build()
-            .unwrap(),
-    )
-    .unwrap();
+    let client = hf_hub::HFClientBuilder::new()
+        .cache_dir(tmp.path().to_path_buf())
+        .build_sync()
+        .unwrap();
     client
         .model("julien-c", "dummy-unknown")
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
@@ -85,13 +76,10 @@ fn bench_get_warm_cache(c: &mut Criterion) {
 
     group.bench_function("get (warm cache, via Api)", |b| {
         b.iter(|| {
-            let client = hf_hub::HFClientSync::from_inner(
-                hf_hub::HFClientBuilder::new()
-                    .cache_dir(tmp.path().to_path_buf())
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
+            let client = hf_hub::HFClientBuilder::new()
+                .cache_dir(tmp.path().to_path_buf())
+                .build_sync()
+                .unwrap();
             client
                 .model("julien-c", "dummy-unknown")
                 .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
@@ -105,13 +93,10 @@ fn bench_get_warm_cache(c: &mut Criterion) {
 fn bench_cache_repo_get(c: &mut Criterion) {
     // Pre-populate cache
     let tmp = TempDir::new().unwrap();
-    let client = hf_hub::HFClientSync::from_inner(
-        hf_hub::HFClientBuilder::new()
-            .cache_dir(tmp.path().to_path_buf())
-            .build()
-            .unwrap(),
-    )
-    .unwrap();
+    let client = hf_hub::HFClientBuilder::new()
+        .cache_dir(tmp.path().to_path_buf())
+        .build_sync()
+        .unwrap();
     client
         .model("julien-c", "dummy-unknown")
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
@@ -121,13 +106,10 @@ fn bench_cache_repo_get(c: &mut Criterion) {
 
     group.bench_function("CacheRepo::get (warm cache, no network)", |b| {
         b.iter(|| {
-            let client = hf_hub::HFClientSync::from_inner(
-                hf_hub::HFClientBuilder::new()
-                    .cache_dir(tmp.path().to_path_buf())
-                    .build()
-                    .unwrap(),
-            )
-            .unwrap();
+            let client = hf_hub::HFClientBuilder::new()
+                .cache_dir(tmp.path().to_path_buf())
+                .build_sync()
+                .unwrap();
             client
                 .model("julien-c", "dummy-unknown")
                 .download_file(
@@ -157,7 +139,7 @@ fn bench_info(c: &mut Criterion) {
         b.iter(|| {
             client
                 .model("julien-c", "dummy-unknown")
-                .info(&RepoInfoParams::builder().build())
+                .info(&RepoInfoParams::default())
                 .unwrap();
         });
     });
@@ -165,23 +147,22 @@ fn bench_info(c: &mut Criterion) {
     group.finish();
 }
 
-// TODO: fix this benchmark in new version
-// fn bench_metadata(c: &mut Criterion) {
-//     let client = hf_hub::HFClientSync::new().unwrap();
-//     let repo = client.model("julien-c", "dummy-unknown");
-//     let url = repo.url("config.json");
-//
-//     let mut group = c.benchmark_group("api");
-//     group.sample_size(10);
-//
-//     group.bench_function("metadata", |b| {
-//         b.iter(|| {
-//             api.metadata(&url).unwrap();
-//         });
-//     });
-//
-//     group.finish();
-// }
+fn bench_metadata(c: &mut Criterion) {
+    let client = hf_hub::HFClientSync::new().unwrap();
+    let repo = client.model("julien-c", "dummy-unknown");
+
+    let mut group = c.benchmark_group("api");
+    group.sample_size(10);
+
+    group.bench_function("metadata", |b| {
+        b.iter(|| {
+            repo.get_file_metadata(&RepoGetFileMetadataParams::builder().filepath("config.json").build())
+                .unwrap();
+        });
+    });
+
+    group.finish();
+}
 
 // ---------------------------------------------------------------------------
 // Groups
@@ -189,6 +170,6 @@ fn bench_info(c: &mut Criterion) {
 
 criterion_group!(download, bench_download_small_file, bench_download_with_revision);
 criterion_group!(cache, bench_get_warm_cache, bench_cache_repo_get);
-criterion_group!(api, bench_info); // TODO: re-enable bench_metadata
+criterion_group!(api, bench_info, bench_metadata);
 
 criterion_main!(download, cache, api);

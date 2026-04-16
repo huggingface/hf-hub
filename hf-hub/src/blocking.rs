@@ -86,9 +86,9 @@ impl fmt::Debug for HFBucketSync {
 }
 
 impl HFClientSync {
-    /// Creates an `HFClientSync` using default configuration from the environment.
+    /// Creates an `HFClientSync` using the default configuration from the environment.
     ///
-    /// Reads `HF_TOKEN`, `HF_ENDPOINT`, and other the standard environment variables.
+    /// Reads the `HF_TOKEN`, `HF_ENDPOINT`, and other the standard environment variables.
     ///
     /// # Errors
     ///

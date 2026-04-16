@@ -2,6 +2,7 @@ pub mod branch;
 pub mod create;
 pub mod delete;
 pub mod delete_files;
+pub mod file_metadata;
 pub mod move_repo;
 pub mod settings;
 pub mod tag;
@@ -32,6 +33,8 @@ pub enum ReposCommand {
     Settings(settings::Args),
     /// Delete files from a repository
     DeleteFiles(delete_files::Args),
+    /// Show HEAD metadata for a file (commit, ETag, size, Xet hash)
+    FileMetadata(file_metadata::Args),
     /// Manage branches
     Branch(branch::Args),
     /// Manage tags
@@ -45,6 +48,7 @@ pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
         ReposCommand::Move(a) => move_repo::execute(api, a).await,
         ReposCommand::Settings(a) => settings::execute(api, a).await,
         ReposCommand::DeleteFiles(a) => delete_files::execute(api, a).await,
+        ReposCommand::FileMetadata(a) => file_metadata::execute(api, a).await,
         ReposCommand::Branch(a) => branch::execute(api, a).await,
         ReposCommand::Tag(a) => tag::execute(api, a).await,
     }

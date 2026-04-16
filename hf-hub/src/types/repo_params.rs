@@ -60,6 +60,16 @@ pub struct RepoListTreeParams {
 }
 
 #[derive(TypedBuilder)]
+pub struct RepoGetFileMetadataParams {
+    /// Path of the file within the repository.
+    #[builder(setter(into))]
+    pub filepath: String,
+    /// Git revision to query. Defaults to the main branch.
+    #[builder(default, setter(into, strip_option))]
+    pub revision: Option<String>,
+}
+
+#[derive(TypedBuilder)]
 pub struct RepoGetPathsInfoParams {
     /// List of file paths within the repository to retrieve info for.
     pub paths: Vec<String>,

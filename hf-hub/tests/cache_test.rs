@@ -46,29 +46,12 @@ fn api_with_cache(cache_dir: &std::path::Path) -> HFClient {
     }
 }
 
-fn test_model_parts() -> (&'static str, &'static str) {
-    ("hf-internal-testing", "tiny-gemma3")
-}
-
-fn test_model_repo_id() -> &'static str {
-    "hf-internal-testing/tiny-gemma3"
-}
-
-fn test_dataset_parts() -> (&'static str, &'static str) {
-    ("hf-internal-testing", "cats_vs_dogs_sample")
-}
-
-fn test_dataset_repo_id() -> &'static str {
-    "hf-internal-testing/cats_vs_dogs_sample"
-}
-
-fn test_model_cache_fragment() -> &'static str {
-    "hf-internal-testing--tiny-gemma3"
-}
-
-fn test_dataset_cache_fragment() -> &'static str {
-    "datasets--hf-internal-testing--cats_vs_dogs_sample"
-}
+const TEST_MODEL_PARTS: (&str, &str) = ("hf-internal-testing", "tiny-gemma3");
+const TEST_MODEL_REPO_ID: &str = "hf-internal-testing/tiny-gemma3";
+const TEST_DATASET_PARTS: (&str, &str) = ("hf-internal-testing", "cats_vs_dogs_sample");
+const TEST_DATASET_REPO_ID: &str = "hf-internal-testing/cats_vs_dogs_sample";
+const TEST_MODEL_CACHE_FRAGMENT: &str = "hf-internal-testing--tiny-gemma3";
+const TEST_DATASET_CACHE_FRAGMENT: &str = "datasets--hf-internal-testing--cats_vs_dogs_sample";
 
 fn find_repo_folder(cache_dir: &Path, name_fragment: &str) -> std::path::PathBuf {
     std::fs::read_dir(cache_dir)
@@ -137,7 +120,7 @@ async fn test_download_file_to_cache() {
     let api = api_with_cache(cache_dir.path());
 
     let path = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -151,7 +134,7 @@ async fn test_download_file_to_cache() {
     let repo_folder = std::fs::read_dir(cache_dir.path())
         .unwrap()
         .filter_map(|e| e.ok())
-        .find(|e| e.file_name().to_string_lossy().contains(test_model_cache_fragment()))
+        .find(|e| e.file_name().to_string_lossy().contains(TEST_MODEL_CACHE_FRAGMENT))
         .expect("repo folder not found");
     let blobs_dir = repo_folder.path().join("blobs");
     assert!(blobs_dir.exists());
@@ -165,7 +148,7 @@ async fn test_download_file_cache_hit() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    let repo = api.model(test_model_parts().0, test_model_parts().1);
+    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     let path1 = repo
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
@@ -183,7 +166,7 @@ async fn test_download_file_local_files_only_miss() {
     let api = api_with_cache(cache_dir.path());
 
     let result = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -200,7 +183,7 @@ async fn test_download_file_local_files_only_hit() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    let repo = api.model(test_model_parts().0, test_model_parts().1);
+    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     let path1 = repo
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
@@ -226,7 +209,7 @@ async fn test_download_file_cache_symlink_structure() {
     let api = api_with_cache(cache_dir.path());
 
     let path = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -244,7 +227,7 @@ async fn test_snapshot_download() {
     let api = api_with_cache(cache_dir.path());
 
     let snapshot_dir = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string()])
@@ -269,12 +252,12 @@ async fn test_cache_hit_no_redownload() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    let repo = api.model(test_model_parts().0, test_model_parts().1);
+    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
-    let blob = find_single_blob(cache_dir.path(), test_model_cache_fragment());
+    let blob = find_single_blob(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let mtime_before = std::fs::metadata(&blob).unwrap().modified().unwrap();
 
     // Second download should use 304 and not touch the blob
@@ -291,12 +274,12 @@ async fn test_force_download_bypasses_cache() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    let repo = api.model(test_model_parts().0, test_model_parts().1);
+    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
-    let blob = find_single_blob(cache_dir.path(), test_model_cache_fragment());
+    let blob = find_single_blob(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let mtime_before = std::fs::metadata(&blob).unwrap().modified().unwrap();
 
     // Small delay so mtime can differ
@@ -323,7 +306,7 @@ async fn test_force_download_ignores_no_exist() {
 
     // Create a stale .no_exist marker — network download should succeed
     // regardless since .no_exist is only consulted via resolve_from_cache_only
-    let repo_folder = format!("models--{}", test_model_cache_fragment());
+    let repo_folder = format!("models--{}", TEST_MODEL_CACHE_FRAGMENT);
     let fake_commit = "0000000000000000000000000000000000000000";
     let no_exist_dir = cache_dir.path().join(&repo_folder).join(".no_exist").join(fake_commit);
     std::fs::create_dir_all(&no_exist_dir).unwrap();
@@ -333,7 +316,7 @@ async fn test_force_download_ignores_no_exist() {
     std::fs::write(refs_dir.join("main"), fake_commit).unwrap();
 
     let path = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -356,7 +339,7 @@ async fn test_no_exist_marker_on_404() {
     let api = api_with_cache(cache_dir.path());
 
     let result = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("this_file_does_not_exist_abc123.txt")
@@ -366,7 +349,7 @@ async fn test_no_exist_marker_on_404() {
     assert!(matches!(result, Err(HFError::EntryNotFound { .. })));
 
     // .no_exist marker should have been written
-    let repo_folder = find_repo_folder(cache_dir.path(), test_model_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let no_exist_dir = repo_folder.join(".no_exist");
     assert!(no_exist_dir.exists(), ".no_exist directory should exist");
 
@@ -381,7 +364,7 @@ async fn test_no_exist_marker_prevents_request() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    let repo = api.model(test_model_parts().0, test_model_parts().1);
+    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
 
     // First download: 404 creates the .no_exist marker
     let _ = repo
@@ -415,12 +398,12 @@ async fn test_no_exist_writes_ref_on_404() {
     let api = api_with_cache(cache_dir.path());
 
     let _ = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("no_such_file_ref_test.txt").build())
         .await;
 
     // The refs/main file should have been written even though the file 404'd
-    let repo_folder = find_repo_folder(cache_dir.path(), test_model_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let main_ref = repo_folder.join("refs").join("main");
     assert!(main_ref.exists(), "refs/main should be written on 404 with commit hash header");
     let commit = std::fs::read_to_string(&main_ref).unwrap();
@@ -439,12 +422,12 @@ async fn test_ref_written_for_branch_download() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
-    let repo_folder = find_repo_folder(cache_dir.path(), test_model_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let main_ref = repo_folder.join("refs").join("main");
     assert!(main_ref.exists());
     let commit = std::fs::read_to_string(&main_ref).unwrap();
@@ -460,12 +443,12 @@ async fn test_no_ref_for_commit_hash_download() {
     let api = api_with_cache(cache_dir.path());
 
     // First get the commit hash via a normal download
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
-    let repo_folder = find_repo_folder(cache_dir.path(), test_model_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let commit_hash = std::fs::read_to_string(repo_folder.join("refs").join("main"))
         .unwrap()
         .trim()
@@ -475,7 +458,7 @@ async fn test_no_ref_for_commit_hash_download() {
     let cache_dir2 = tempfile::tempdir().unwrap();
     let api2 = api_with_cache(cache_dir2.path());
 
-    api2.model(test_model_parts().0, test_model_parts().1)
+    api2.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -485,7 +468,7 @@ async fn test_no_ref_for_commit_hash_download() {
         .await
         .unwrap();
 
-    let repo_folder2 = find_repo_folder(cache_dir2.path(), test_model_cache_fragment());
+    let repo_folder2 = find_repo_folder(cache_dir2.path(), TEST_MODEL_CACHE_FRAGMENT);
     let refs_dir = repo_folder2.join("refs");
     // refs dir should not exist (or be empty) when downloading by commit hash
     if refs_dir.exists() {
@@ -501,11 +484,11 @@ async fn test_download_by_commit_hash() {
     let api = api_with_cache(cache_dir.path());
 
     // Get commit hash from a normal download
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
-    let repo_folder = find_repo_folder(cache_dir.path(), test_model_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let commit_hash = std::fs::read_to_string(repo_folder.join("refs").join("main"))
         .unwrap()
         .trim()
@@ -515,7 +498,7 @@ async fn test_download_by_commit_hash() {
     let cache_dir2 = tempfile::tempdir().unwrap();
     let api2 = api_with_cache(cache_dir2.path());
     let path = api2
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -545,7 +528,7 @@ async fn test_offline_fallback_with_cached_file() {
 
     // Populate cache
     let original_path = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -557,7 +540,7 @@ async fn test_offline_fallback_with_cached_file() {
         .build()
         .unwrap();
     let result = api_broken
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await;
     assert!(result.is_ok(), "Should fall back to cached file, got: {result:?}");
@@ -574,7 +557,7 @@ async fn test_offline_fallback_without_cache_propagates_error() {
         .unwrap();
 
     let result = api_broken
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await;
     assert!(result.is_err(), "Should propagate error when no cache available");
@@ -596,7 +579,7 @@ async fn test_snapshot_download_ignore_patterns() {
     let api = api_with_cache(cache_dir.path());
 
     let snapshot_dir = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .ignore_patterns(vec!["*.md".to_string()])
@@ -618,7 +601,7 @@ async fn test_snapshot_download_local_files_only_miss() {
     let api = api_with_cache(cache_dir.path());
 
     let result = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(&RepoSnapshotDownloadParams::builder().local_files_only(true).build())
         .await;
     assert!(matches!(result, Err(HFError::LocalEntryNotFound { .. })));
@@ -630,7 +613,7 @@ async fn test_snapshot_download_local_files_only_hit() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    let repo = api.model(test_model_parts().0, test_model_parts().1);
+    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     let dir1 = repo
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
@@ -654,11 +637,11 @@ async fn test_snapshot_download_by_commit_hash() {
     let api = api_with_cache(cache_dir.path());
 
     // First get the commit hash
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
-    let repo_folder = find_repo_folder(cache_dir.path(), test_model_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let commit_hash = std::fs::read_to_string(repo_folder.join("refs").join("main"))
         .unwrap()
         .trim()
@@ -668,7 +651,7 @@ async fn test_snapshot_download_by_commit_hash() {
     let cache_dir2 = tempfile::tempdir().unwrap();
     let api2 = api_with_cache(cache_dir2.path());
     let snapshot_dir = api2
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .revision(&commit_hash)
@@ -682,7 +665,7 @@ async fn test_snapshot_download_by_commit_hash() {
     assert!(snapshot_dir.to_string_lossy().contains(&commit_hash), "Snapshot dir should contain commit hash");
 
     // No ref should be written for commit hash revision
-    let repo_folder2 = find_repo_folder(cache_dir2.path(), test_model_cache_fragment());
+    let repo_folder2 = find_repo_folder(cache_dir2.path(), TEST_MODEL_CACHE_FRAGMENT);
     let refs_dir = repo_folder2.join("refs");
     if refs_dir.exists() {
         let count = std::fs::read_dir(&refs_dir).unwrap().count();
@@ -696,7 +679,7 @@ async fn test_snapshot_download_force_download() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    let repo = api.model(test_model_parts().0, test_model_parts().1);
+    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     repo.snapshot_download(
         &RepoSnapshotDownloadParams::builder()
             .allow_patterns(vec!["config.json".to_string()])
@@ -705,7 +688,7 @@ async fn test_snapshot_download_force_download() {
     .await
     .unwrap();
 
-    let blob = find_single_blob(cache_dir.path(), test_model_cache_fragment());
+    let blob = find_single_blob(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let mtime_before = std::fs::metadata(&blob).unwrap().modified().unwrap();
 
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -730,7 +713,7 @@ async fn test_snapshot_download_returns_correct_path() {
     let api = api_with_cache(cache_dir.path());
 
     let snapshot_dir = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["config.json".to_string()])
@@ -740,7 +723,7 @@ async fn test_snapshot_download_returns_correct_path() {
         .unwrap();
 
     let path_str = snapshot_dir.to_string_lossy();
-    let expected_fragment = format!("models--{}", test_model_cache_fragment());
+    let expected_fragment = format!("models--{}", TEST_MODEL_CACHE_FRAGMENT);
     assert!(path_str.contains(&expected_fragment), "Should contain {expected_fragment}: {path_str}");
     assert!(path_str.contains("snapshots"), "Should contain snapshots: {path_str}");
 }
@@ -755,12 +738,12 @@ async fn test_cache_directory_layout() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
-    let repo_folder = find_repo_folder(cache_dir.path(), test_model_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     assert!(repo_folder.join("blobs").exists(), "blobs/ should exist");
     assert!(repo_folder.join("snapshots").exists(), "snapshots/ should exist");
     assert!(repo_folder.join("refs").exists(), "refs/ should exist");
@@ -782,14 +765,14 @@ async fn test_blob_deduplication_across_downloads() {
     let cache_dir = tempfile::tempdir().unwrap();
     let api = api_with_cache(cache_dir.path());
 
-    let repo = api.model(test_model_parts().0, test_model_parts().1);
+    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
 
     // Download same file via single file download
     repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
-    let repo_folder = find_repo_folder(cache_dir.path(), test_model_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let blob_count_before = std::fs::read_dir(repo_folder.join("blobs")).unwrap().count();
 
     // Download again via snapshot (should reuse the same blob)
@@ -812,13 +795,13 @@ async fn test_dataset_repo_type_cache_folder() {
     let api = api_with_cache(cache_dir.path());
 
     let path = api
-        .dataset(test_dataset_parts().0, test_dataset_parts().1)
+        .dataset(TEST_DATASET_PARTS.0, TEST_DATASET_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("README.md").build())
         .await
         .unwrap();
     assert!(path.exists());
 
-    let repo_folder = find_repo_folder(cache_dir.path(), test_dataset_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_DATASET_CACHE_FRAGMENT);
     assert!(repo_folder.exists(), "Dataset cache folder not found");
 }
 
@@ -830,7 +813,7 @@ async fn test_download_to_local_dir_no_cache() {
     let api = api_with_cache(cache_dir.path());
 
     let path = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -867,7 +850,7 @@ async fn test_concurrent_downloads_same_file() {
         let api_clone = api.clone();
         let handle = tokio::spawn(async move {
             api_clone
-                .model(test_model_parts().0, test_model_parts().1)
+                .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
                 .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
                 .await
         });
@@ -888,7 +871,7 @@ async fn test_concurrent_downloads_same_file() {
     }
 
     // Only one blob should exist
-    let repo_folder = find_repo_folder(cache_dir.path(), test_model_cache_fragment());
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
     let blob_count = std::fs::read_dir(repo_folder.join("blobs")).unwrap().count();
     assert_eq!(blob_count, 1, "Concurrent downloads should produce exactly 1 blob");
 }
@@ -1028,7 +1011,7 @@ print(path)
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(output.status.success(), "Python failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -1036,13 +1019,13 @@ print(path)
     let repo_folder = std::fs::read_dir(&cache_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .find(|e| e.file_name().to_string_lossy().contains(test_model_cache_fragment()))
+        .find(|e| e.file_name().to_string_lossy().contains(TEST_MODEL_CACHE_FRAGMENT))
         .unwrap();
     let blob_count_before = std::fs::read_dir(repo_folder.path().join("blobs")).unwrap().count();
 
     let api = api_with_cache(&cache_dir);
     let path = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1066,7 +1049,7 @@ async fn test_interop_rust_downloads_first() {
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     let api = api_with_cache(&cache_dir);
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1082,7 +1065,7 @@ print(path)
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(
@@ -1115,13 +1098,13 @@ hf_hub_download("{repo_id}", "README.md")
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(output.status.success());
 
     let api = api_with_cache(&cache_dir);
-    let repo = api.model(test_model_parts().0, test_model_parts().1);
+    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1148,7 +1131,7 @@ print(path)
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(
@@ -1182,7 +1165,7 @@ print(path)
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(
@@ -1194,13 +1177,13 @@ print(path)
     let repo_folder = std::fs::read_dir(&cache_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .find(|e| e.file_name().to_string_lossy().contains(test_model_cache_fragment()))
+        .find(|e| e.file_name().to_string_lossy().contains(TEST_MODEL_CACHE_FRAGMENT))
         .unwrap();
     let blob_count_before = std::fs::read_dir(repo_folder.path().join("blobs")).unwrap().count();
 
     let api = api_with_cache(&cache_dir);
     let snapshot_dir = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string()])
@@ -1230,7 +1213,7 @@ async fn test_interop_rust_writes_python_validates_cache() {
     // Rust snapshot_download: multiple files into cache
     let api = api_with_cache(&cache_dir);
     let snapshot_dir = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string(), "*.md".to_string()])
@@ -1303,7 +1286,7 @@ print("ALL_CHECKS_PASSED")
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
         rust_files_json = rust_files_json,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
@@ -1486,7 +1469,7 @@ async fn test_interop_rust_no_exist_python_reads() {
     // Rust: trigger a 404 to create a .no_exist marker
     let api = api_with_cache(&cache_dir);
     let _ = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("interop_no_exist_test_file.txt")
@@ -1513,7 +1496,7 @@ else:
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1540,7 +1523,7 @@ async fn test_interop_rust_ref_python_reads() {
 
     // Rust: download to create refs/main
     let api = api_with_cache(&cache_dir);
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1558,7 +1541,7 @@ print("REF_INTEROP_OK")
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1595,7 +1578,7 @@ print("DONE")
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(output.status.success(), "Python failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -1603,7 +1586,7 @@ print("DONE")
     // Rust: local_files_only should find the .no_exist marker via resolve_from_cache_only
     let api = api_with_cache(&cache_dir);
     let result = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("python_no_exist_interop_test.txt")
@@ -1641,7 +1624,7 @@ hf_hub_download("{repo_id}", "config.json")
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(output.status.success(), "Python failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -1649,7 +1632,7 @@ hf_hub_download("{repo_id}", "config.json")
     // Rust: local_files_only should find the file via Python's ref
     let api = api_with_cache(&cache_dir);
     let path = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -1678,7 +1661,7 @@ async fn test_interop_rust_snapshot_python_snapshot_reuse() {
 
     // Rust snapshot_download first
     let api = api_with_cache(&cache_dir);
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string()])
@@ -1687,7 +1670,7 @@ async fn test_interop_rust_snapshot_python_snapshot_reuse() {
         .await
         .unwrap();
 
-    let repo_folder = find_repo_folder(&cache_dir, test_model_cache_fragment());
+    let repo_folder = find_repo_folder(&cache_dir, TEST_MODEL_CACHE_FRAGMENT);
     let blob_count_before = std::fs::read_dir(repo_folder.join("blobs")).unwrap().count();
 
     // Python snapshot_download same patterns — should reuse Rust's blobs
@@ -1702,7 +1685,7 @@ print("OK")
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(output.status.success(), "Python snapshot failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -1726,7 +1709,7 @@ async fn test_interop_dataset_repo_type() {
 
     // Rust downloads a dataset file
     let api = api_with_cache(&cache_dir);
-    api.dataset(test_dataset_parts().0, test_dataset_parts().1)
+    api.dataset(TEST_DATASET_PARTS.0, TEST_DATASET_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("README.md").build())
         .await
         .unwrap();
@@ -1745,7 +1728,7 @@ print("DATASET_INTEROP_OK")
 "#,
         cache = cache_dir.display(),
         token = token,
-        dataset_repo_id = test_dataset_repo_id(),
+        dataset_repo_id = TEST_DATASET_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1781,7 +1764,7 @@ print(link)
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(output.status.success(), "Python failed: {}", String::from_utf8_lossy(&output.stderr));
@@ -1792,7 +1775,7 @@ print(link)
     std::fs::create_dir_all(&cache_dir2).unwrap();
     let api = api_with_cache(&cache_dir2);
     let rust_path = api
-        .model(test_model_parts().0, test_model_parts().1)
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1826,13 +1809,13 @@ hf_hub_download("{repo_id}", "config.json")
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(output.status.success(), "Python failed: {}", String::from_utf8_lossy(&output.stderr));
 
     // Record blob mtime after Python's download
-    let repo_folder = find_repo_folder(&cache_dir, test_model_cache_fragment());
+    let repo_folder = find_repo_folder(&cache_dir, TEST_MODEL_CACHE_FRAGMENT);
     let blobs_dir = repo_folder.join("blobs");
     let blob = std::fs::read_dir(&blobs_dir)
         .unwrap()
@@ -1845,7 +1828,7 @@ hf_hub_download("{repo_id}", "config.json")
     // Rust downloads same file — should read etag from Python's symlink,
     // send If-None-Match, get 304, and NOT rewrite the blob
     let api = api_with_cache(&cache_dir);
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1869,7 +1852,7 @@ async fn test_interop_scan_cache_counts_match() {
 
     // Download multiple files via both libraries to populate the cache
     let api = api_with_cache(&cache_dir);
-    api.model(test_model_parts().0, test_model_parts().1)
+    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string(), "*.md".to_string()])
@@ -1899,7 +1882,7 @@ print(json.dumps({{
 "#,
         cache = cache_dir.display(),
         token = token,
-        repo_id = test_model_repo_id(),
+        repo_id = TEST_MODEL_REPO_ID,
     );
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1909,7 +1892,7 @@ print(json.dumps({{
     let python_metrics: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
     // Count unique blobs and total size from Rust's perspective
-    let repo_folder = find_repo_folder(&cache_dir, test_model_cache_fragment());
+    let repo_folder = find_repo_folder(&cache_dir, TEST_MODEL_CACHE_FRAGMENT);
     let blobs_dir = repo_folder.join("blobs");
     let mut rust_nb_files = 0usize;
     let mut rust_size: u64 = 0;

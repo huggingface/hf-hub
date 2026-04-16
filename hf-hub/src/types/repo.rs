@@ -59,6 +59,25 @@ pub struct RepoSibling {
     pub lfs: Option<BlobLfsInfo>,
 }
 
+/// Metadata returned from a HEAD request on a file's resolve URL.
+///
+/// Produced by [`HFRepository::get_file_metadata`](crate::repository::HFRepository::get_file_metadata)
+/// and used internally by snapshot downloads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileMetadataInfo {
+    /// Path of the file within the repository.
+    pub filename: String,
+    /// ETag of the file content (normalized, with weak prefix and quotes stripped).
+    pub etag: String,
+    /// Commit hash the revision resolved to (from the `X-Repo-Commit` header).
+    pub commit_hash: String,
+    /// Xet content hash if the file is stored in Xet (from the `X-Xet-Hash` header).
+    pub xet_hash: Option<String>,
+    /// File size in bytes. Falls back to `0` if neither `X-Linked-Size` nor `Content-Length`
+    /// is present on the response.
+    pub file_size: u64,
+}
+
 /// Tagged union for tree entries returned by list_repo_tree
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
