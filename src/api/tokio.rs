@@ -284,8 +284,10 @@ impl ApiBuilder {
             ("rust".to_string(), "unknown".to_string()),
         ];
 
+        let endpoint = std::env::var(HF_ENDPOINT).unwrap_or("https://huggingface.co".to_string());
+
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint: endpoint,
             cache,
             token,
             max_files: 1,

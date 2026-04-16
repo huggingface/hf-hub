@@ -265,7 +265,7 @@ impl ApiBuilder {
         let max_retries = 0;
         let progress = true;
 
-        let endpoint = "https://huggingface.co".to_string();
+        let endpoint = std::env::var(HF_ENDPOINT).unwrap_or("https://huggingface.co".to_string());
 
         let user_agent = vec![
             ("unknown".to_string(), "None".to_string()),
