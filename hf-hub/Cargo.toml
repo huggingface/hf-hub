@@ -1,0 +1,136 @@
+[package]
+name = "hf-hub"
+version = "1.0.0"
+edition = "2024"
+description = "Rust client for the Hugging Face Hub API"
+license = "Apache-2.0"
+
+[package.metadata.docs.rs]
+features = ["blocking", "buckets", "xet"]
+
+[dependencies]
+bytes = "1"
+reqwest = { version = "0.13", features = ["json", "stream", "multipart"] }
+reqwest-middleware = { version = "0.5", features = ["json", "multipart", "query"] }
+reqwest-retry = "0.9"
+tokio = { version = "1", features = ["fs", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+url = "2"
+futures = "0.3"
+typed-builder = "0.20"
+globset = "0.4"
+base64 = "0.22"
+fs4 = { version = "0.13", features = ["tokio"] }
+pathdiff = "0.2"
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = "0.1"
+async-trait = { version = "0.1", optional = true }
+hf-xet = { version = "1.5.1", optional = true }
+sha2 = { version = "0.10", optional = true }
+
+# cli deps
+clap = { version = "4", features = ["derive", "env", "color"], optional = true }
+indicatif = { version = "0.18", optional = true }
+owo-colors = { version = "4", optional = true }
+comfy-table = { version = "7", optional = true }
+anyhow = { version = "1", optional = true }
+tempfile = { version = "3", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+
+[features]
+default = []
+blocking = ["tokio/rt"]
+xet = ["dep:hf-xet", "dep:async-trait", "dep:sha2"]
+buckets = ["xet"]
+cli = [
+    "blocking",
+    "buckets",
+    "tokio/macros",
+    "tokio/rt-multi-thread",
+    "dep:clap",
+    "dep:indicatif",
+    "dep:owo-colors",
+    "dep:comfy-table",
+    "dep:anyhow",
+    "dep:tempfile",
+    "dep:tracing-subscriber",
+]
+
+[[bin]]
+name = "hfrs"
+path = "src/bin/hfrs/main.rs"
+required-features = ["cli"]
+doc = false
+
+[[test]]
+name = "cli_comparison"
+path = "tests/cli/cli_comparison.rs"
+required-features = ["cli"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+rand = "0.9"
+sha2 = "0.10"
+serial_test = "3"
+anyhow = "1"
+libc = "0.2"
+
+[[example]]
+name = "repo"
+path = "examples/repo.rs"
+
+[[example]]
+name = "repo_handles"
+path = "examples/repo_handles.rs"
+
+[[example]]
+name = "files"
+path = "examples/files.rs"
+
+[[example]]
+name = "commits"
+path = "examples/commits.rs"
+
+[[example]]
+name = "users"
+path = "examples/users.rs"
+
+[[example]]
+name = "spaces"
+path = "examples/spaces.rs"
+
+[[example]]
+name = "download_upload"
+path = "examples/download_upload.rs"
+
+[[example]]
+name = "progress"
+path = "examples/progress.rs"
+
+[[example]]
+name = "blocking_read"
+path = "examples/blocking_read.rs"
+required-features = ["blocking"]
+
+[[example]]
+name = "blocking_write"
+path = "examples/blocking_write.rs"
+required-features = ["blocking"]
+
+[[example]]
+name = "blocking_repo_handles"
+path = "examples/blocking_repo_handles.rs"
+required-features = ["blocking"]
+
+[[example]]
+name = "blocking_spaces"
+path = "examples/blocking_spaces.rs"
+required-features = ["blocking"]
+
+[[example]]
+name = "buckets"
+path = "examples/buckets.rs"
+required-features = ["buckets"]

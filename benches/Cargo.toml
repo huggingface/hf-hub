@@ -1,0 +1,17 @@
+[package]
+name = "hf-hub-benches"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bench]]
+name = "sync_api"
+path = "sync_api.rs"
+harness = false
+
+[dependencies]
+hf-hub = { path = "../hf-hub", features = ["blocking"]}
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
