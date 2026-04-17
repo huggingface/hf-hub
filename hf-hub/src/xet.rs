@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Deserialize;
+#[cfg(test)]
+use xet::error::XetError;
 use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileInfo, XetFileMetadata, XetFileUpload};
 
 use crate::client::HFClient;
@@ -78,8 +80,7 @@ pub(crate) fn bucket_xet_token_url(client: &HFClient, token_type: &str, bucket_i
 /// Returns `true` if the error indicates the XetSession is permanently
 /// poisoned and must be replaced before retrying.
 #[cfg(test)]
-fn is_session_poisoned(err: &xet::error::XetError) -> bool {
-    use xet::error::XetError;
+fn is_session_poisoned(err: &XetError) -> bool {
     matches!(
         err,
         XetError::UserCancelled(_)
@@ -219,10 +220,10 @@ impl HFRepository {
         )
         .await?;
 
-        tokio::fs::create_dir_all(local_dir).await?;
+        std::fs::create_dir_all(local_dir)?;
         let dest_path = local_dir.join(filename);
         if let Some(parent) = dest_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            std::fs::create_dir_all(parent)?;
         }
 
         let (session, generation) = self.hf_client.xet_session()?;
@@ -290,7 +291,7 @@ impl HFRepository {
         .await?;
 
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            std::fs::create_dir_all(parent)?;
         }
 
         let incomplete_path = PathBuf::from(format!("{}.incomplete", path.display()));
@@ -336,7 +337,7 @@ impl HFRepository {
         result.map_err(|e| HFError::Other(format!("Xet download failed: {e}")))?;
         emit_remaining_completes(progress, &tracked);
 
-        tokio::fs::rename(&incomplete_path, path).await?;
+        std::fs::rename(&incomplete_path, path)?;
         Ok(())
     }
 
@@ -384,7 +385,7 @@ impl HFRepository {
         let mut incomplete_paths = Vec::with_capacity(files.len());
         for file in files {
             if let Some(parent) = file.path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
+                std::fs::create_dir_all(parent)?;
             }
 
             let incomplete = PathBuf::from(format!("{}.incomplete", file.path.display()));
@@ -416,7 +417,7 @@ impl HFRepository {
         emit_remaining_completes(progress, &tracked);
 
         for (incomplete, final_path) in &incomplete_paths {
-            tokio::fs::rename(incomplete, final_path).await?;
+            std::fs::rename(incomplete, final_path)?;
         }
 
         Ok(())
@@ -850,7 +851,7 @@ impl crate::bucket::HFBucket {
         let mut incomplete_paths = Vec::with_capacity(files.len());
         for file in files {
             if let Some(parent) = file.path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
+                std::fs::create_dir_all(parent)?;
             }
 
             let incomplete = PathBuf::from(format!("{}.incomplete", file.path.display()));
@@ -882,7 +883,7 @@ impl crate::bucket::HFBucket {
         emit_remaining_completes(progress, &tracked);
 
         for (incomplete, final_path) in &incomplete_paths {
-            tokio::fs::rename(incomplete, final_path).await?;
+            std::fs::rename(incomplete, final_path)?;
         }
 
         Ok(())

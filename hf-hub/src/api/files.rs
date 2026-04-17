@@ -1,13 +1,15 @@
 use std::collections::HashMap;
+use std::fmt::Write as _;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use base64::Engine;
 use futures::TryStreamExt;
 use futures::stream::{Stream, StreamExt};
 use globset::Glob;
+use reqwest::Url;
 use reqwest::header::IF_NONE_MATCH;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
-use url::Url;
 
 use crate::error::{HFError, HFResult};
 use crate::repository::HFRepository;
@@ -341,11 +343,11 @@ impl HFRepository {
             .await?;
 
         let local_dir = params.local_dir.as_ref().unwrap();
-        tokio::fs::create_dir_all(local_dir).await?;
+        std::fs::create_dir_all(local_dir)?;
 
         let dest_path = local_dir.join(&params.filename);
         if let Some(parent) = dest_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            std::fs::create_dir_all(parent)?;
         }
 
         stream_response_to_file_with_progress(
@@ -541,7 +543,7 @@ impl HFRepository {
             let blob = cache::blob_path(cache_dir, repo_folder, &etag);
             if !blob.exists() || force_download {
                 if let Some(parent) = blob.parent() {
-                    tokio::fs::create_dir_all(parent).await?;
+                    std::fs::create_dir_all(parent)?;
                 }
                 let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
 
@@ -572,7 +574,7 @@ impl HFRepository {
         let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
         let incomplete_path = PathBuf::from(format!("{}.incomplete", blob.display()));
         if let Some(parent) = incomplete_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+            std::fs::create_dir_all(parent)?;
         }
 
         let response = self
@@ -601,7 +603,7 @@ impl HFRepository {
                 }],
             }),
         );
-        tokio::fs::rename(&incomplete_path, &blob).await?;
+        std::fs::rename(&incomplete_path, &blob)?;
 
         finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await
     }
@@ -744,9 +746,9 @@ impl HFRepository {
                         if let Some(commit) = extract_commit_hash(&resp) {
                             let no_exist = cache::no_exist_path(cache_dir, repo_folder_ref, &commit, &filename);
                             if let Some(parent) = no_exist.parent() {
-                                let _ = tokio::fs::create_dir_all(parent).await;
+                                let _ = std::fs::create_dir_all(parent);
                             }
-                            let _ = tokio::fs::write(&no_exist, b"").await;
+                            let _ = std::fs::write(&no_exist, b"");
                         }
                         return Ok::<_, HFError>(None);
                     } else if !resp.status().is_success() && !resp.status().is_redirection() {
@@ -971,9 +973,9 @@ async fn mark_no_exist_and_return_error(
     if let Some(commit_hash) = extract_commit_hash(response) {
         let no_exist = cache::no_exist_path(cache_dir, repo_folder, &commit_hash, filename);
         if let Some(parent) = no_exist.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
+            let _ = std::fs::create_dir_all(parent);
         }
-        let _ = tokio::fs::write(&no_exist, b"").await;
+        let _ = std::fs::write(&no_exist, b"");
         if !cache::is_commit_hash(revision) {
             let _ = cache::write_ref(cache_dir, repo_folder, revision, &commit_hash).await;
         }
@@ -1039,7 +1041,7 @@ async fn stream_response_to_file_with_progress(
     filename: Option<&str>,
     total_bytes: u64,
 ) -> HFResult<()> {
-    let mut file = tokio::fs::File::create(dest).await?;
+    let mut file = std::fs::File::create(dest)?;
     let mut stream = response.bytes_stream();
     let mut bytes_read: u64 = 0;
 
@@ -1056,7 +1058,7 @@ async fn stream_response_to_file_with_progress(
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
-        file.write_all(&chunk).await?;
+        file.write_all(&chunk)?;
         bytes_read += chunk.len() as u64;
 
         if let (Some(h), Some(filename)) = (handler, filename) {
@@ -1070,7 +1072,7 @@ async fn stream_response_to_file_with_progress(
             }));
         }
     }
-    file.flush().await?;
+    file.flush()?;
     Ok(())
 }
 
@@ -1098,7 +1100,7 @@ impl HFRepository {
                 if let CommitOperation::Add { source, .. } = op {
                     total += match source {
                         AddSource::Bytes(b) => b.len() as u64,
-                        AddSource::File(p) => tokio::fs::metadata(p).await.map(|m| m.len()).unwrap_or(0),
+                        AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
                     };
                 }
             }
@@ -1234,9 +1236,8 @@ impl HFRepository {
     }
 
     async fn inline_base64_entry(path_in_repo: &str, source: &AddSource) -> HFResult<serde_json::Value> {
-        use base64::Engine;
         let content = match source {
-            AddSource::File(path) => tokio::fs::read(path).await?,
+            AddSource::File(path) => std::fs::read(path)?,
             AddSource::Bytes(bytes) => bytes.clone(),
         };
         let b64 = base64::engine::general_purpose::STANDARD.encode(&content);
@@ -1286,8 +1287,7 @@ impl HFRepository {
             &params.allow_patterns,
             &params.ignore_patterns,
             &mut operations,
-        )
-        .await?;
+        )?;
 
         if let Some(ref delete_patterns) = params.delete_patterns {
             let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
@@ -1436,7 +1436,7 @@ impl HFRepository {
         // Step 1: Gather file info (path, size, sample) for preupload check
         let mut file_infos: Vec<(String, u64, Vec<u8>, &AddSource)> = Vec::new();
         for (path_in_repo, source) in &add_ops {
-            let (size, sample) = read_size_and_sample(source).await?;
+            let (size, sample) = read_size_and_sample(source)?;
             file_infos.push(((*path_in_repo).clone(), size, sample, source));
         }
 
@@ -1485,8 +1485,6 @@ impl HFRepository {
         revision: &str,
         files: &[(&str, u64, &[u8])],
     ) -> HFResult<HashMap<String, String>> {
-        use base64::Engine;
-
         let url = format!("{}/preupload/{}", self.hf_client.api_url(repo_type, repo_id), revision);
 
         let files_payload: Vec<serde_json::Value> = files
@@ -1626,30 +1624,42 @@ impl HFRepository {
     }
 }
 
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
 async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
     match source {
         AddSource::Bytes(bytes) => {
             let hash = Sha256::digest(bytes);
-            Ok(format!("{:x}", hash))
+            Ok(hex_encode(&hash))
         },
         AddSource::File(path) => {
-            use tokio::io::AsyncReadExt;
-            let mut file = tokio::fs::File::open(path).await?;
-            let mut hasher = Sha256::new();
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                let n = file.read(&mut buf).await?;
-                if n == 0 {
-                    break;
+            let path = path.clone();
+            tokio::task::spawn_blocking(move || -> HFResult<String> {
+                let mut file = std::fs::File::open(&path)?;
+                let mut hasher = Sha256::new();
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    let n = file.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    hasher.update(&buf[..n]);
                 }
-                hasher.update(&buf[..n]);
-            }
-            Ok(format!("{:x}", hasher.finalize()))
+                Ok(hex_encode(&hasher.finalize()))
+            })
+            .await
+            .map_err(|e| HFError::Other(format!("sha256 task failed: {e}")))?
         },
     }
 }
 
-async fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
+fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
     match source {
         AddSource::Bytes(bytes) => {
             let size = bytes.len() as u64;
@@ -1657,12 +1667,11 @@ async fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
             Ok((size, sample))
         },
         AddSource::File(path) => {
-            use tokio::io::AsyncReadExt;
-            let mut file = tokio::fs::File::open(path).await?;
-            let metadata = file.metadata().await?;
+            let mut file = std::fs::File::open(path)?;
+            let metadata = file.metadata()?;
             let size = metadata.len();
             let mut sample = vec![0u8; 512];
-            let n = file.read(&mut sample).await?;
+            let n = file.read(&mut sample)?;
             sample.truncate(n);
             Ok((size, sample))
         },
@@ -1671,7 +1680,7 @@ async fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
 
 /// Recursively collect files from a directory into CommitOperation::Add entries.
 /// Respects allow_patterns and ignore_patterns (glob-style).
-async fn collect_files_recursive(
+fn collect_files_recursive(
     root: &Path,
     current: &Path,
     base_repo_path: &str,
@@ -1679,15 +1688,13 @@ async fn collect_files_recursive(
     ignore_patterns: &Option<Vec<String>>,
     operations: &mut Vec<CommitOperation>,
 ) -> HFResult<()> {
-    let mut entries = tokio::fs::read_dir(current).await?;
-
-    while let Some(entry) = entries.next_entry().await? {
+    for entry in std::fs::read_dir(current)? {
+        let entry = entry?;
         let path = entry.path();
-        let metadata = entry.metadata().await?;
+        let metadata = entry.metadata()?;
 
         if metadata.is_dir() {
-            Box::pin(collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations))
-                .await?;
+            collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations)?;
         } else if metadata.is_file() {
             let relative = path.strip_prefix(root).map_err(|e| HFError::Other(e.to_string()))?;
             let relative_str: String = relative

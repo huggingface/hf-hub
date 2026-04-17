@@ -1,6 +1,9 @@
 // Shared constants and helpers for integration tests.
 
+use std::fmt::Write as _;
 use std::sync::OnceLock;
+
+use sha2::{Digest, Sha256};
 
 // --- Environment variable names ---
 
@@ -44,6 +47,15 @@ pub fn resolve_hub_ci_token() -> Option<String> {
             }
         })
         .clone()
+}
+
+pub fn sha256_hex(data: &[u8]) -> String {
+    let hash = Sha256::digest(data);
+    let mut s = String::with_capacity(hash.len() * 2);
+    for b in hash.iter() {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Resolve a token for production access.

@@ -1,4 +1,5 @@
 use futures::Stream;
+use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::client::HFClient;
@@ -11,82 +12,54 @@ use crate::types::{
 };
 
 impl HFRepository {
-    /// Get info about a model repository.
-    /// Endpoint: GET /api/models/{repo_id} or /api/models/{repo_id}/revision/{revision}
+    /// Fetch repo info for this repository's `repo_type`, deserializing into `T`.
+    /// Endpoint: GET /api/{repo_type}s/{repo_id}[/revision/{revision}]
+    async fn fetch_repo_info<T: DeserializeOwned>(
+        &self,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> HFResult<T> {
+        let mut url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
+        if let Some(ref revision) = revision {
+            url = format!("{url}/revision/{revision}");
+        }
+        let mut request = self.hf_client.http_client().get(&url).headers(self.hf_client.auth_headers());
+        if let Some(ref expand) = expand {
+            let expand_params: Vec<(&str, &str)> = expand.iter().map(|v| ("expand", v.as_str())).collect();
+            request = request.query(&expand_params);
+        }
+        let response = request.send().await?;
+        let repo_path = self.repo_path();
+        let not_found_ctx = match revision {
+            Some(rev) => crate::error::NotFoundContext::Revision { revision: rev },
+            None => crate::error::NotFoundContext::Repo,
+        };
+        let response = self.hf_client.check_response(response, Some(&repo_path), not_found_ctx).await?;
+        Ok(response.json().await?)
+    }
+
     pub(crate) async fn model_info(
         &self,
         revision: Option<String>,
         expand: Option<Vec<String>>,
     ) -> HFResult<ModelInfo> {
-        let mut url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
-        if let Some(ref revision) = revision {
-            url = format!("{url}/revision/{revision}");
-        }
-        let mut request = self.hf_client.http_client().get(&url).headers(self.hf_client.auth_headers());
-        if let Some(ref expand) = expand {
-            let expand_params: Vec<(&str, &str)> = expand.iter().map(|v| ("expand", v.as_str())).collect();
-            request = request.query(&expand_params);
-        }
-        let response = request.send().await?;
-        let repo_path = self.repo_path();
-        let not_found_ctx = match revision {
-            Some(rev) => crate::error::NotFoundContext::Revision { revision: rev },
-            None => crate::error::NotFoundContext::Repo,
-        };
-        let response = self.hf_client.check_response(response, Some(&repo_path), not_found_ctx).await?;
-        Ok(response.json().await?)
+        self.fetch_repo_info(revision, expand).await
     }
 
-    /// Get info about a dataset repository.
-    /// Endpoint: GET /api/datasets/{repo_id} or /api/datasets/{repo_id}/revision/{revision}
     pub(crate) async fn dataset_info(
         &self,
         revision: Option<String>,
         expand: Option<Vec<String>>,
     ) -> HFResult<DatasetInfo> {
-        let mut url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
-        if let Some(ref revision) = revision {
-            url = format!("{url}/revision/{revision}");
-        }
-        let mut request = self.hf_client.http_client().get(&url).headers(self.hf_client.auth_headers());
-        if let Some(ref expand) = expand {
-            let expand_params: Vec<(&str, &str)> = expand.iter().map(|v| ("expand", v.as_str())).collect();
-            request = request.query(&expand_params);
-        }
-        let response = request.send().await?;
-        let repo_path = self.repo_path();
-        let not_found_ctx = match revision {
-            Some(rev) => crate::error::NotFoundContext::Revision { revision: rev },
-            None => crate::error::NotFoundContext::Repo,
-        };
-        let response = self.hf_client.check_response(response, Some(&repo_path), not_found_ctx).await?;
-        Ok(response.json().await?)
+        self.fetch_repo_info(revision, expand).await
     }
 
-    /// Get info about a space.
-    /// Endpoint: GET /api/spaces/{repo_id} or /api/spaces/{repo_id}/revision/{revision}
     pub(crate) async fn space_info(
         &self,
         revision: Option<String>,
         expand: Option<Vec<String>>,
     ) -> HFResult<SpaceInfo> {
-        let mut url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
-        if let Some(ref revision) = revision {
-            url = format!("{url}/revision/{revision}");
-        }
-        let mut request = self.hf_client.http_client().get(&url).headers(self.hf_client.auth_headers());
-        if let Some(ref expand) = expand {
-            let expand_params: Vec<(&str, &str)> = expand.iter().map(|v| ("expand", v.as_str())).collect();
-            request = request.query(&expand_params);
-        }
-        let response = request.send().await?;
-        let repo_path = self.repo_path();
-        let not_found_ctx = match revision {
-            Some(rev) => crate::error::NotFoundContext::Revision { revision: rev },
-            None => crate::error::NotFoundContext::Repo,
-        };
-        let response = self.hf_client.check_response(response, Some(&repo_path), not_found_ctx).await?;
-        Ok(response.json().await?)
+        self.fetch_repo_info(revision, expand).await
     }
 
     /// Return `true` if the repository exists and is accessible with the current credentials.

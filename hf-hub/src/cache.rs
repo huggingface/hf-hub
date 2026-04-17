@@ -15,7 +15,7 @@ pub(crate) struct CacheLock {
 pub(crate) async fn acquire_lock(cache_dir: &Path, repo_folder: &str, etag: &str) -> crate::error::HFResult<CacheLock> {
     let path = lock_path(cache_dir, repo_folder, etag);
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        std::fs::create_dir_all(parent)?;
     }
     let lock_path_clone = path.clone();
     let lock = tokio::time::timeout(
@@ -41,9 +41,9 @@ pub(crate) async fn write_ref(
 ) -> crate::error::HFResult<()> {
     let path = ref_path(cache_dir, repo_folder, revision);
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        std::fs::create_dir_all(parent)?;
     }
-    tokio::fs::write(&path, commit_hash).await?;
+    std::fs::write(&path, commit_hash)?;
     Ok(())
 }
 
@@ -53,7 +53,7 @@ pub(crate) async fn read_ref(
     revision: &str,
 ) -> crate::error::HFResult<Option<String>> {
     let path = ref_path(cache_dir, repo_folder, revision);
-    match tokio::fs::read_to_string(&path).await {
+    match std::fs::read_to_string(&path) {
         Ok(content) => Ok(Some(content.trim().to_string())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
@@ -73,16 +73,16 @@ pub(crate) async fn create_pointer_symlink(
 ) -> crate::error::HFResult<()> {
     let pointer = snapshot_path(cache_dir, repo_folder, commit_hash, filename);
     if let Some(parent) = pointer.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        std::fs::create_dir_all(parent)?;
     }
     let blob = blob_path(cache_dir, repo_folder, etag);
     let pointer_parent = pointer.parent().unwrap();
     let relative = pathdiff::diff_paths(&blob, pointer_parent).unwrap_or(blob);
-    let _ = tokio::fs::remove_file(&pointer).await;
+    let _ = std::fs::remove_file(&pointer);
 
     #[cfg(not(windows))]
     {
-        match tokio::fs::symlink(&relative, &pointer).await {
+        match std::os::unix::fs::symlink(&relative, &pointer) {
             Ok(()) => {},
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
             Err(e) => return Err(e.into()),
@@ -90,7 +90,7 @@ pub(crate) async fn create_pointer_symlink(
     }
     #[cfg(windows)]
     {
-        match tokio::fs::copy(&blob_path(cache_dir, repo_folder, etag), &pointer).await {
+        match std::fs::copy(&blob_path(cache_dir, repo_folder, etag), &pointer) {
             Ok(_) => {},
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
             Err(e) => return Err(e.into()),
@@ -140,18 +140,18 @@ fn parse_repo_folder_name(name: &str) -> Option<(RepoType, String)> {
     Some((repo_type, repo_id))
 }
 
-async fn read_commit_refs(repo_path: &Path) -> HashMap<String, Vec<String>> {
+fn read_commit_refs(repo_path: &Path) -> HashMap<String, Vec<String>> {
     let mut commit_refs: HashMap<String, Vec<String>> = HashMap::new();
     let refs_dir = repo_path.join("refs");
     let mut stack = vec![refs_dir.clone()];
     while let Some(dir) = stack.pop() {
-        if let Ok(mut ref_entries) = tokio::fs::read_dir(&dir).await {
-            while let Ok(Some(ref_entry)) = ref_entries.next_entry().await {
+        if let Ok(ref_entries) = std::fs::read_dir(&dir) {
+            for ref_entry in ref_entries.flatten() {
                 let entry_path = ref_entry.path();
                 if entry_path.is_dir() {
                     stack.push(entry_path);
                 } else if entry_path.is_file()
-                    && let Ok(content) = tokio::fs::read_to_string(&entry_path).await
+                    && let Ok(content) = std::fs::read_to_string(&entry_path)
                 {
                     let commit = content.trim().to_string();
                     let name = entry_path
@@ -173,13 +173,11 @@ struct BlobInfo {
     modified: SystemTime,
 }
 
-async fn resolve_blob_info(file_path: &Path) -> std::result::Result<BlobInfo, String> {
-    let resolved = tokio::fs::canonicalize(file_path)
-        .await
-        .map_err(|e| format!("Cannot resolve {}: {}", file_path.display(), e))?;
-    let meta = tokio::fs::metadata(&resolved)
-        .await
-        .map_err(|e| format!("Cannot read blob for {}: {}", file_path.display(), e))?;
+fn resolve_blob_info(file_path: &Path) -> std::result::Result<BlobInfo, String> {
+    let resolved =
+        std::fs::canonicalize(file_path).map_err(|e| format!("Cannot resolve {}: {}", file_path.display(), e))?;
+    let meta =
+        std::fs::metadata(&resolved).map_err(|e| format!("Cannot read blob for {}: {}", file_path.display(), e))?;
     Ok(BlobInfo {
         blob_path: resolved,
         size: meta.len(),
@@ -188,12 +186,12 @@ async fn resolve_blob_info(file_path: &Path) -> std::result::Result<BlobInfo, St
     })
 }
 
-async fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFileInfo> {
+fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFileInfo> {
     let mut files = Vec::new();
     let mut stack = vec![snap_path.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        if let Ok(mut dir_entries) = tokio::fs::read_dir(&dir).await {
-            while let Ok(Some(file_entry)) = dir_entries.next_entry().await {
+        if let Ok(dir_entries) = std::fs::read_dir(&dir) {
+            for file_entry in dir_entries.flatten() {
                 let file_path = file_entry.path();
                 if file_path.is_dir() {
                     stack.push(file_path);
@@ -206,7 +204,7 @@ async fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<Cach
                     .to_string_lossy()
                     .to_string();
 
-                let blob = match resolve_blob_info(&file_path).await {
+                let blob = match resolve_blob_info(&file_path) {
                     Ok(b) => b,
                     Err(msg) => {
                         warnings.push(msg);
@@ -233,7 +231,7 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
     let mut warnings = Vec::new();
     let mut total_size: u64 = 0;
 
-    let mut entries = match tokio::fs::read_dir(cache_dir).await {
+    let entries = match std::fs::read_dir(cache_dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Ok(HFCacheInfo {
@@ -246,7 +244,8 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         Err(e) => return Err(e.into()),
     };
 
-    while let Some(entry) = entries.next_entry().await? {
+    for entry in entries {
+        let entry = entry?;
         let folder_name = entry.file_name().to_string_lossy().to_string();
         let (repo_type, repo_id) = match parse_repo_folder_name(&folder_name) {
             Some(v) => v,
@@ -254,22 +253,22 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         };
 
         let repo_path = entry.path();
-        let commit_refs = read_commit_refs(&repo_path).await;
+        let commit_refs = read_commit_refs(&repo_path);
 
         let mut revisions = Vec::new();
         let mut repo_last_accessed = SystemTime::UNIX_EPOCH;
         let mut repo_last_modified = SystemTime::UNIX_EPOCH;
 
         let snapshots_dir = repo_path.join("snapshots");
-        if let Ok(mut snap_entries) = tokio::fs::read_dir(&snapshots_dir).await {
-            while let Ok(Some(snap_entry)) = snap_entries.next_entry().await {
+        if let Ok(snap_entries) = std::fs::read_dir(&snapshots_dir) {
+            for snap_entry in snap_entries.flatten() {
                 let snap_path = snap_entry.path();
                 if !snap_path.is_dir() {
                     continue;
                 }
 
                 let commit_hash = snap_entry.file_name().to_string_lossy().to_string();
-                let files = scan_snapshot(&snap_path, &mut warnings).await;
+                let files = scan_snapshot(&snap_path, &mut warnings);
 
                 let rev_size: u64 = files.iter().map(|f| f.size_on_disk).sum();
                 let rev_last_modified = files
@@ -448,15 +447,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path();
         let blob = blob_path(cache, "models--gpt2", "abc123");
-        tokio::fs::create_dir_all(blob.parent().unwrap()).await.unwrap();
-        tokio::fs::write(&blob, b"file content").await.unwrap();
+        std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        std::fs::write(&blob, b"file content").unwrap();
         create_pointer_symlink(cache, "models--gpt2", "def456", "config.json", "abc123")
             .await
             .unwrap();
         let pointer = snapshot_path(cache, "models--gpt2", "def456", "config.json");
         assert!(pointer.exists());
         assert!(pointer.symlink_metadata().unwrap().file_type().is_symlink());
-        let content = tokio::fs::read_to_string(&pointer).await.unwrap();
+        let content = std::fs::read_to_string(&pointer).unwrap();
         assert_eq!(content, "file content");
     }
 
@@ -466,8 +465,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path();
         let blob = blob_path(cache, "models--gpt2", "abc123");
-        tokio::fs::create_dir_all(blob.parent().unwrap()).await.unwrap();
-        tokio::fs::write(&blob, b"nested content").await.unwrap();
+        std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        std::fs::write(&blob, b"nested content").unwrap();
         create_pointer_symlink(cache, "models--gpt2", "def456", "subdir/model.bin", "abc123")
             .await
             .unwrap();
@@ -476,7 +475,7 @@ mod tests {
         assert!(pointer.symlink_metadata().unwrap().file_type().is_symlink());
         let target = std::fs::read_link(&pointer).unwrap();
         assert!(target.to_string_lossy().contains("blobs"));
-        let content = tokio::fs::read_to_string(&pointer).await.unwrap();
+        let content = std::fs::read_to_string(&pointer).unwrap();
         assert_eq!(content, "nested content");
     }
 
@@ -541,18 +540,16 @@ mod tests {
         let cache = dir.path();
         let repo_folder = "models--gpt2";
         let blob_dir = cache.join(repo_folder).join("blobs");
-        tokio::fs::create_dir_all(&blob_dir).await.unwrap();
-        tokio::fs::write(blob_dir.join("abc123"), b"hello world").await.unwrap();
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        std::fs::write(blob_dir.join("abc123"), b"hello world").unwrap();
 
         let snap_dir = cache.join(repo_folder).join("snapshots").join("commit1");
-        tokio::fs::create_dir_all(&snap_dir).await.unwrap();
-        tokio::fs::symlink("../../blobs/abc123", snap_dir.join("file.txt"))
-            .await
-            .unwrap();
+        std::fs::create_dir_all(&snap_dir).unwrap();
+        std::os::unix::fs::symlink("../../blobs/abc123", snap_dir.join("file.txt")).unwrap();
 
         let refs_dir = cache.join(repo_folder).join("refs");
-        tokio::fs::create_dir_all(&refs_dir).await.unwrap();
-        tokio::fs::write(refs_dir.join("main"), "commit1").await.unwrap();
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::write(refs_dir.join("main"), "commit1").unwrap();
 
         let result = scan_cache_dir(cache).await.unwrap();
         assert_eq!(result.repos.len(), 1);
@@ -574,15 +571,15 @@ mod tests {
         let refs_dir = repo_path.join("refs");
 
         // Create a regular ref
-        tokio::fs::create_dir_all(&refs_dir).await.unwrap();
-        tokio::fs::write(refs_dir.join("main"), "commit1").await.unwrap();
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::write(refs_dir.join("main"), "commit1").unwrap();
 
         // Create a nested PR ref
         let pr_dir = refs_dir.join("refs").join("pr");
-        tokio::fs::create_dir_all(&pr_dir).await.unwrap();
-        tokio::fs::write(pr_dir.join("1"), "commit2").await.unwrap();
+        std::fs::create_dir_all(&pr_dir).unwrap();
+        std::fs::write(pr_dir.join("1"), "commit2").unwrap();
 
-        let refs = read_commit_refs(&repo_path).await;
+        let refs = read_commit_refs(&repo_path);
         assert_eq!(refs.get("commit1").unwrap(), &vec!["main".to_string()]);
         assert_eq!(refs.get("commit2").unwrap(), &vec!["refs/pr/1".to_string()]);
     }
@@ -595,20 +592,16 @@ mod tests {
         let repo_folder = "models--gpt2";
 
         let blob_dir = cache.join(repo_folder).join("blobs");
-        tokio::fs::create_dir_all(&blob_dir).await.unwrap();
+        std::fs::create_dir_all(&blob_dir).unwrap();
         let blob_content = vec![0u8; 100];
-        tokio::fs::write(blob_dir.join("shared_blob"), &blob_content).await.unwrap();
+        std::fs::write(blob_dir.join("shared_blob"), &blob_content).unwrap();
 
         let snap1 = cache.join(repo_folder).join("snapshots").join("commit1");
         let snap2 = cache.join(repo_folder).join("snapshots").join("commit2");
-        tokio::fs::create_dir_all(&snap1).await.unwrap();
-        tokio::fs::create_dir_all(&snap2).await.unwrap();
-        tokio::fs::symlink("../../blobs/shared_blob", snap1.join("file.txt"))
-            .await
-            .unwrap();
-        tokio::fs::symlink("../../blobs/shared_blob", snap2.join("file.txt"))
-            .await
-            .unwrap();
+        std::fs::create_dir_all(&snap1).unwrap();
+        std::fs::create_dir_all(&snap2).unwrap();
+        std::os::unix::fs::symlink("../../blobs/shared_blob", snap1.join("file.txt")).unwrap();
+        std::os::unix::fs::symlink("../../blobs/shared_blob", snap2.join("file.txt")).unwrap();
 
         let result = scan_cache_dir(cache).await.unwrap();
         assert_eq!(result.repos.len(), 1);

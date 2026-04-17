@@ -22,8 +22,7 @@ use hf_hub::types::{
     RepoFileExistsParams, RepoUploadFileParams,
 };
 use hf_hub::{HFClient, HFClientBuilder, HFRepository};
-use rand::Rng;
-use sha2::{Digest, Sha256};
+use rand::RngExt;
 use tokio::sync::OnceCell;
 
 static WHOAMI_USERNAME: OnceCell<String> = OnceCell::const_new();
@@ -100,11 +99,6 @@ fn generate_random_bytes(size: usize) -> Vec<u8> {
     let mut data = vec![0u8; size];
     rng.fill(&mut data[..]);
     data
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    let hash = Sha256::digest(data);
-    format!("{:x}", hash)
 }
 
 // --- Small file tests (inline NDJSON, no xet needed) ---

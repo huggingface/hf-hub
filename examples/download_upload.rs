@@ -10,13 +10,14 @@
 //! Read operations require no auth. Write operations require HF_TOKEN.
 //! Run: cargo run -p examples --example download_upload
 
+use std::io::Write;
+
 use futures::StreamExt;
 use hf_hub::HFClient;
 use hf_hub::types::{
     AddSource, CreateRepoParams, DeleteRepoParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
     RepoSnapshotDownloadParams, RepoUploadFileParams, RepoUploadFolderParams,
 };
-use tokio::io::AsyncWriteExt;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -69,14 +70,14 @@ async fn main() -> hf_hub::HFResult<()> {
     );
 
     let stream_dest = tmp_dir.path().join("config_streamed.json");
-    let mut file = tokio::fs::File::create(&stream_dest).await?;
+    let mut file = std::fs::File::create(&stream_dest)?;
     let mut total = 0u64;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         total += chunk.len() as u64;
-        file.write_all(&chunk).await?;
+        file.write_all(&chunk)?;
     }
-    file.flush().await?;
+    file.flush()?;
     println!("Streamed {total} bytes to {}", stream_dest.display());
 
     // --- Download as stream and process in memory ---

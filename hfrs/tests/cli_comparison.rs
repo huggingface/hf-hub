@@ -1,6 +1,8 @@
 mod helpers;
 
 use std::sync::OnceLock;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 use helpers::{CliRunner, require_cli, require_token, require_write};
 
@@ -2130,8 +2132,6 @@ fn exit_codes() {
 #[cfg(unix)]
 #[test]
 fn signal_abort_during_xet_upload() {
-    use std::time::{Duration, Instant};
-
     require_token();
     require_write();
     let hfrs = CliRunner::hfrs_ci();
@@ -2194,8 +2194,6 @@ fn signal_abort_during_xet_upload() {
 #[cfg(unix)]
 #[test]
 fn signal_abort_during_xet_download() {
-    use std::time::{Duration, Instant};
-
     require_token();
     require_write();
     let hfrs = CliRunner::hfrs_ci();

@@ -13,8 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hf_hub::test_utils::*;
 use hf_hub::types::{BucketSyncAction, BucketSyncDirection, BucketSyncParams, CreateBucketParams};
 use hf_hub::{HFClient, HFClientBuilder};
-use rand::Rng;
-use sha2::{Digest, Sha256};
+use rand::RngExt;
 use tokio::sync::OnceCell;
 
 static WHOAMI_USERNAME: OnceCell<String> = OnceCell::const_new();
@@ -89,10 +88,6 @@ fn generate_random_bin(dir: &std::path::Path) -> Vec<u8> {
     rng.fill(&mut data[..]);
     std::fs::write(dir.join("d.bin"), &data).unwrap();
     data
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(data))
 }
 
 #[tokio::test]
