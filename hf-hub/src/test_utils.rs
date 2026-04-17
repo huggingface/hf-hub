@@ -38,15 +38,25 @@ pub fn write_enabled() -> bool {
 /// CI: uses HF_CI_TOKEN. Local: uses HF_TOKEN.
 pub fn resolve_hub_ci_token() -> Option<String> {
     static VALUE: OnceLock<Option<String>> = OnceLock::new();
-    VALUE
-        .get_or_init(|| {
-            if is_ci() {
-                std::env::var(HF_CI_TOKEN).ok()
-            } else {
-                std::env::var(HF_TOKEN).ok()
-            }
-        })
-        .clone()
+    resolve_token(&VALUE, HF_CI_TOKEN)
+}
+
+/// Resolve a token for production access.
+/// CI: uses HF_PROD_TOKEN. Local: uses HF_TOKEN.
+pub fn resolve_prod_token() -> Option<String> {
+    static VALUE: OnceLock<Option<String>> = OnceLock::new();
+    resolve_token(&VALUE, HF_PROD_TOKEN)
+}
+
+fn resolve_token(once: &OnceLock<Option<String>>, env_var_name: &str) -> Option<String> {
+    once.get_or_init(|| {
+        if is_ci() {
+            std::env::var(env_var_name).ok()
+        } else {
+            std::env::var(HF_TOKEN).ok()
+        }
+    })
+    .clone()
 }
 
 pub fn sha256_hex(data: &[u8]) -> String {
@@ -56,19 +66,4 @@ pub fn sha256_hex(data: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
-}
-
-/// Resolve a token for production access.
-/// CI: uses HF_PROD_TOKEN. Local: uses HF_TOKEN.
-pub fn resolve_prod_token() -> Option<String> {
-    static VALUE: OnceLock<Option<String>> = OnceLock::new();
-    VALUE
-        .get_or_init(|| {
-            if is_ci() {
-                std::env::var(HF_PROD_TOKEN).ok()
-            } else {
-                std::env::var(HF_TOKEN).ok()
-            }
-        })
-        .clone()
 }
