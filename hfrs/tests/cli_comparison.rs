@@ -1401,13 +1401,21 @@ fn download_non_writable_location() {
     require_token();
     let hfrs = CliRunner::hfrs();
 
+    // Use a path where a parent component is actually a regular file, so
+    // create_dir_all fails on every OS (Unix-style "/nonexistent_root_dir"
+    // is writable on Windows runners because it resolves to C:\...).
+    let tmp = tempfile::tempdir().unwrap();
+    let blocking_file = tmp.path().join("not_a_dir");
+    std::fs::write(&blocking_file, b"x").unwrap();
+    let bad_local_dir = blocking_file.join("download");
+
     let (code, stderr) = hfrs
         .run_expecting_failure(&[
             "download",
             TEST_MODEL_REPO,
             "config.json",
             "--local-dir",
-            "/nonexistent_root_dir/download",
+            bad_local_dir.to_str().unwrap(),
         ])
         .unwrap();
     assert_ne!(code, 0, "download to non-writable location should fail");
