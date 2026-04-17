@@ -447,9 +447,7 @@ mod tests {
 
     #[test]
     fn format_eta_formats_duration() {
-        let s = format_eta(1_000_000, Some(1_000_000.0));
-        assert!(s.contains('s'), "expected seconds in {s}");
-        assert!(!s.contains("year"), "must never render as years, got {s}");
+        assert_eq!(format_eta(1_000_000, Some(1_000_000.0)), "1 second");
     }
 
     #[test]
