@@ -73,6 +73,9 @@ fn format_rate(bytes_per_sec: Option<f64>) -> String {
     }
 }
 
+/// Hard cap: if the computed ETA is longer than this, show "--" instead.
+/// Protects against the "ETA in years" display when the upstream rate
+/// dips toward zero between progress events.
 const MAX_REASONABLE_ETA_SECS: u64 = 24 * 60 * 60;
 
 fn format_eta(remaining_bytes: u64, bytes_per_sec: Option<f64>) -> String {
