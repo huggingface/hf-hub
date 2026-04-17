@@ -243,7 +243,6 @@ impl CliProgressHandler {
                 transfer_bytes,
                 transfer_bytes_per_sec,
                 files,
-                ..
             } => {
                 if state.last_upload_phase.as_ref() != Some(phase) {
                     if let Some(ref spinner) = state.spinner {
@@ -307,6 +306,8 @@ impl CliProgressHandler {
                     }
 
                     if let Some(ref bar) = state.transfer_bar {
+                        // No file count here: transfer bytes are post-dedup,
+                        // so they don't map 1:1 to files.
                         bar.set_length(*transfer_bytes);
                         bar.set_position(*transfer_bytes_completed);
                         let remaining = transfer_bytes.saturating_sub(*transfer_bytes_completed);
