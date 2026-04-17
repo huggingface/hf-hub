@@ -6,22 +6,23 @@ use futures::StreamExt;
 use globset::{Glob, GlobMatcher};
 
 use crate::bucket::HFBucket;
-use crate::error::{HFError, Result};
+use crate::error::{HFError, HFResult};
 use crate::types::progress::{self, DownloadEvent, ProgressEvent};
 use crate::types::{
-    BucketSyncParams, BucketTreeEntry, ListBucketTreeParams, SyncAction, SyncDirection, SyncOperation, SyncPlan,
+    BucketSyncAction, BucketSyncDirection, BucketSyncOperation, BucketSyncParams, BucketSyncPlan, BucketTreeEntry,
+    ListBucketTreeParams,
 };
 
 const SYNC_TIME_WINDOW_MS: f64 = 1000.0;
 
-fn validate_params(params: &BucketSyncParams) -> Result<()> {
+fn validate_params(params: &BucketSyncParams) -> HFResult<()> {
     if params.ignore_times && params.ignore_sizes {
         return Err(HFError::InvalidParameter("cannot use both --ignore-times and --ignore-sizes".to_string()));
     }
     if params.existing && params.ignore_existing {
         return Err(HFError::InvalidParameter("cannot use both --existing and --ignore-existing".to_string()));
     }
-    if params.direction == SyncDirection::Upload && !params.local_path.is_dir() {
+    if params.direction == BucketSyncDirection::Upload && !params.local_path.is_dir() {
         return Err(HFError::InvalidParameter(format!(
             "local path must be an existing directory for upload: {}",
             params.local_path.display()
@@ -30,7 +31,7 @@ fn validate_params(params: &BucketSyncParams) -> Result<()> {
     Ok(())
 }
 
-fn compile_patterns(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
+fn compile_patterns(patterns: &[String]) -> HFResult<Vec<GlobMatcher>> {
     patterns
         .iter()
         .map(|p| {
@@ -58,7 +59,7 @@ fn matches_filters(path: &str, include: &[GlobMatcher], exclude: &[GlobMatcher])
     false
 }
 
-fn list_local_files(root: &Path) -> Result<HashMap<String, (u64, f64)>> {
+fn list_local_files(root: &Path) -> HFResult<HashMap<String, (u64, f64)>> {
     let mut result = HashMap::new();
     let mut stack = vec![root.to_path_buf()];
 
@@ -195,10 +196,10 @@ fn compare_files(
     dest_size: u64,
     dest_mtime: f64,
     params: &BucketSyncParams,
-) -> Option<SyncOperation> {
+) -> Option<BucketSyncOperation> {
     let action = match role {
-        CompareRole::Upload => SyncAction::Upload,
-        CompareRole::Download => SyncAction::Download,
+        CompareRole::Upload => BucketSyncAction::Upload,
+        CompareRole::Download => BucketSyncAction::Download,
     };
 
     let source_newer = (source_mtime - dest_mtime) > SYNC_TIME_WINDOW_MS;
@@ -216,8 +217,8 @@ fn compare_files(
 
     if params.ignore_existing {
         if params.verbose {
-            return Some(SyncOperation {
-                action: SyncAction::Skip,
+            return Some(BucketSyncOperation {
+                action: BucketSyncAction::Skip,
                 path,
                 size: Some(source_size),
                 reason: "exists on receiver (--ignore-existing)".to_string(),
@@ -228,7 +229,7 @@ fn compare_files(
 
     if params.ignore_sizes {
         if source_newer {
-            return Some(SyncOperation {
+            return Some(BucketSyncOperation {
                 action,
                 path,
                 size: Some(source_size),
@@ -241,8 +242,8 @@ fn compare_files(
             "same mtime".to_string()
         };
         if params.verbose {
-            return Some(SyncOperation {
-                action: SyncAction::Skip,
+            return Some(BucketSyncOperation {
+                action: BucketSyncAction::Skip,
                 path,
                 size: Some(source_size),
                 reason,
@@ -253,7 +254,7 @@ fn compare_files(
 
     if params.ignore_times {
         if size_differs {
-            return Some(SyncOperation {
+            return Some(BucketSyncOperation {
                 action,
                 path,
                 size: Some(source_size),
@@ -261,8 +262,8 @@ fn compare_files(
             });
         }
         if params.verbose {
-            return Some(SyncOperation {
-                action: SyncAction::Skip,
+            return Some(BucketSyncOperation {
+                action: BucketSyncAction::Skip,
                 path,
                 size: Some(source_size),
                 reason: "same size".to_string(),
@@ -277,7 +278,7 @@ fn compare_files(
         } else {
             source_label.to_string()
         };
-        return Some(SyncOperation {
+        return Some(BucketSyncOperation {
             action,
             path,
             size: Some(source_size),
@@ -286,8 +287,8 @@ fn compare_files(
     }
 
     if params.verbose {
-        return Some(SyncOperation {
-            action: SyncAction::Skip,
+        return Some(BucketSyncOperation {
+            action: BucketSyncAction::Skip,
             path,
             size: Some(source_size),
             reason: "identical".to_string(),
@@ -302,7 +303,7 @@ impl HFBucket {
         prefix: &Option<String>,
         include: &[GlobMatcher],
         exclude: &[GlobMatcher],
-    ) -> Result<(HashMap<String, (u64, f64)>, HashMap<String, BucketTreeEntry>)> {
+    ) -> HFResult<(HashMap<String, (u64, f64)>, HashMap<String, BucketTreeEntry>)> {
         let tree_params = ListBucketTreeParams {
             prefix: prefix.clone(),
             recursive: Some(true),
@@ -343,7 +344,7 @@ impl HFBucket {
         local_files: &HashMap<String, (u64, f64)>,
         remote_files: &HashMap<String, (u64, f64)>,
         params: &BucketSyncParams,
-    ) -> SyncPlan {
+    ) -> BucketSyncPlan {
         let mut all_keys = BTreeSet::new();
         all_keys.extend(local_files.keys().cloned());
         all_keys.extend(remote_files.keys().cloned());
@@ -357,8 +358,8 @@ impl HFBucket {
             if in_local && !in_remote {
                 if params.existing {
                     if params.verbose {
-                        operations.push(SyncOperation {
-                            action: SyncAction::Skip,
+                        operations.push(BucketSyncOperation {
+                            action: BucketSyncAction::Skip,
                             path: key.clone(),
                             size: local_files.get(key).map(|(s, _)| *s),
                             reason: "not on receiver (--existing)".to_string(),
@@ -366,8 +367,8 @@ impl HFBucket {
                     }
                 } else {
                     let (size, _) = local_files[key];
-                    operations.push(SyncOperation {
-                        action: SyncAction::Upload,
+                    operations.push(BucketSyncOperation {
+                        action: BucketSyncAction::Upload,
                         path: key.clone(),
                         size: Some(size),
                         reason: "new file".to_string(),
@@ -389,8 +390,8 @@ impl HFBucket {
                 }
             } else if !in_local && in_remote && params.delete {
                 let (size, _) = remote_files[key];
-                operations.push(SyncOperation {
-                    action: SyncAction::Delete,
+                operations.push(BucketSyncOperation {
+                    action: BucketSyncAction::Delete,
                     path: key.clone(),
                     size: Some(size),
                     reason: "not in source (--delete)".to_string(),
@@ -398,8 +399,8 @@ impl HFBucket {
             }
         }
 
-        SyncPlan {
-            direction: SyncDirection::Upload,
+        BucketSyncPlan {
+            direction: BucketSyncDirection::Upload,
             operations,
             download_entries: HashMap::new(),
         }
@@ -411,7 +412,7 @@ impl HFBucket {
         remote_files: &HashMap<String, (u64, f64)>,
         remote_entries: &HashMap<String, BucketTreeEntry>,
         params: &BucketSyncParams,
-    ) -> SyncPlan {
+    ) -> BucketSyncPlan {
         let mut all_keys = BTreeSet::new();
         all_keys.extend(local_files.keys().cloned());
         all_keys.extend(remote_files.keys().cloned());
@@ -426,8 +427,8 @@ impl HFBucket {
             if in_remote && !in_local {
                 if params.existing {
                     if params.verbose {
-                        operations.push(SyncOperation {
-                            action: SyncAction::Skip,
+                        operations.push(BucketSyncOperation {
+                            action: BucketSyncAction::Skip,
                             path: key.clone(),
                             size: remote_files.get(key).map(|(s, _)| *s),
                             reason: "not on receiver (--existing)".to_string(),
@@ -435,8 +436,8 @@ impl HFBucket {
                     }
                 } else {
                     let (size, _) = remote_files[key];
-                    operations.push(SyncOperation {
-                        action: SyncAction::Download,
+                    operations.push(BucketSyncOperation {
+                        action: BucketSyncAction::Download,
                         path: key.clone(),
                         size: Some(size),
                         reason: "new file".to_string(),
@@ -457,7 +458,7 @@ impl HFBucket {
                     local_mtime,
                     params,
                 ) {
-                    if op.action == SyncAction::Download
+                    if op.action == BucketSyncAction::Download
                         && let Some(entry) = remote_entries.get(key)
                     {
                         download_entries.insert(key.clone(), entry.clone());
@@ -466,8 +467,8 @@ impl HFBucket {
                 }
             } else if in_local && !in_remote && params.delete {
                 let (size, _) = local_files[key];
-                operations.push(SyncOperation {
-                    action: SyncAction::Delete,
+                operations.push(BucketSyncOperation {
+                    action: BucketSyncAction::Delete,
                     path: key.clone(),
                     size: Some(size),
                     reason: "not in source (--delete)".to_string(),
@@ -475,18 +476,18 @@ impl HFBucket {
             }
         }
 
-        SyncPlan {
-            direction: SyncDirection::Download,
+        BucketSyncPlan {
+            direction: BucketSyncDirection::Download,
             operations,
             download_entries,
         }
     }
 
-    async fn execute_upload_plan(&self, plan: &SyncPlan, params: &BucketSyncParams) -> Result<()> {
+    async fn execute_upload_plan(&self, plan: &BucketSyncPlan, params: &BucketSyncParams) -> HFResult<()> {
         let upload_files: Vec<(PathBuf, String)> = plan
             .operations
             .iter()
-            .filter(|op| op.action == SyncAction::Upload)
+            .filter(|op| op.action == BucketSyncAction::Upload)
             .map(|op| {
                 let local_path = params.local_path.join(&op.path);
                 let remote_path = match &params.prefix {
@@ -500,7 +501,7 @@ impl HFBucket {
         let delete_paths: Vec<String> = plan
             .operations
             .iter()
-            .filter(|op| op.action == SyncAction::Delete)
+            .filter(|op| op.action == BucketSyncAction::Delete)
             .map(|op| match &params.prefix {
                 Some(prefix) => format!("{prefix}/{}", op.path),
                 None => op.path.clone(),
@@ -517,11 +518,11 @@ impl HFBucket {
         Ok(())
     }
 
-    async fn execute_download_plan(&self, plan: &SyncPlan, params: &BucketSyncParams) -> Result<()> {
+    async fn execute_download_plan(&self, plan: &BucketSyncPlan, params: &BucketSyncParams) -> HFResult<()> {
         let mut xet_batch_files = Vec::new();
         let mut total_bytes: u64 = 0;
 
-        for op in plan.operations.iter().filter(|op| op.action == SyncAction::Download) {
+        for op in plan.operations.iter().filter(|op| op.action == BucketSyncAction::Download) {
             let entry = plan.download_entries.get(&op.path).ok_or_else(|| HFError::EntryNotFound {
                 path: op.path.clone(),
                 repo_id: self.bucket_id(),
@@ -567,7 +568,7 @@ impl HFBucket {
         let delete_paths: Vec<&str> = plan
             .operations
             .iter()
-            .filter(|op| op.action == SyncAction::Delete)
+            .filter(|op| op.action == BucketSyncAction::Delete)
             .map(|op| op.path.as_str())
             .collect();
 
@@ -606,7 +607,7 @@ impl HFBucket {
         Ok(())
     }
 
-    pub async fn sync(&self, params: &BucketSyncParams) -> Result<SyncPlan> {
+    pub async fn sync(&self, params: &BucketSyncParams) -> HFResult<BucketSyncPlan> {
         validate_params(params)?;
 
         let include = compile_patterns(&params.include)?;
@@ -615,7 +616,7 @@ impl HFBucket {
         let (remote_files, remote_entries) = self.list_remote_files(&params.prefix, &include, &exclude).await?;
 
         match params.direction {
-            SyncDirection::Upload => {
+            BucketSyncDirection::Upload => {
                 let all_local = list_local_files(&params.local_path)?;
                 let local_files: HashMap<String, (u64, f64)> = all_local
                     .into_iter()
@@ -626,7 +627,7 @@ impl HFBucket {
                 self.execute_upload_plan(&plan, params).await?;
                 Ok(plan)
             },
-            SyncDirection::Download => {
+            BucketSyncDirection::Download => {
                 std::fs::create_dir_all(&params.local_path)?;
 
                 let all_local = list_local_files(&params.local_path)?;
@@ -645,7 +646,7 @@ impl HFBucket {
 
 sync_api! {
     impl HFBucket -> HFBucketSync {
-        fn sync(&self, params: &BucketSyncParams) -> Result<SyncPlan>;
+        fn sync(&self, params: &BucketSyncParams) -> HFResult<BucketSyncPlan>;
     }
 }
 
@@ -746,7 +747,7 @@ mod tests {
     fn test_validate_params_conflicting_times_sizes() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Download)
+            .direction(BucketSyncDirection::Download)
             .ignore_times(true)
             .ignore_sizes(true)
             .build();
@@ -757,7 +758,7 @@ mod tests {
     fn test_validate_params_conflicting_existing() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Download)
+            .direction(BucketSyncDirection::Download)
             .existing(true)
             .ignore_existing(true)
             .build();
@@ -768,12 +769,12 @@ mod tests {
     fn test_compare_files_identical() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Upload)
+            .direction(BucketSyncDirection::Upload)
             .verbose(true)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 5000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Skip);
+        assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "identical");
     }
 
@@ -781,7 +782,7 @@ mod tests {
     fn test_compare_files_identical_not_verbose() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Upload)
+            .direction(BucketSyncDirection::Upload)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 5000.0, 100, 5000.0, &params);
@@ -792,11 +793,11 @@ mod tests {
     fn test_compare_files_size_differs() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Upload)
+            .direction(BucketSyncDirection::Upload)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Upload, 200, 5000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Upload);
+        assert_eq!(op.action, BucketSyncAction::Upload);
         assert_eq!(op.reason, "size differs");
     }
 
@@ -804,11 +805,11 @@ mod tests {
     fn test_compare_files_source_newer() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Upload)
+            .direction(BucketSyncDirection::Upload)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 7000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Upload);
+        assert_eq!(op.action, BucketSyncAction::Upload);
         assert_eq!(op.reason, "local newer");
     }
 
@@ -816,11 +817,11 @@ mod tests {
     fn test_compare_files_download_source_newer() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Download)
+            .direction(BucketSyncDirection::Download)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Download, 100, 7000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Download);
+        assert_eq!(op.action, BucketSyncAction::Download);
         assert_eq!(op.reason, "remote newer");
     }
 
@@ -828,12 +829,12 @@ mod tests {
     fn test_compare_files_within_safety_window() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Upload)
+            .direction(BucketSyncDirection::Upload)
             .verbose(true)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 5500.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Skip);
+        assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "identical");
     }
 
@@ -841,17 +842,17 @@ mod tests {
     fn test_compare_files_ignore_times() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Upload)
+            .direction(BucketSyncDirection::Upload)
             .ignore_times(true)
             .verbose(true)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 9000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Skip);
+        assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "same size");
 
         let op = compare_files(String::new(), CompareRole::Upload, 200, 5000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Upload);
+        assert_eq!(op.action, BucketSyncAction::Upload);
         assert_eq!(op.reason, "size differs");
     }
 
@@ -859,17 +860,17 @@ mod tests {
     fn test_compare_files_ignore_sizes() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Upload)
+            .direction(BucketSyncDirection::Upload)
             .ignore_sizes(true)
             .verbose(true)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Upload, 200, 5000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Skip);
+        assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "same mtime");
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 3000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Skip);
+        assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "remote newer");
     }
 
@@ -877,13 +878,13 @@ mod tests {
     fn test_compare_files_ignore_sizes_download() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Download)
+            .direction(BucketSyncDirection::Download)
             .ignore_sizes(true)
             .verbose(true)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Download, 100, 3000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Skip);
+        assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "local newer");
     }
 
@@ -891,13 +892,13 @@ mod tests {
     fn test_compare_files_ignore_existing() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Upload)
+            .direction(BucketSyncDirection::Upload)
             .ignore_existing(true)
             .verbose(true)
             .build();
 
         let op = compare_files(String::new(), CompareRole::Upload, 200, 9000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, SyncAction::Skip);
+        assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "exists on receiver (--ignore-existing)");
     }
 
@@ -905,7 +906,7 @@ mod tests {
     fn test_compare_files_ignore_existing_not_verbose() {
         let params = BucketSyncParams::builder()
             .local_path(PathBuf::from("/tmp"))
-            .direction(SyncDirection::Upload)
+            .direction(BucketSyncDirection::Upload)
             .ignore_existing(true)
             .build();
 

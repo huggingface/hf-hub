@@ -6,19 +6,20 @@
 //! Requires HF_TOKEN environment variable.
 //! Run: cargo run -p examples --features blocking --example blocking_read
 
-use hf_hub::{
-    HFClientSync, ListDatasetsParams, ListModelsParams, RepoDownloadFileParams, RepoGetPathsInfoParams, RepoInfo,
-    RepoInfoParams, RepoListCommitsParams, RepoListFilesParams, RepoListTreeParams, RepoTreeEntry,
+use hf_hub::HFClientSync;
+use hf_hub::types::{
+    ListDatasetsParams, ListModelsParams, RepoDownloadFileParams, RepoGetPathsInfoParams, RepoInfo, RepoInfoParams,
+    RepoListCommitsParams, RepoListFilesParams, RepoListTreeParams, RepoTreeEntry,
 };
 
-fn main() -> hf_hub::Result<()> {
-    let api = HFClientSync::new()?;
+fn main() -> hf_hub::HFResult<()> {
+    let client = HFClientSync::new()?;
 
     // --- Repo info ---
 
-    let model = api.model("openai-community", "gpt2");
-    let dataset = api.dataset("rajpurkar", "squad");
-    let space = api.space("huggingface", "transformers-benchmarks");
+    let model = client.model("openai-community", "gpt2");
+    let dataset = client.dataset("rajpurkar", "squad");
+    let space = client.space("huggingface", "transformers-benchmarks");
 
     match model.info(&RepoInfoParams::default())? {
         RepoInfo::Model(info) => println!("Model: {} (downloads: {:?})", info.id, info.downloads),
@@ -40,13 +41,13 @@ fn main() -> hf_hub::Result<()> {
 
     // --- Listing (streams collected to Vec) ---
 
-    let models = api.list_models(&ListModelsParams::builder().author("openai").build())?;
+    let models = client.list_models(&ListModelsParams::builder().author("openai").build())?;
     println!("\nModels by openai ({} total):", models.len());
     for m in models.iter().take(3) {
         println!("  - {}", m.id);
     }
 
-    let datasets = api.list_datasets(&ListDatasetsParams::builder().search("squad").build())?;
+    let datasets = client.list_datasets(&ListDatasetsParams::builder().search("squad").build())?;
     println!("\nDatasets matching 'squad' ({} total):", datasets.len());
     for ds in datasets.iter().take(3) {
         println!("  - {}", ds.id);
@@ -95,22 +96,22 @@ fn main() -> hf_hub::Result<()> {
 
     // --- Users ---
 
-    let me = api.whoami()?;
+    let me = client.whoami()?;
     println!("\nLogged in as: {}", me.username);
 
-    let user = api.get_user_overview("julien-c")?;
+    let user = client.get_user_overview("julien-c")?;
     println!("User: {} (fullname: {:?})", user.username, user.fullname);
 
-    let org = api.get_organization_overview("huggingface")?;
+    let org = client.get_organization_overview("huggingface")?;
     println!("Org: {} (fullname: {:?})", org.name, org.fullname);
 
-    let followers = api.list_user_followers("julien-c", None)?;
+    let followers = client.list_user_followers("julien-c", None)?;
     println!("\nFollowers of julien-c ({} total):", followers.len());
     for u in followers.iter().take(3) {
         println!("  - {}", u.username);
     }
 
-    let members = api.list_organization_members("huggingface", None)?;
+    let members = client.list_organization_members("huggingface", None)?;
     println!("\nMembers of huggingface ({} total):", members.len());
     for m in members.iter().take(3) {
         println!("  - {}", m.username);

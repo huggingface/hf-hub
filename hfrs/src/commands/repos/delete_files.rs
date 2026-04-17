@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use globset::Glob;
-use hf_hub::{CommitOperation, HFClient, RepoCreateCommitParams, RepoListFilesParams};
+use hf_hub::HFClient;
+use hf_hub::types::{CommitOperation, RepoCreateCommitParams, RepoListFilesParams};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -37,9 +38,9 @@ pub struct Args {
     pub create_pr: bool,
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(api, &args.repo_id, repo_type);
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
+    let repo_type: hf_hub::types::RepoType = args.r#type.into();
+    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
 
     let list_params = RepoListFilesParams {
         revision: args.revision.clone(),

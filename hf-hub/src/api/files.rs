@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 use url::Url;
 
-use crate::error::{HFError, Result};
+use crate::error::{HFError, HFResult};
 use crate::repository::HFRepository;
 use crate::types::progress::{
     self, DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, UploadEvent, UploadPhase,
@@ -24,7 +24,7 @@ use crate::{cache, constants};
 
 impl HFRepository {
     /// Return a flat list of all file paths in the repository at the given revision.
-    pub async fn list_files(&self, params: &RepoListFilesParams) -> Result<Vec<String>> {
+    pub async fn list_files(&self, params: &RepoListFilesParams) -> HFResult<Vec<String>> {
         let revision = params.revision.clone();
         let stream = self.list_tree(&RepoListTreeParams {
             revision,
@@ -46,9 +46,9 @@ impl HFRepository {
 
     /// Stream file and directory entries in the repository tree.
     ///
-    /// Returns `Result<impl Stream<Item = Result<RepoTreeEntry>>>`. Set `recursive` to traverse
+    /// Returns `HFResult<impl Stream<Item = HFResult<RepoTreeEntry>>>`. Set `recursive` to traverse
     /// subdirectories. Use `limit` to cap the total number of entries yielded.
-    pub fn list_tree(&self, params: &RepoListTreeParams) -> Result<impl Stream<Item = Result<RepoTreeEntry>> + '_> {
+    pub fn list_tree(&self, params: &RepoListTreeParams) -> HFResult<impl Stream<Item = HFResult<RepoTreeEntry>> + '_> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url_str = format!("{}/tree/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
         let url = Url::parse(&url_str)?;
@@ -66,7 +66,7 @@ impl HFRepository {
 
     /// Get info about specific paths in a repository.
     /// Endpoint: POST /api/{repo_type}s/{repo_id}/paths-info/{revision}
-    pub async fn get_paths_info(&self, params: &RepoGetPathsInfoParams) -> Result<Vec<RepoTreeEntry>> {
+    pub async fn get_paths_info(&self, params: &RepoGetPathsInfoParams) -> HFResult<Vec<RepoTreeEntry>> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url =
             format!("{}/paths-info/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
@@ -104,7 +104,7 @@ impl HFRepository {
     /// the Xet content hash — without downloading the file contents.
     ///
     /// Endpoint: HEAD {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filepath}
-    pub async fn get_file_metadata(&self, params: &RepoGetFileMetadataParams) -> Result<FileMetadataInfo> {
+    pub async fn get_file_metadata(&self, params: &RepoGetFileMetadataParams) -> HFResult<FileMetadataInfo> {
         let filename = params.filepath.clone();
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let repo_path = self.repo_path();
@@ -155,7 +155,7 @@ impl HFRepository {
     /// blobs are stored by etag and symlinked from snapshots/{commit}/{filename}.
     ///
     /// Endpoint: GET {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}
-    pub async fn download_file(&self, params: &RepoDownloadFileParams) -> Result<PathBuf> {
+    pub async fn download_file(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
         progress::emit(
             &params.progress,
             ProgressEvent::Download(DownloadEvent::Start {
@@ -170,7 +170,7 @@ impl HFRepository {
         result
     }
 
-    async fn download_file_inner(&self, params: &RepoDownloadFileParams) -> Result<PathBuf> {
+    async fn download_file_inner(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
         if params.local_dir.is_some() {
             self.download_file_to_local_dir(params).await
         } else {
@@ -195,7 +195,8 @@ impl HFRepository {
     pub async fn download_file_stream(
         &self,
         params: &RepoDownloadFileStreamParams,
-    ) -> Result<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)> {
+    ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
+    {
         if let Some(ref range) = params.range
             && range.start >= range.end
         {
@@ -273,7 +274,7 @@ impl HFRepository {
     /// This is a convenience wrapper around [`download_file_stream`](Self::download_file_stream)
     /// that collects the entire stream into a single buffer. When `range` is set,
     /// only the specified byte range is fetched.
-    pub async fn download_file_to_bytes(&self, params: &RepoDownloadFileToBytesParams) -> Result<bytes::Bytes> {
+    pub async fn download_file_to_bytes(&self, params: &RepoDownloadFileToBytesParams) -> HFResult<bytes::Bytes> {
         let (content_length, stream) = self.download_file_stream(params).await?;
         futures::pin_mut!(stream);
 
@@ -285,7 +286,7 @@ impl HFRepository {
         Ok(buf.freeze())
     }
 
-    async fn download_file_to_local_dir(&self, params: &RepoDownloadFileParams) -> Result<PathBuf> {
+    async fn download_file_to_local_dir(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let repo_path = self.repo_path();
         let url = self
@@ -373,7 +374,7 @@ impl HFRepository {
     /// Resolve a file from the local cache without making network requests.
     /// Matches Python's `try_to_load_from_cache`: checks the snapshot pointer
     /// first, then consults `.no_exist` markers for negative cache hits.
-    fn resolve_from_cache_only(&self, repo_folder: &str, revision: &str, filename: &str) -> Result<PathBuf> {
+    fn resolve_from_cache_only(&self, repo_folder: &str, revision: &str, filename: &str) -> HFResult<PathBuf> {
         let cache_dir = self.hf_client.cache_dir();
 
         let commit_hash = if cache::is_commit_hash(revision) {
@@ -420,7 +421,7 @@ impl HFRepository {
         target.file_name()?.to_str().map(|s| s.to_string())
     }
 
-    async fn download_file_to_cache(&self, params: &RepoDownloadFileParams) -> Result<PathBuf> {
+    async fn download_file_to_cache(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let cache_dir = self.hf_client.cache_dir();
         let repo_folder = cache::repo_folder_name(&self.repo_path(), Some(self.repo_type));
@@ -456,7 +457,7 @@ impl HFRepository {
         cache_dir: &Path,
         repo_folder: &str,
         force_download: bool,
-    ) -> Result<PathBuf> {
+    ) -> HFResult<PathBuf> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
@@ -607,7 +608,7 @@ impl HFRepository {
 }
 
 impl HFRepository {
-    async fn resolve_commit_hash(&self, revision: &str) -> Result<String> {
+    async fn resolve_commit_hash(&self, revision: &str) -> HFResult<String> {
         if cache::is_commit_hash(revision) {
             return Ok(revision.to_string());
         }
@@ -625,7 +626,7 @@ impl HFRepository {
         revision: &str,
         allow_patterns: Option<&Vec<String>>,
         ignore_patterns: Option<&Vec<String>>,
-    ) -> Result<Vec<String>> {
+    ) -> HFResult<Vec<String>> {
         let stream = self.list_tree(&RepoListTreeParams {
             revision: Some(revision.to_string()),
             recursive: true,
@@ -652,7 +653,7 @@ impl HFRepository {
         Ok(filenames)
     }
 
-    pub async fn snapshot_download(&self, params: &RepoSnapshotDownloadParams) -> Result<PathBuf> {
+    pub async fn snapshot_download(&self, params: &RepoSnapshotDownloadParams) -> HFResult<PathBuf> {
         if params.local_dir.is_none() && !self.hf_client.cache_enabled() {
             return Err(HFError::CacheNotEnabled);
         }
@@ -990,7 +991,7 @@ async fn finalize_cached_file(
     commit_hash: &str,
     filename: &str,
     etag: &str,
-) -> Result<PathBuf> {
+) -> HFResult<PathBuf> {
     if !cache::is_commit_hash(revision) {
         cache::write_ref(cache_dir, repo_folder, revision, commit_hash).await?;
     }
@@ -1024,7 +1025,7 @@ async fn download_concurrently(
     api: &HFRepository,
     params: &[RepoDownloadFileParams],
     max_workers: usize,
-) -> Result<Vec<PathBuf>> {
+) -> HFResult<Vec<PathBuf>> {
     futures::stream::iter(params.iter().map(|p| api.download_file_inner(p)))
         .buffer_unordered(max_workers)
         .try_collect()
@@ -1037,7 +1038,7 @@ async fn stream_response_to_file_with_progress(
     handler: &Progress,
     filename: Option<&str>,
     total_bytes: u64,
-) -> Result<()> {
+) -> HFResult<()> {
     let mut file = tokio::fs::File::create(dest).await?;
     let mut stream = response.bytes_stream();
     let mut bytes_read: u64 = 0;
@@ -1082,7 +1083,7 @@ impl HFRepository {
     /// Files marked as "regular" are sent inline as base64.
     ///
     /// Endpoint: POST /api/{repo_type}s/{repo_id}/commit/{revision}
-    pub async fn create_commit(&self, params: &RepoCreateCommitParams) -> Result<CommitInfo> {
+    pub async fn create_commit(&self, params: &RepoCreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = format!("{}/commit/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
 
@@ -1232,7 +1233,7 @@ impl HFRepository {
         Ok(response.json().await?)
     }
 
-    async fn inline_base64_entry(path_in_repo: &str, source: &AddSource) -> Result<serde_json::Value> {
+    async fn inline_base64_entry(path_in_repo: &str, source: &AddSource) -> HFResult<serde_json::Value> {
         use base64::Engine;
         let content = match source {
             AddSource::File(path) => tokio::fs::read(path).await?,
@@ -1250,7 +1251,7 @@ impl HFRepository {
     }
 
     /// Upload a single file to a repository. Convenience wrapper around create_commit.
-    pub async fn upload_file(&self, params: &RepoUploadFileParams) -> Result<CommitInfo> {
+    pub async fn upload_file(&self, params: &RepoUploadFileParams) -> HFResult<CommitInfo> {
         let commit_message = params
             .commit_message
             .clone()
@@ -1272,7 +1273,7 @@ impl HFRepository {
     }
 
     /// Upload a folder to a repository. Walks the directory and creates add operations.
-    pub async fn upload_folder(&self, params: &RepoUploadFolderParams) -> Result<CommitInfo> {
+    pub async fn upload_folder(&self, params: &RepoUploadFolderParams) -> HFResult<CommitInfo> {
         let mut operations = Vec::new();
 
         let folder = &params.folder_path;
@@ -1322,7 +1323,7 @@ impl HFRepository {
     }
 
     /// Delete a file from a repository. Convenience wrapper around create_commit.
-    pub async fn delete_file(&self, params: &RepoDeleteFileParams) -> Result<CommitInfo> {
+    pub async fn delete_file(&self, params: &RepoDeleteFileParams) -> HFResult<CommitInfo> {
         let commit_message = params
             .commit_message
             .clone()
@@ -1343,7 +1344,7 @@ impl HFRepository {
     }
 
     /// Delete a folder from a repository. Lists files under the path and deletes them.
-    pub async fn delete_folder(&self, params: &RepoDeleteFolderParams) -> Result<CommitInfo> {
+    pub async fn delete_folder(&self, params: &RepoDeleteFolderParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
 
         let stream = self.list_tree(&RepoListTreeParams {
@@ -1418,7 +1419,7 @@ impl HFRepository {
         &self,
         params: &RepoCreateCommitParams,
         revision: &str,
-    ) -> Result<HashMap<String, (String, u64)>> {
+    ) -> HFResult<HashMap<String, (String, u64)>> {
         let add_ops: Vec<(&String, &AddSource)> = params
             .operations
             .iter()
@@ -1483,7 +1484,7 @@ impl HFRepository {
         repo_type: Option<RepoType>,
         revision: &str,
         files: &[(&str, u64, &[u8])],
-    ) -> Result<HashMap<String, String>> {
+    ) -> HFResult<HashMap<String, String>> {
         use base64::Engine;
 
         let url = format!("{}/preupload/{}", self.hf_client.api_url(repo_type, repo_id), revision);
@@ -1528,7 +1529,7 @@ impl HFRepository {
         params: &RepoCreateCommitParams,
         revision: &str,
         lfs_files: &[&(String, u64, Vec<u8>, &AddSource)],
-    ) -> Result<HashMap<String, (String, u64)>> {
+    ) -> HFResult<HashMap<String, (String, u64)>> {
         // Step 4: Compute SHA256 for LFS files
         tracing::info!("computing SHA256 for {} LFS files", lfs_files.len());
         let mut lfs_with_sha: Vec<(String, u64, String, &AddSource)> = Vec::new();
@@ -1580,7 +1581,7 @@ impl HFRepository {
         repo_type: Option<RepoType>,
         revision: &str,
         objects: &[(&str, u64)],
-    ) -> Result<Option<String>> {
+    ) -> HFResult<Option<String>> {
         let prefix = constants::repo_type_url_prefix(repo_type);
         let url = format!("{}/{}{}.git/info/lfs/objects/batch", self.hf_client.endpoint(), prefix, repo_id);
 
@@ -1625,7 +1626,7 @@ impl HFRepository {
     }
 }
 
-async fn sha256_of_source(source: &AddSource) -> Result<String> {
+async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
     match source {
         AddSource::Bytes(bytes) => {
             let hash = Sha256::digest(bytes);
@@ -1648,7 +1649,7 @@ async fn sha256_of_source(source: &AddSource) -> Result<String> {
     }
 }
 
-async fn read_size_and_sample(source: &AddSource) -> Result<(u64, Vec<u8>)> {
+async fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
     match source {
         AddSource::Bytes(bytes) => {
             let size = bytes.len() as u64;
@@ -1677,7 +1678,7 @@ async fn collect_files_recursive(
     allow_patterns: &Option<Vec<String>>,
     ignore_patterns: &Option<Vec<String>>,
     operations: &mut Vec<CommitOperation>,
-) -> Result<()> {
+) -> HFResult<()> {
     let mut entries = tokio::fs::read_dir(current).await?;
 
     while let Some(entry) = entries.next_entry().await? {
@@ -1727,17 +1728,17 @@ fn matches_any_glob(patterns: &[String], path: &str) -> bool {
 
 sync_api! {
     impl HFRepository -> HFRepositorySync {
-        fn list_files(&self, params: &RepoListFilesParams) -> Result<Vec<String>>;
-        fn get_paths_info(&self, params: &RepoGetPathsInfoParams) -> Result<Vec<RepoTreeEntry>>;
-        fn get_file_metadata(&self, params: &RepoGetFileMetadataParams) -> Result<FileMetadataInfo>;
-        fn download_file(&self, params: &RepoDownloadFileParams) -> Result<PathBuf>;
-        fn download_file_to_bytes(&self, params: &RepoDownloadFileToBytesParams) -> Result<bytes::Bytes>;
-        fn snapshot_download(&self, params: &RepoSnapshotDownloadParams) -> Result<PathBuf>;
-        fn create_commit(&self, params: &RepoCreateCommitParams) -> Result<CommitInfo>;
-        fn upload_file(&self, params: &RepoUploadFileParams) -> Result<CommitInfo>;
-        fn upload_folder(&self, params: &RepoUploadFolderParams) -> Result<CommitInfo>;
-        fn delete_file(&self, params: &RepoDeleteFileParams) -> Result<CommitInfo>;
-        fn delete_folder(&self, params: &RepoDeleteFolderParams) -> Result<CommitInfo>;
+        fn list_files(&self, params: &RepoListFilesParams) -> HFResult<Vec<String>>;
+        fn get_paths_info(&self, params: &RepoGetPathsInfoParams) -> HFResult<Vec<RepoTreeEntry>>;
+        fn get_file_metadata(&self, params: &RepoGetFileMetadataParams) -> HFResult<FileMetadataInfo>;
+        fn download_file(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf>;
+        fn download_file_to_bytes(&self, params: &RepoDownloadFileToBytesParams) -> HFResult<bytes::Bytes>;
+        fn snapshot_download(&self, params: &RepoSnapshotDownloadParams) -> HFResult<PathBuf>;
+        fn create_commit(&self, params: &RepoCreateCommitParams) -> HFResult<CommitInfo>;
+        fn upload_file(&self, params: &RepoUploadFileParams) -> HFResult<CommitInfo>;
+        fn upload_folder(&self, params: &RepoUploadFolderParams) -> HFResult<CommitInfo>;
+        fn delete_file(&self, params: &RepoDeleteFileParams) -> HFResult<CommitInfo>;
+        fn delete_folder(&self, params: &RepoDeleteFolderParams) -> HFResult<CommitInfo>;
     }
 }
 

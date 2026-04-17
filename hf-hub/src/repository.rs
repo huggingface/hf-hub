@@ -3,7 +3,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::client::HFClient;
-use crate::error::{HFError, Result};
+use crate::error::{HFError, HFResult};
 use crate::types::{RepoInfo, RepoInfoParams, RepoType};
 
 /// A handle for a single repository on the Hugging Face Hub.
@@ -18,7 +18,7 @@ use crate::types::{RepoInfo, RepoInfoParams, RepoType};
 ///
 /// ```rust,no_run
 /// # use hf_hub::{HFClient, types::RepoType};
-/// # #[tokio::main] async fn main() -> hf_hub::error::Result<()> {
+/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 /// let client = HFClient::builder().build()?;
 /// let repo = client.model("openai-community", "gpt2");
 /// let info = repo.info(&Default::default()).await?;
@@ -47,7 +47,7 @@ pub type HFRepo = HFRepository;
 ///
 /// ```rust,no_run
 /// # use hf_hub::HFClient;
-/// # #[tokio::main] async fn main() -> hf_hub::error::Result<()> {
+/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 /// let client = HFClient::builder().build()?;
 /// let space = client.space("huggingface", "diffusers-gallery");
 /// // General repo methods are available via Deref:
@@ -140,7 +140,7 @@ impl HFRepository {
     }
 
     /// Fetch repository metadata, returning the appropriate [`RepoInfo`] variant.
-    pub async fn info(&self, params: &RepoInfoParams) -> Result<RepoInfo> {
+    pub async fn info(&self, params: &RepoInfoParams) -> HFResult<RepoInfo> {
         match self.repo_type {
             RepoType::Model => self
                 .model_info(params.revision.clone(), params.expand.clone())
@@ -177,7 +177,7 @@ impl HFSpace {
 impl TryFrom<HFRepository> for HFSpace {
     type Error = HFError;
 
-    fn try_from(repo: HFRepository) -> Result<Self> {
+    fn try_from(repo: HFRepository) -> HFResult<Self> {
         if repo.repo_type() != RepoType::Space {
             return Err(HFError::InvalidRepoType {
                 expected: RepoType::Space,

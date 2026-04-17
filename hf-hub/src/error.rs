@@ -99,7 +99,7 @@ impl HFError {
     }
 }
 
-pub type Result<T> = std::result::Result<T, HFError>;
+pub type HFResult<T> = std::result::Result<T, HFError>;
 
 /// Context for mapping HTTP 404 errors to specific HFError variants.
 pub(crate) enum NotFoundContext {

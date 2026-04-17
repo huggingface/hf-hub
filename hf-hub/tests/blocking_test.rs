@@ -10,10 +10,10 @@
 
 use hf_hub::test_utils::*;
 use hf_hub::types::*;
-use hf_hub::{HFClientBuilder, HFClientSync, RepoInfo, RepoInfoParams};
+use hf_hub::{HFClientBuilder, HFClientSync};
 
 fn prod_sync_api() -> Option<HFClientSync> {
-    let api = if is_ci() {
+    let client = if is_ci() {
         let token = resolve_prod_token()?;
         HFClientBuilder::new()
             .token(token)
@@ -26,11 +26,11 @@ fn prod_sync_api() -> Option<HFClientSync> {
         }
         HFClientBuilder::new().build().expect("Failed to create HFClient")
     };
-    Some(HFClientSync::from_inner(api).expect("Failed to create HFClientSync"))
+    Some(HFClientSync::from_inner(client).expect("Failed to create HFClientSync"))
 }
 
 fn ci_sync_api() -> Option<HFClientSync> {
-    let api = if is_ci() {
+    let client = if is_ci() {
         let token = std::env::var(HF_CI_TOKEN).ok()?;
         HFClientBuilder::new()
             .token(token)
@@ -43,7 +43,7 @@ fn ci_sync_api() -> Option<HFClientSync> {
         }
         HFClientBuilder::new().build().expect("Failed to create HFClient")
     };
-    Some(HFClientSync::from_inner(api).expect("Failed to create HFClientSync"))
+    Some(HFClientSync::from_inner(client).expect("Failed to create HFClientSync"))
 }
 
 const TEST_ORG: &str = "huggingface";
@@ -53,21 +53,21 @@ const TEST_MODEL_REPO: &str = "hf-internal-testing/tiny-gemma3";
 const TEST_DATASET_REPO: &str = "hf-internal-testing/cats_vs_dogs_sample";
 
 /// Split a `"owner/name"` string into an `HFRepositorySync` handle.
-fn repo_handle(api: &HFClientSync, repo_id: &str) -> hf_hub::blocking::HFRepositorySync {
+fn repo_handle(client: &HFClientSync, repo_id: &str) -> hf_hub::HFRepositorySync {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
     if parts.len() == 2 {
-        api.model(parts[0], parts[1])
+        client.model(parts[0], parts[1])
     } else {
-        api.model("", repo_id)
+        client.model("", repo_id)
     }
 }
 
-fn dataset_handle(api: &HFClientSync, repo_id: &str) -> hf_hub::blocking::HFRepositorySync {
+fn dataset_handle(client: &HFClientSync, repo_id: &str) -> hf_hub::HFRepositorySync {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
     if parts.len() == 2 {
-        api.dataset(parts[0], parts[1])
+        client.dataset(parts[0], parts[1])
     } else {
-        api.dataset("", repo_id)
+        client.dataset("", repo_id)
     }
 }
 
@@ -75,9 +75,9 @@ fn dataset_handle(api: &HFClientSync, repo_id: &str) -> hf_hub::blocking::HFRepo
 
 #[test]
 fn test_sync_model_info() {
-    let Some(api) = prod_sync_api() else { return };
+    let Some(client) = prod_sync_api() else { return };
     let model_repo = TEST_MODEL_REPO;
-    let repo = repo_handle(&api, model_repo);
+    let repo = repo_handle(&client, model_repo);
     let info = repo.info(&RepoInfoParams::default()).unwrap();
     match info {
         RepoInfo::Model(model) => assert!(model.id.contains("tiny-gemma3")),
@@ -87,9 +87,9 @@ fn test_sync_model_info() {
 
 #[test]
 fn test_sync_dataset_info() {
-    let Some(api) = prod_sync_api() else { return };
+    let Some(client) = prod_sync_api() else { return };
     let dataset_repo = TEST_DATASET_REPO;
-    let repo = dataset_handle(&api, dataset_repo);
+    let repo = dataset_handle(&client, dataset_repo);
     let info = repo.info(&RepoInfoParams::default()).unwrap();
     match info {
         RepoInfo::Dataset(ds) => assert_eq!(ds.id, dataset_repo),
@@ -99,9 +99,9 @@ fn test_sync_dataset_info() {
 
 #[test]
 fn test_sync_repo_handle_info_and_file_exists() {
-    let Some(api) = prod_sync_api() else { return };
+    let Some(client) = prod_sync_api() else { return };
     let model_repo = TEST_MODEL_REPO;
-    let repo = repo_handle(&api, model_repo);
+    let repo = repo_handle(&client, model_repo);
 
     let info = repo.info(&RepoInfoParams::default()).unwrap();
     match info {
@@ -117,15 +117,19 @@ fn test_sync_repo_handle_info_and_file_exists() {
 
 #[test]
 fn test_sync_repo_exists() {
-    let Some(api) = prod_sync_api() else { return };
-    assert!(repo_handle(&api, TEST_MODEL_REPO).exists().unwrap());
-    assert!(!repo_handle(&api, "this-repo-definitely-does-not-exist-12345").exists().unwrap());
+    let Some(client) = prod_sync_api() else { return };
+    assert!(repo_handle(&client, TEST_MODEL_REPO).exists().unwrap());
+    assert!(
+        !repo_handle(&client, "this-repo-definitely-does-not-exist-12345")
+            .exists()
+            .unwrap()
+    );
 }
 
 #[test]
 fn test_sync_file_exists() {
-    let Some(api) = prod_sync_api() else { return };
-    let repo = repo_handle(&api, TEST_MODEL_REPO);
+    let Some(client) = prod_sync_api() else { return };
+    let repo = repo_handle(&client, TEST_MODEL_REPO);
     assert!(
         repo.file_exists(&RepoFileExistsParams::builder().filename("config.json").build())
             .unwrap()
@@ -141,26 +145,26 @@ fn test_sync_file_exists() {
 
 #[test]
 fn test_sync_list_models() {
-    let Some(api) = prod_sync_api() else { return };
+    let Some(client) = prod_sync_api() else { return };
     let author = TEST_MODEL_AUTHOR;
     let params = ListModelsParams::builder().author(author).limit(3_usize).build();
-    let models = api.list_models(&params).unwrap();
+    let models = client.list_models(&params).unwrap();
     assert!(!models.is_empty());
     assert!(models[0].id.starts_with(&format!("{}/", author)));
 }
 
 #[test]
 fn test_sync_list_datasets() {
-    let Some(api) = prod_sync_api() else { return };
+    let Some(client) = prod_sync_api() else { return };
     let params = ListDatasetsParams::builder().author(TEST_ORG).limit(3_usize).build();
-    let datasets = api.list_datasets(&params).unwrap();
+    let datasets = client.list_datasets(&params).unwrap();
     assert!(!datasets.is_empty());
 }
 
 #[test]
 fn test_sync_list_repo_files() {
-    let Some(api) = prod_sync_api() else { return };
-    let files = repo_handle(&api, TEST_MODEL_REPO)
+    let Some(client) = prod_sync_api() else { return };
+    let files = repo_handle(&client, TEST_MODEL_REPO)
         .list_files(&RepoListFilesParams::default())
         .unwrap();
     assert!(files.contains(&"config.json".to_string()));
@@ -169,8 +173,8 @@ fn test_sync_list_repo_files() {
 
 #[test]
 fn test_sync_list_repo_tree() {
-    let Some(api) = prod_sync_api() else { return };
-    let entries = repo_handle(&api, TEST_MODEL_REPO)
+    let Some(client) = prod_sync_api() else { return };
+    let entries = repo_handle(&client, TEST_MODEL_REPO)
         .list_tree(&RepoListTreeParams::default())
         .unwrap();
     let has_config = entries
@@ -181,8 +185,8 @@ fn test_sync_list_repo_tree() {
 
 #[test]
 fn test_sync_list_repo_commits() {
-    let Some(api) = prod_sync_api() else { return };
-    let commits = repo_handle(&api, TEST_MODEL_REPO)
+    let Some(client) = prod_sync_api() else { return };
+    let commits = repo_handle(&client, TEST_MODEL_REPO)
         .list_commits(&RepoListCommitsParams::default())
         .unwrap();
     assert!(!commits.is_empty());
@@ -194,8 +198,8 @@ fn test_sync_list_repo_commits() {
 
 #[test]
 fn test_sync_list_repo_refs() {
-    let Some(api) = prod_sync_api() else { return };
-    let refs = repo_handle(&api, TEST_MODEL_REPO)
+    let Some(client) = prod_sync_api() else { return };
+    let refs = repo_handle(&client, TEST_MODEL_REPO)
         .list_refs(&RepoListRefsParams::default())
         .unwrap();
     assert!(!refs.branches.is_empty());
@@ -204,8 +208,8 @@ fn test_sync_list_repo_refs() {
 
 #[test]
 fn test_sync_revision_exists() {
-    let Some(api) = prod_sync_api() else { return };
-    let repo = repo_handle(&api, TEST_MODEL_REPO);
+    let Some(client) = prod_sync_api() else { return };
+    let repo = repo_handle(&client, TEST_MODEL_REPO);
     assert!(
         repo.revision_exists(&RepoRevisionExistsParams::builder().revision("main").build())
             .unwrap()
@@ -221,13 +225,13 @@ fn test_sync_revision_exists() {
 
 #[test]
 fn test_sync_download_file() {
-    let Some(api) = prod_sync_api() else { return };
+    let Some(client) = prod_sync_api() else { return };
     let dir = tempfile::tempdir().unwrap();
     let params = RepoDownloadFileParams::builder()
         .filename("config.json")
         .local_dir(dir.path().to_path_buf())
         .build();
-    let path = repo_handle(&api, TEST_MODEL_REPO).download_file(&params).unwrap();
+    let path = repo_handle(&client, TEST_MODEL_REPO).download_file(&params).unwrap();
     assert!(path.exists());
     let content = std::fs::read_to_string(&path).unwrap();
     let json: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -238,37 +242,37 @@ fn test_sync_download_file() {
 
 #[test]
 fn test_sync_whoami() {
-    let Some(api) = ci_sync_api() else { return };
-    let user = api.whoami().unwrap();
+    let Some(client) = ci_sync_api() else { return };
+    let user = client.whoami().unwrap();
     assert!(!user.username.is_empty());
 }
 
 #[test]
 fn test_sync_auth_check() {
-    let Some(api) = ci_sync_api() else { return };
-    api.auth_check().unwrap();
+    let Some(client) = ci_sync_api() else { return };
+    client.auth_check().unwrap();
 }
 
 #[test]
 fn test_sync_get_user_overview() {
-    let Some(api) = prod_sync_api() else { return };
+    let Some(client) = prod_sync_api() else { return };
     let username = TEST_USER;
-    let user = api.get_user_overview(username).unwrap();
+    let user = client.get_user_overview(username).unwrap();
     assert_eq!(user.username, username);
 }
 
 #[test]
 fn test_sync_get_organization_overview() {
-    let Some(api) = prod_sync_api() else { return };
+    let Some(client) = prod_sync_api() else { return };
     let org_name = TEST_ORG;
-    let org = api.get_organization_overview(org_name).unwrap();
+    let org = client.get_organization_overview(org_name).unwrap();
     assert_eq!(org.name, org_name);
 }
 
 #[test]
 fn test_sync_list_organization_members() {
-    let Some(api) = prod_sync_api() else { return };
-    let members = api.list_organization_members(TEST_ORG, None).unwrap();
+    let Some(client) = prod_sync_api() else { return };
+    let members = client.list_organization_members(TEST_ORG, None).unwrap();
     assert!(!members.is_empty());
 }
 
@@ -276,8 +280,8 @@ fn test_sync_list_organization_members() {
 
 #[test]
 fn test_sync_get_commit_diff() {
-    let Some(api) = prod_sync_api() else { return };
-    let gpt2 = repo_handle(&api, TEST_MODEL_REPO);
+    let Some(client) = prod_sync_api() else { return };
+    let gpt2 = repo_handle(&client, TEST_MODEL_REPO);
     let commits = gpt2.list_commits(&RepoListCommitsParams::default()).unwrap();
     assert!(commits.len() >= 2);
 
@@ -293,8 +297,8 @@ fn test_sync_get_commit_diff() {
 
 #[test]
 fn test_sync_get_raw_diff_stream() {
-    let Some(api) = prod_sync_api() else { return };
-    let gpt2 = repo_handle(&api, TEST_MODEL_REPO);
+    let Some(client) = prod_sync_api() else { return };
+    let gpt2 = repo_handle(&client, TEST_MODEL_REPO);
     let commits = gpt2.list_commits(&RepoListCommitsParams::default()).unwrap();
     assert!(commits.len() >= 2);
 
@@ -315,18 +319,18 @@ fn uuid_v4_short() -> String {
     format!("{:016x}", rand::random::<u64>())
 }
 
-fn create_test_repo(api: &HFClientSync) -> String {
-    let whoami = api.whoami().expect("whoami failed");
+fn create_test_repo(client: &HFClientSync) -> String {
+    let whoami = client.whoami().expect("whoami failed");
     let repo_id = format!("{}/hf-hub-sync-test-{}", whoami.username, uuid_v4_short());
     let params = CreateRepoParams::builder()
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(false)
         .build();
-    api.create_repo(&params).expect("create_repo failed");
+    client.create_repo(&params).expect("create_repo failed");
 
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    let test_repo = api.model(parts[0], parts[1]);
+    let test_repo = client.model(parts[0], parts[1]);
     test_repo
         .upload_file(
             &RepoUploadFileParams::builder()
@@ -340,19 +344,19 @@ fn create_test_repo(api: &HFClientSync) -> String {
     repo_id
 }
 
-fn delete_test_repo(api: &HFClientSync, repo_id: &str) {
+fn delete_test_repo(client: &HFClientSync, repo_id: &str) {
     let params = DeleteRepoParams::builder().repo_id(repo_id).build();
-    let _ = api.delete_repo(&params);
+    let _ = client.delete_repo(&params);
 }
 
 #[test]
 fn test_sync_create_and_delete_repo() {
-    let Some(api) = ci_sync_api() else { return };
+    let Some(client) = ci_sync_api() else { return };
     if !write_enabled() {
         return;
     }
 
-    let whoami = api.whoami().expect("whoami failed");
+    let whoami = client.whoami().expect("whoami failed");
     let repo_id = format!("{}/hf-hub-sync-test-{}", whoami.username, uuid_v4_short());
 
     let params = CreateRepoParams::builder()
@@ -360,11 +364,11 @@ fn test_sync_create_and_delete_repo() {
         .private(true)
         .exist_ok(true)
         .build();
-    let url = api.create_repo(&params).unwrap();
+    let url = client.create_repo(&params).unwrap();
     assert!(url.url.contains(&repo_id));
 
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    let test_repo = api.model(parts[0], parts[1]);
+    let test_repo = client.model(parts[0], parts[1]);
 
     let commit = test_repo
         .upload_file(
@@ -384,18 +388,18 @@ fn test_sync_create_and_delete_repo() {
     );
 
     let params = DeleteRepoParams::builder().repo_id(&repo_id).build();
-    api.delete_repo(&params).unwrap();
+    client.delete_repo(&params).unwrap();
 }
 
 #[test]
 fn test_sync_create_commit() {
-    let Some(api) = ci_sync_api() else { return };
+    let Some(client) = ci_sync_api() else { return };
     if !write_enabled() {
         return;
     }
-    let repo_id = create_test_repo(&api);
+    let repo_id = create_test_repo(&client);
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    let test_repo = api.model(parts[0], parts[1]);
+    let test_repo = client.model(parts[0], parts[1]);
 
     let commit = test_repo
         .create_commit(
@@ -420,18 +424,18 @@ fn test_sync_create_commit() {
     assert!(files.contains(&"file_a.txt".to_string()));
     assert!(files.contains(&"file_b.txt".to_string()));
 
-    delete_test_repo(&api, &repo_id);
+    delete_test_repo(&client, &repo_id);
 }
 
 #[test]
 fn test_sync_upload_folder() {
-    let Some(api) = ci_sync_api() else { return };
+    let Some(client) = ci_sync_api() else { return };
     if !write_enabled() {
         return;
     }
-    let repo_id = create_test_repo(&api);
+    let repo_id = create_test_repo(&client);
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    let test_repo = api.model(parts[0], parts[1]);
+    let test_repo = client.model(parts[0], parts[1]);
 
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("hello.txt"), "hello").unwrap();
@@ -452,18 +456,18 @@ fn test_sync_upload_folder() {
     assert!(files.contains(&"hello.txt".to_string()));
     assert!(files.contains(&"subdir/nested.txt".to_string()));
 
-    delete_test_repo(&api, &repo_id);
+    delete_test_repo(&client, &repo_id);
 }
 
 #[test]
 fn test_sync_branch_operations() {
-    let Some(api) = ci_sync_api() else { return };
+    let Some(client) = ci_sync_api() else { return };
     if !write_enabled() {
         return;
     }
-    let repo_id = create_test_repo(&api);
+    let repo_id = create_test_repo(&client);
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    let test_repo = api.model(parts[0], parts[1]);
+    let test_repo = client.model(parts[0], parts[1]);
 
     test_repo
         .create_branch(&RepoCreateBranchParams::builder().branch("test-branch").build())
@@ -479,5 +483,5 @@ fn test_sync_branch_operations() {
     let refs = test_repo.list_refs(&RepoListRefsParams::default()).unwrap();
     assert!(!refs.branches.iter().any(|b| b.name == "test-branch"));
 
-    delete_test_repo(&api, &repo_id);
+    delete_test_repo(&client, &repo_id);
 }

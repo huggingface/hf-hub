@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::client::HFClient;
-use crate::error::{HFError, Result};
+use crate::error::{HFError, HFResult};
 
 struct PaginationState {
     buffer: VecDeque<serde_json::Value>,
@@ -28,7 +28,7 @@ impl HFClient {
         initial_url: Url,
         params: Vec<(String, String)>,
         limit: Option<usize>,
-    ) -> impl Stream<Item = Result<T>> + '_ {
+    ) -> impl Stream<Item = HFResult<T>> + '_ {
         if limit == Some(0) {
             return futures::stream::empty().left_stream();
         }

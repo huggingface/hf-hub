@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Args as ClapArgs;
-use hf_hub::{HFClient, Progress, RepoDownloadFileParams, RepoSnapshotDownloadParams};
+use hf_hub::HFClient;
+use hf_hub::types::{Progress, RepoDownloadFileParams, RepoSnapshotDownloadParams};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -51,9 +52,9 @@ pub struct Args {
     pub quiet: bool,
 }
 
-pub async fn execute(api: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(api, &args.repo_id, repo_type);
+pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
+    let repo_type: hf_hub::types::RepoType = args.r#type.into();
+    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
 
     let handler: Progress = if args.quiet {
         None

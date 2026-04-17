@@ -4,10 +4,11 @@
 //! Read-only operations require no auth.
 //! Run: cargo run -p examples --example repo_handles
 
-use hf_hub::{HFClient, HFSpace, RepoFileExistsParams, RepoInfo, RepoInfoParams, RepoType};
+use hf_hub::types::{RepoFileExistsParams, RepoInfo, RepoInfoParams, RepoType};
+use hf_hub::{HFClient, HFSpace};
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
+async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
 
     let model = client.model("openai-community", "gpt2");

@@ -4,30 +4,31 @@
 //! Run: cargo run -p examples --example repo
 
 use futures::StreamExt;
-use hf_hub::{
-    CreateRepoParams, DeleteRepoParams, HFClient, ListDatasetsParams, ListModelsParams, ListSpacesParams,
-    MoveRepoParams, RepoFileExistsParams, RepoInfo, RepoInfoParams, RepoRevisionExistsParams, RepoUpdateSettingsParams,
+use hf_hub::HFClient;
+use hf_hub::types::{
+    CreateRepoParams, DeleteRepoParams, ListDatasetsParams, ListModelsParams, ListSpacesParams, MoveRepoParams,
+    RepoFileExistsParams, RepoInfo, RepoInfoParams, RepoRevisionExistsParams, RepoUpdateSettingsParams,
 };
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
 
     // --- Read operations ---
 
-    let model = api.model("openai-community", "gpt2");
+    let model = client.model("openai-community", "gpt2");
     match model.info(&RepoInfoParams::default()).await? {
         RepoInfo::Model(info) => println!("Model: {} (downloads: {:?})", info.id, info.downloads),
         _ => unreachable!(),
     }
 
-    let dataset = api.dataset("rajpurkar", "squad");
+    let dataset = client.dataset("rajpurkar", "squad");
     match dataset.info(&RepoInfoParams::default()).await? {
         RepoInfo::Dataset(info) => println!("Dataset: {} (downloads: {:?})", info.id, info.downloads),
         _ => unreachable!(),
     }
 
-    let space = api.space("huggingface", "transformers-benchmarks");
+    let space = client.space("huggingface", "transformers-benchmarks");
     match space.info(&RepoInfoParams::default()).await? {
         RepoInfo::Space(info) => println!("Space: {} (sdk: {:?})", info.id, info.sdk),
         _ => unreachable!(),
@@ -46,7 +47,7 @@ async fn main() -> hf_hub::Result<()> {
         .await?;
     println!("gpt2/config.json exists: {file_exists}");
 
-    let models_stream = api.list_models(&ListModelsParams::builder().author("openai").build())?;
+    let models_stream = client.list_models(&ListModelsParams::builder().author("openai").build())?;
     futures::pin_mut!(models_stream);
     println!("\nModels by openai:");
     let mut count = 0;
@@ -58,7 +59,7 @@ async fn main() -> hf_hub::Result<()> {
         }
     }
 
-    let datasets_stream = api.list_datasets(&ListDatasetsParams::builder().search("squad").build())?;
+    let datasets_stream = client.list_datasets(&ListDatasetsParams::builder().search("squad").build())?;
     futures::pin_mut!(datasets_stream);
     println!("\nDatasets matching 'squad':");
     let mut count = 0;
@@ -70,7 +71,7 @@ async fn main() -> hf_hub::Result<()> {
         }
     }
 
-    let spaces_stream = api.list_spaces(&ListSpacesParams::builder().author("huggingface").build())?;
+    let spaces_stream = client.list_spaces(&ListSpacesParams::builder().author("huggingface").build())?;
     futures::pin_mut!(spaces_stream);
     println!("\nSpaces by huggingface:");
     let mut count = 0;
@@ -84,11 +85,11 @@ async fn main() -> hf_hub::Result<()> {
 
     // --- Write operations (creates real resources on the Hub) ---
 
-    let user = api.whoami().await?;
+    let user = client.whoami().await?;
     let unique = std::process::id();
-    let repo = api.model(&user.username, format!("example-repo-{unique}"));
+    let repo = client.model(&user.username, format!("example-repo-{unique}"));
 
-    let repo_url = api
+    let repo_url = client
         .create_repo(
             &CreateRepoParams::builder()
                 .repo_id(repo.repo_path())
@@ -108,12 +109,13 @@ async fn main() -> hf_hub::Result<()> {
     println!("Updated repo description");
 
     let new_name = format!("{}/example-repo-renamed-{unique}", user.username);
-    let moved = api
+    let moved = client
         .move_repo(&MoveRepoParams::builder().from_id(repo.repo_path()).to_id(&new_name).build())
         .await?;
     println!("Moved repo to: {}", moved.url);
 
-    api.delete_repo(&DeleteRepoParams::builder().repo_id(&new_name).missing_ok(true).build())
+    client
+        .delete_repo(&DeleteRepoParams::builder().repo_id(&new_name).missing_ok(true).build())
         .await?;
     println!("Deleted repo");
 

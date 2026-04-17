@@ -7,22 +7,22 @@ use futures::StreamExt;
 use hf_hub::HFClient;
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
 
-    api.auth_check().await?;
+    client.auth_check().await?;
     println!("Token is valid");
 
-    let me = api.whoami().await?;
+    let me = client.whoami().await?;
     println!("Logged in as: {} (type: {:?}, pro: {:?})", me.username, me.user_type, me.is_pro);
 
-    let user = api.get_user_overview("julien-c").await?;
+    let user = client.get_user_overview("julien-c").await?;
     println!("\nUser overview: {} (fullname: {:?})", user.username, user.fullname);
 
-    let org = api.get_organization_overview("huggingface").await?;
+    let org = client.get_organization_overview("huggingface").await?;
     println!("Org overview: {} (fullname: {:?})", org.name, org.fullname);
 
-    let followers = api.list_user_followers("julien-c", None)?;
+    let followers = client.list_user_followers("julien-c", None)?;
     futures::pin_mut!(followers);
     println!("\nFollowers of julien-c:");
     let mut count = 0;
@@ -34,7 +34,7 @@ async fn main() -> hf_hub::Result<()> {
         }
     }
 
-    let following = api.list_user_following("julien-c", None)?;
+    let following = client.list_user_following("julien-c", None)?;
     futures::pin_mut!(following);
     println!("\njulien-c is following:");
     let mut count = 0;
@@ -46,7 +46,7 @@ async fn main() -> hf_hub::Result<()> {
         }
     }
 
-    let members = api.list_organization_members("huggingface", None)?;
+    let members = client.list_organization_members("huggingface", None)?;
     futures::pin_mut!(members);
     println!("\nMembers of huggingface:");
     let mut count = 0;

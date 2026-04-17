@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures::StreamExt;
-use hf_hub::{BucketTreeEntry, HFClient, ListBucketTreeParams};
+use hf_hub::HFClient;
+use hf_hub::types::{BucketTreeEntry, ListBucketTreeParams};
 
 use crate::cli::OutputFormat;
 use crate::output::{CommandOutput, CommandResult};
@@ -72,13 +73,13 @@ fn parse_list_argument(input: &str) -> ListTarget {
     }
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     match parse_list_argument(&args.argument) {
         ListTarget::Namespace(namespace) => {
             if args.tree || args.recursive {
                 anyhow::bail!("--tree and --recursive are only valid when listing files in a bucket");
             }
-            list_buckets(api, &namespace, args.format, args.quiet, args.human_readable).await
+            list_buckets(client, &namespace, args.format, args.quiet, args.human_readable).await
         },
         ListTarget::Files {
             namespace,
@@ -88,19 +89,19 @@ pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
             if args.tree && matches!(args.format, OutputFormat::Json) {
                 anyhow::bail!("--tree cannot be used with --format json");
             }
-            list_files(api, &namespace, &bucket_name, prefix, &args).await
+            list_files(client, &namespace, &bucket_name, prefix, &args).await
         },
     }
 }
 
 async fn list_buckets(
-    api: &HFClient,
+    client: &HFClient,
     namespace: &str,
     format: OutputFormat,
     quiet: bool,
     human_readable: bool,
 ) -> Result<CommandResult> {
-    let stream = api.list_buckets(namespace)?;
+    let stream = client.list_buckets(namespace)?;
     futures::pin_mut!(stream);
 
     let mut buckets = Vec::new();
@@ -147,13 +148,13 @@ async fn list_buckets(
 }
 
 async fn list_files(
-    api: &HFClient,
+    client: &HFClient,
     namespace: &str,
     bucket_name: &str,
     prefix: Option<String>,
     args: &Args,
 ) -> Result<CommandResult> {
-    let bucket = api.bucket(namespace, bucket_name);
+    let bucket = client.bucket(namespace, bucket_name);
     let params = ListBucketTreeParams {
         prefix,
         recursive: if args.recursive { Some(true) } else { None },

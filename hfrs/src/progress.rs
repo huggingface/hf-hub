@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::sync::Mutex;
 
-use hf_hub::{DownloadEvent, FileProgress, FileStatus, ProgressEvent, ProgressHandler, UploadEvent, UploadPhase};
+use hf_hub::types::{
+    DownloadEvent, FileProgress, FileStatus, ProgressEvent, ProgressHandler, UploadEvent, UploadPhase,
+};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 /// Renders indicatif progress bars in the terminal for download and upload operations.

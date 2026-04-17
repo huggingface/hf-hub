@@ -43,10 +43,10 @@ async fn main() -> ExitCode {
     {
         builder = builder.cache_dir(cache_dir);
     }
-    let api = match builder.build() {
-        Ok(api) => {
+    let client = match builder.build() {
+        Ok(client) => {
             info!("HFClient client initialized");
-            api
+            client
         },
         Err(e) => {
             print_hf_error(&e, color);
@@ -55,15 +55,15 @@ async fn main() -> ExitCode {
     };
 
     let result = match cli.command {
-        Command::Auth(args) => commands::auth::execute(&api, args).await,
-        Command::Buckets(args) => commands::buckets::execute(&api, args, multi.clone()).await,
-        Command::Cache(args) => commands::cache::execute(&api, args).await,
-        Command::Datasets(args) => commands::datasets::execute(&api, args).await,
-        Command::Download(args) => commands::download::execute(&api, args, multi.clone()).await,
-        Command::Models(args) => commands::models::execute(&api, args).await,
-        Command::Repos(args) => commands::repos::execute(&api, args).await,
-        Command::Spaces(args) => commands::spaces::execute(&api, args).await,
-        Command::Upload(args) => commands::upload::execute(&api, args, multi.clone()).await,
+        Command::Auth(args) => commands::auth::execute(&client, args).await,
+        Command::Buckets(args) => commands::buckets::execute(&client, args, multi.clone()).await,
+        Command::Cache(args) => commands::cache::execute(&client, args).await,
+        Command::Datasets(args) => commands::datasets::execute(&client, args).await,
+        Command::Download(args) => commands::download::execute(&client, args, multi.clone()).await,
+        Command::Models(args) => commands::models::execute(&client, args).await,
+        Command::Repos(args) => commands::repos::execute(&client, args).await,
+        Command::Spaces(args) => commands::spaces::execute(&client, args).await,
+        Command::Upload(args) => commands::upload::execute(&client, args, multi.clone()).await,
         Command::Env(args) => commands::env::execute(args).await,
         Command::Version(args) => commands::version::execute(args).await,
     };

@@ -12,7 +12,7 @@ pub(crate) struct CacheLock {
     _file: File,
 }
 
-pub(crate) async fn acquire_lock(cache_dir: &Path, repo_folder: &str, etag: &str) -> crate::error::Result<CacheLock> {
+pub(crate) async fn acquire_lock(cache_dir: &Path, repo_folder: &str, etag: &str) -> crate::error::HFResult<CacheLock> {
     let path = lock_path(cache_dir, repo_folder, etag);
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -38,7 +38,7 @@ pub(crate) async fn write_ref(
     repo_folder: &str,
     revision: &str,
     commit_hash: &str,
-) -> crate::error::Result<()> {
+) -> crate::error::HFResult<()> {
     let path = ref_path(cache_dir, repo_folder, revision);
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -51,7 +51,7 @@ pub(crate) async fn read_ref(
     cache_dir: &Path,
     repo_folder: &str,
     revision: &str,
-) -> crate::error::Result<Option<String>> {
+) -> crate::error::HFResult<Option<String>> {
     let path = ref_path(cache_dir, repo_folder, revision);
     match tokio::fs::read_to_string(&path).await {
         Ok(content) => Ok(Some(content.trim().to_string())),
@@ -70,7 +70,7 @@ pub(crate) async fn create_pointer_symlink(
     commit_hash: &str,
     filename: &str,
     etag: &str,
-) -> crate::error::Result<()> {
+) -> crate::error::HFResult<()> {
     let pointer = snapshot_path(cache_dir, repo_folder, commit_hash, filename);
     if let Some(parent) = pointer.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -228,7 +228,7 @@ async fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<Cach
     files
 }
 
-pub async fn scan_cache_dir(cache_dir: &Path) -> crate::error::Result<HFCacheInfo> {
+pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<HFCacheInfo> {
     let mut repos = Vec::new();
     let mut warnings = Vec::new();
     let mut total_size: u64 = 0;

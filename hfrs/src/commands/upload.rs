@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use clap::Args as ClapArgs;
-use hf_hub::{AddSource, CreateRepoParams, HFClient, Progress, RepoUploadFileParams, RepoUploadFolderParams};
+use hf_hub::HFClient;
+use hf_hub::types::{AddSource, CreateRepoParams, Progress, RepoUploadFileParams, RepoUploadFolderParams};
 use tracing::info;
 
 use crate::cli::RepoTypeArg;
@@ -63,10 +64,10 @@ pub struct Args {
     pub quiet: bool,
 }
 
-pub async fn execute(api: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
+pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
+    let repo_type: hf_hub::types::RepoType = args.r#type.into();
     let local_path = args.local_path.unwrap_or_else(|| PathBuf::from("."));
-    let repo = crate::util::make_repo(api, &args.repo_id, repo_type);
+    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
 
     // Ensure the repo exists, creating it if necessary
     if !repo.exists().await? {
@@ -78,7 +79,7 @@ pub async fn execute(api: &HFClient, args: Args, multi: Option<indicatif::MultiP
             exist_ok: true,
             space_sdk: None,
         };
-        api.create_repo(&create_params).await?;
+        client.create_repo(&create_params).await?;
     }
 
     let handler: Progress = if args.quiet {

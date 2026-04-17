@@ -4,16 +4,16 @@
 //! Run: cargo run -p examples --example files
 
 use futures::StreamExt;
-use hf_hub::types::{AddSource, CommitOperation, RepoTreeEntry};
-use hf_hub::{
-    CreateRepoParams, DeleteRepoParams, HFClient, RepoCreateCommitParams, RepoDeleteFileParams, RepoDeleteFolderParams,
-    RepoDownloadFileParams, RepoGetFileMetadataParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams,
-    RepoUploadFileParams, RepoUploadFolderParams,
+use hf_hub::HFClient;
+use hf_hub::types::{
+    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, RepoCreateCommitParams, RepoDeleteFileParams,
+    RepoDeleteFolderParams, RepoDownloadFileParams, RepoGetFileMetadataParams, RepoGetPathsInfoParams,
+    RepoListFilesParams, RepoListTreeParams, RepoTreeEntry, RepoUploadFileParams, RepoUploadFolderParams,
 };
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
-    let model = api.model("openai-community", "gpt2");
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
+    let model = client.model("openai-community", "gpt2");
 
     // --- Read operations ---
 
@@ -71,18 +71,19 @@ async fn main() -> hf_hub::Result<()> {
 
     // --- Write operations (creates real resources on the Hub) ---
 
-    let user = api.whoami().await?;
+    let user = client.whoami().await?;
     let unique = std::process::id();
-    let repo = api.model(&user.username, format!("example-files-{unique}"));
+    let repo = client.model(&user.username, format!("example-files-{unique}"));
 
-    api.create_repo(
-        &CreateRepoParams::builder()
-            .repo_id(repo.repo_path())
-            .private(true)
-            .exist_ok(true)
-            .build(),
-    )
-    .await?;
+    client
+        .create_repo(
+            &CreateRepoParams::builder()
+                .repo_id(repo.repo_path())
+                .private(true)
+                .exist_ok(true)
+                .build(),
+        )
+        .await?;
     println!("\nCreated test repo: {}", repo.repo_path());
 
     let commit = repo
@@ -139,7 +140,8 @@ async fn main() -> hf_hub::Result<()> {
         .await?;
     println!("Deleted data/ folder");
 
-    api.delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
+    client
+        .delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
         .await?;
     println!("Cleaned up test repo");
 

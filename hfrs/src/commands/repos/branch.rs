@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Args as ClapArgs, Subcommand};
-use hf_hub::{HFClient, RepoCreateBranchParams, RepoDeleteBranchParams};
+use hf_hub::HFClient;
+use hf_hub::types::{RepoCreateBranchParams, RepoDeleteBranchParams};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -53,16 +54,16 @@ pub struct BranchDeleteArgs {
     pub r#type: RepoTypeArg,
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     match args.command {
-        BranchCommand::Create(a) => create(api, a).await,
-        BranchCommand::Delete(a) => delete(api, a).await,
+        BranchCommand::Create(a) => create(client, a).await,
+        BranchCommand::Delete(a) => delete(client, a).await,
     }
 }
 
-async fn create(api: &HFClient, args: BranchCreateArgs) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(api, &args.repo_id, repo_type);
+async fn create(client: &HFClient, args: BranchCreateArgs) -> Result<CommandResult> {
+    let repo_type: hf_hub::types::RepoType = args.r#type.into();
+    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
     let params = RepoCreateBranchParams {
         branch: args.branch,
         revision: args.revision,
@@ -71,9 +72,9 @@ async fn create(api: &HFClient, args: BranchCreateArgs) -> Result<CommandResult>
     Ok(CommandResult::Raw("Branch created.".to_string()))
 }
 
-async fn delete(api: &HFClient, args: BranchDeleteArgs) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(api, &args.repo_id, repo_type);
+async fn delete(client: &HFClient, args: BranchDeleteArgs) -> Result<CommandResult> {
+    let repo_type: hf_hub::types::RepoType = args.r#type.into();
+    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
     let params = RepoDeleteBranchParams { branch: args.branch };
     repo.delete_branch(&params).await?;
     Ok(CommandResult::Silent)

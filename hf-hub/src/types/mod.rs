@@ -1,16 +1,15 @@
-pub mod bucket_params;
-pub mod buckets;
-pub mod cache;
-pub mod commit;
-pub mod params;
-pub mod progress;
-pub mod repo;
-pub mod repo_params;
-pub mod spaces;
-pub mod user;
+pub(crate) mod buckets;
+pub(crate) mod cache;
+pub(crate) mod commit;
+pub(crate) mod params;
+pub(crate) mod progress;
+pub(crate) mod repo;
+pub(crate) mod repo_params;
+pub(crate) mod spaces;
+pub(crate) mod user;
 
-pub use bucket_params::*;
 pub use buckets::*;
+pub use cache::*;
 pub use commit::*;
 pub use params::*;
 pub use progress::*;

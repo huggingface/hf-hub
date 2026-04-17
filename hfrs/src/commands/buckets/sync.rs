@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Args as ClapArgs;
-use hf_hub::{BucketSyncParams, HFClient, Progress, SyncAction, SyncDirection};
+use hf_hub::HFClient;
+use hf_hub::types::{BucketSyncAction, BucketSyncDirection, BucketSyncParams, Progress};
 
 use crate::output::CommandResult;
 use crate::progress::CliProgressHandler;
@@ -89,7 +90,7 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-pub async fn execute(api: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
     let src_is_bucket = args.source.starts_with("hf://buckets/");
     let dst_is_bucket = args.dest.starts_with("hf://buckets/");
 
@@ -102,11 +103,11 @@ pub async fn execute(api: &HFClient, args: Args, multi: Option<indicatif::MultiP
 
     let (bucket_ref, local_path, direction) = if dst_is_bucket {
         let b = parse_bucket_path(&args.dest).ok_or_else(|| anyhow::anyhow!("Invalid bucket path: {}", args.dest))?;
-        (b, PathBuf::from(&args.source), SyncDirection::Upload)
+        (b, PathBuf::from(&args.source), BucketSyncDirection::Upload)
     } else {
         let b =
             parse_bucket_path(&args.source).ok_or_else(|| anyhow::anyhow!("Invalid bucket path: {}", args.source))?;
-        (b, PathBuf::from(&args.dest), SyncDirection::Download)
+        (b, PathBuf::from(&args.dest), BucketSyncDirection::Download)
     };
 
     let handler: Progress = if args.quiet {
@@ -117,7 +118,7 @@ pub async fn execute(api: &HFClient, args: Args, multi: Option<indicatif::MultiP
         None
     };
 
-    let bucket = api.bucket(&bucket_ref.namespace, &bucket_ref.bucket_name);
+    let bucket = client.bucket(&bucket_ref.namespace, &bucket_ref.bucket_name);
 
     let params = {
         let b = BucketSyncParams::builder()
@@ -148,10 +149,10 @@ pub async fn execute(api: &HFClient, args: Args, multi: Option<indicatif::MultiP
     if args.verbose {
         for op in &plan.operations {
             let action_str = match op.action {
-                SyncAction::Upload => "upload",
-                SyncAction::Download => "download",
-                SyncAction::Delete => "delete",
-                SyncAction::Skip => "skip",
+                BucketSyncAction::Upload => "upload",
+                BucketSyncAction::Download => "download",
+                BucketSyncAction::Delete => "delete",
+                BucketSyncAction::Skip => "skip",
             };
             println!("  {}: {} ({})", action_str, op.path, op.reason);
         }

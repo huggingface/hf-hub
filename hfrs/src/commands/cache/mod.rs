@@ -20,8 +20,8 @@ pub enum CacheCommand {
     List(list::Args),
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     match args.command {
-        CacheCommand::List(a) => list::execute(api, a).await,
+        CacheCommand::List(a) => list::execute(client, a).await,
     }
 }

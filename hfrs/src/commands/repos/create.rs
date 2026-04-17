@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
-use hf_hub::{CreateRepoParams, HFClient};
+use hf_hub::HFClient;
+use hf_hub::types::CreateRepoParams;
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -28,8 +29,8 @@ pub struct Args {
     pub space_sdk: Option<String>,
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
+    let repo_type: hf_hub::types::RepoType = args.r#type.into();
     let params = CreateRepoParams {
         repo_id: args.repo_id,
         repo_type: Some(repo_type),
@@ -37,6 +38,6 @@ pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
         exist_ok: args.exist_ok,
         space_sdk: args.space_sdk,
     };
-    let result = api.create_repo(&params).await?;
+    let result = client.create_repo(&params).await?;
     Ok(CommandResult::Raw(result.url))
 }

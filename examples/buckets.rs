@@ -5,10 +5,11 @@
 //! Run: HF_TOKEN=hf_xxx cargo run -p examples --example buckets
 
 use futures::TryStreamExt;
-use hf_hub::{BucketInfo, CreateBucketParams, HFClient, ListBucketTreeParams};
+use hf_hub::HFClient;
+use hf_hub::types::{BucketInfo, CreateBucketParams, ListBucketTreeParams};
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
+async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
 
     let whoami = client.whoami().await?;

@@ -8,7 +8,8 @@
 use std::path::Path;
 
 use hf_hub::test_utils::*;
-use hf_hub::{HFClient, HFClientBuilder, HFError, RepoDownloadFileParams, RepoSnapshotDownloadParams};
+use hf_hub::types::{RepoDownloadFileParams, RepoSnapshotDownloadParams};
+use hf_hub::{HFClient, HFClientBuilder, HFError};
 use serial_test::serial;
 
 fn api() -> Option<HFClient> {
@@ -117,9 +118,9 @@ fn list_files_recursive(dir: &Path) -> Vec<String> {
 async fn test_download_file_to_cache() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let path = api
+    let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
@@ -146,9 +147,9 @@ async fn test_download_file_to_cache() {
 async fn test_download_file_cache_hit() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     let path1 = repo
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
@@ -163,9 +164,9 @@ async fn test_download_file_cache_hit() {
 #[tokio::test]
 async fn test_download_file_local_files_only_miss() {
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let result = api
+    let result = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -181,9 +182,9 @@ async fn test_download_file_local_files_only_miss() {
 async fn test_download_file_local_files_only_hit() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     let path1 = repo
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
@@ -206,9 +207,9 @@ async fn test_download_file_local_files_only_hit() {
 async fn test_download_file_cache_symlink_structure() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let path = api
+    let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
@@ -224,9 +225,9 @@ async fn test_download_file_cache_symlink_structure() {
 async fn test_snapshot_download() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let snapshot_dir = api
+    let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
@@ -250,9 +251,9 @@ async fn test_snapshot_download() {
 async fn test_cache_hit_no_redownload() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -272,9 +273,9 @@ async fn test_cache_hit_no_redownload() {
 async fn test_force_download_bypasses_cache() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -302,7 +303,7 @@ async fn test_force_download_bypasses_cache() {
 async fn test_force_download_ignores_no_exist() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
     // Create a stale .no_exist marker — network download should succeed
     // regardless since .no_exist is only consulted via resolve_from_cache_only
@@ -315,7 +316,7 @@ async fn test_force_download_ignores_no_exist() {
     std::fs::create_dir_all(&refs_dir).unwrap();
     std::fs::write(refs_dir.join("main"), fake_commit).unwrap();
 
-    let path = api
+    let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -336,9 +337,9 @@ async fn test_force_download_ignores_no_exist() {
 async fn test_no_exist_marker_on_404() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let result = api
+    let result = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -362,9 +363,9 @@ async fn test_no_exist_marker_on_404() {
 async fn test_no_exist_marker_prevents_request() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
 
     // First download: 404 creates the .no_exist marker
     let _ = repo
@@ -395,9 +396,9 @@ async fn test_no_exist_marker_prevents_request() {
 async fn test_no_exist_writes_ref_on_404() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let _ = api
+    let _ = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("no_such_file_ref_test.txt").build())
         .await;
@@ -420,9 +421,10 @@ async fn test_no_exist_writes_ref_on_404() {
 async fn test_ref_written_for_branch_download() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -440,10 +442,11 @@ async fn test_ref_written_for_branch_download() {
 async fn test_no_ref_for_commit_hash_download() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
     // First get the commit hash via a normal download
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -456,9 +459,10 @@ async fn test_no_ref_for_commit_hash_download() {
 
     // Now download in a fresh cache using the commit hash directly
     let cache_dir2 = tempfile::tempdir().unwrap();
-    let api2 = api_with_cache(cache_dir2.path());
+    let client2 = api_with_cache(cache_dir2.path());
 
-    api2.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    client2
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -481,10 +485,11 @@ async fn test_no_ref_for_commit_hash_download() {
 async fn test_download_by_commit_hash() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
     // Get commit hash from a normal download
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -496,8 +501,8 @@ async fn test_download_by_commit_hash() {
 
     // Download by commit hash in fresh cache
     let cache_dir2 = tempfile::tempdir().unwrap();
-    let api2 = api_with_cache(cache_dir2.path());
-    let path = api2
+    let client2 = api_with_cache(cache_dir2.path());
+    let path = client2
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -524,10 +529,10 @@ async fn test_download_by_commit_hash() {
 async fn test_offline_fallback_with_cached_file() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
     // Populate cache
-    let original_path = api
+    let original_path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
@@ -576,9 +581,9 @@ async fn test_offline_fallback_without_cache_propagates_error() {
 async fn test_snapshot_download_ignore_patterns() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let snapshot_dir = api
+    let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
@@ -598,9 +603,9 @@ async fn test_snapshot_download_ignore_patterns() {
 #[tokio::test]
 async fn test_snapshot_download_local_files_only_miss() {
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let result = api
+    let result = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(&RepoSnapshotDownloadParams::builder().local_files_only(true).build())
         .await;
@@ -611,9 +616,9 @@ async fn test_snapshot_download_local_files_only_miss() {
 async fn test_snapshot_download_local_files_only_hit() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     let dir1 = repo
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
@@ -634,10 +639,11 @@ async fn test_snapshot_download_local_files_only_hit() {
 async fn test_snapshot_download_by_commit_hash() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
     // First get the commit hash
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -649,8 +655,8 @@ async fn test_snapshot_download_by_commit_hash() {
 
     // Snapshot download in fresh cache by commit hash
     let cache_dir2 = tempfile::tempdir().unwrap();
-    let api2 = api_with_cache(cache_dir2.path());
-    let snapshot_dir = api2
+    let client2 = api_with_cache(cache_dir2.path());
+    let snapshot_dir = client2
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
@@ -677,9 +683,9 @@ async fn test_snapshot_download_by_commit_hash() {
 async fn test_snapshot_download_force_download() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     repo.snapshot_download(
         &RepoSnapshotDownloadParams::builder()
             .allow_patterns(vec!["config.json".to_string()])
@@ -710,9 +716,9 @@ async fn test_snapshot_download_force_download() {
 async fn test_snapshot_download_returns_correct_path() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let snapshot_dir = api
+    let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
@@ -736,9 +742,10 @@ async fn test_snapshot_download_returns_correct_path() {
 async fn test_cache_directory_layout() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -763,9 +770,9 @@ async fn test_cache_directory_layout() {
 async fn test_blob_deduplication_across_downloads() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
 
     // Download same file via single file download
     repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
@@ -792,9 +799,9 @@ async fn test_blob_deduplication_across_downloads() {
 async fn test_dataset_repo_type_cache_folder() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let path = api
+    let path = client
         .dataset(TEST_DATASET_PARTS.0, TEST_DATASET_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("README.md").build())
         .await
@@ -810,9 +817,9 @@ async fn test_download_to_local_dir_no_cache() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
     let local_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let path = api
+    let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -843,13 +850,13 @@ async fn test_download_to_local_dir_no_cache() {
 async fn test_concurrent_downloads_same_file() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
     let mut handles = Vec::new();
     for _ in 0..4 {
-        let api_clone = api.clone();
+        let client_clone = client.clone();
         let handle = tokio::spawn(async move {
-            api_clone
+            client_clone
                 .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
                 .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
                 .await
@@ -889,14 +896,14 @@ fn test_hf_hub_cache_env_var() {
     // SAFETY: test runs serially (#[serial]) so no concurrent env access
     unsafe { std::env::set_var(HF_HUB_CACHE, dir.path()) };
 
-    let api = HFClientBuilder::new().build().unwrap();
+    let client = HFClientBuilder::new().build().unwrap();
     // Verify through a download attempt that would use the cache dir
     // We can't easily inspect the private field, but we can check the
     // builder override works by using an explicit cache_dir
-    let api2 = api_with_cache(dir.path());
+    let client2 = api_with_cache(dir.path());
     // Both should work without error
-    drop(api);
-    drop(api2);
+    drop(client);
+    drop(client2);
 
     // Restore env
     match old_val {
@@ -921,8 +928,8 @@ fn test_xdg_cache_home_env_var() {
         std::env::set_var(XDG_CACHE_HOME, dir.path());
     }
 
-    let api = HFClientBuilder::new().build().unwrap();
-    drop(api);
+    let client = HFClientBuilder::new().build().unwrap();
+    drop(client);
 
     // Restore env
     // SAFETY: test runs serially (#[serial]) so no concurrent env access
@@ -1023,8 +1030,8 @@ print(path)
         .unwrap();
     let blob_count_before = std::fs::read_dir(repo_folder.path().join("blobs")).unwrap().count();
 
-    let api = api_with_cache(&cache_dir);
-    let path = api
+    let client = api_with_cache(&cache_dir);
+    let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
@@ -1048,8 +1055,9 @@ async fn test_interop_rust_downloads_first() {
     let python = python_bin(&venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
-    let api = api_with_cache(&cache_dir);
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    let client = api_with_cache(&cache_dir);
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1103,8 +1111,8 @@ hf_hub_download("{repo_id}", "README.md")
     let output = std::process::Command::new(&python).args(["-c", &script]).output().unwrap();
     assert!(output.status.success());
 
-    let api = api_with_cache(&cache_dir);
-    let repo = api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let client = api_with_cache(&cache_dir);
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1181,8 +1189,8 @@ print(path)
         .unwrap();
     let blob_count_before = std::fs::read_dir(repo_folder.path().join("blobs")).unwrap().count();
 
-    let api = api_with_cache(&cache_dir);
-    let snapshot_dir = api
+    let client = api_with_cache(&cache_dir);
+    let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
@@ -1211,8 +1219,8 @@ async fn test_interop_rust_writes_python_validates_cache() {
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust snapshot_download: multiple files into cache
-    let api = api_with_cache(&cache_dir);
-    let snapshot_dir = api
+    let client = api_with_cache(&cache_dir);
+    let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
@@ -1307,9 +1315,9 @@ print("ALL_CHECKS_PASSED")
 async fn test_xet_download_to_cache() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let path = match api
+    let path = match client
         .model("hf-internal-testing", "tiny-gemma3")
         .download_file(&RepoDownloadFileParams::builder().filename("model.safetensors").build())
         .await
@@ -1358,7 +1366,7 @@ async fn test_xet_download_to_cache() {
     assert!(main_ref.exists());
 
     // Second download should be a cache hit (same path returned)
-    let path2 = api
+    let path2 = client
         .model("hf-internal-testing", "tiny-gemma3")
         .download_file(&RepoDownloadFileParams::builder().filename("model.safetensors").build())
         .await
@@ -1366,7 +1374,7 @@ async fn test_xet_download_to_cache() {
     assert_eq!(path, path2);
 
     // local_files_only should work
-    let path3 = api
+    let path3 = client
         .model("hf-internal-testing", "tiny-gemma3")
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -1383,9 +1391,9 @@ async fn test_xet_download_to_cache() {
 async fn test_xet_snapshot_download_to_cache() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let snapshot_dir = match api
+    let snapshot_dir = match client
         .model("hf-internal-testing", "tiny-gemma3")
         .snapshot_download(&RepoSnapshotDownloadParams::default())
         .await
@@ -1416,9 +1424,9 @@ async fn test_xet_snapshot_download_to_cache() {
 async fn test_xet_cache_hit_second_download() {
     let Some(_) = api() else { return };
     let cache_dir = tempfile::tempdir().unwrap();
-    let api = api_with_cache(cache_dir.path());
+    let client = api_with_cache(cache_dir.path());
 
-    let repo = api.model("hf-internal-testing", "tiny-gemma3");
+    let repo = client.model("hf-internal-testing", "tiny-gemma3");
 
     let path1 = match repo
         .download_file(&RepoDownloadFileParams::builder().filename("model.safetensors").build())
@@ -1467,8 +1475,8 @@ async fn test_interop_rust_no_exist_python_reads() {
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust: trigger a 404 to create a .no_exist marker
-    let api = api_with_cache(&cache_dir);
-    let _ = api
+    let client = api_with_cache(&cache_dir);
+    let _ = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -1522,8 +1530,9 @@ async fn test_interop_rust_ref_python_reads() {
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust: download to create refs/main
-    let api = api_with_cache(&cache_dir);
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    let client = api_with_cache(&cache_dir);
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1584,8 +1593,8 @@ print("DONE")
     assert!(output.status.success(), "Python failed: {}", String::from_utf8_lossy(&output.stderr));
 
     // Rust: local_files_only should find the .no_exist marker via resolve_from_cache_only
-    let api = api_with_cache(&cache_dir);
-    let result = api
+    let client = api_with_cache(&cache_dir);
+    let result = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -1630,8 +1639,8 @@ hf_hub_download("{repo_id}", "config.json")
     assert!(output.status.success(), "Python failed: {}", String::from_utf8_lossy(&output.stderr));
 
     // Rust: local_files_only should find the file via Python's ref
-    let api = api_with_cache(&cache_dir);
-    let path = api
+    let client = api_with_cache(&cache_dir);
+    let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -1660,8 +1669,9 @@ async fn test_interop_rust_snapshot_python_snapshot_reuse() {
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust snapshot_download first
-    let api = api_with_cache(&cache_dir);
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    let client = api_with_cache(&cache_dir);
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string()])
@@ -1708,8 +1718,9 @@ async fn test_interop_dataset_repo_type() {
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust downloads a dataset file
-    let api = api_with_cache(&cache_dir);
-    api.dataset(TEST_DATASET_PARTS.0, TEST_DATASET_PARTS.1)
+    let client = api_with_cache(&cache_dir);
+    client
+        .dataset(TEST_DATASET_PARTS.0, TEST_DATASET_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("README.md").build())
         .await
         .unwrap();
@@ -1773,8 +1784,8 @@ print(link)
     // Rust downloads same file into a fresh cache
     let cache_dir2 = base_dir.path().join("cache2");
     std::fs::create_dir_all(&cache_dir2).unwrap();
-    let api = api_with_cache(&cache_dir2);
-    let rust_path = api
+    let client = api_with_cache(&cache_dir2);
+    let rust_path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
@@ -1827,8 +1838,9 @@ hf_hub_download("{repo_id}", "config.json")
 
     // Rust downloads same file — should read etag from Python's symlink,
     // send If-None-Match, get 304, and NOT rewrite the blob
-    let api = api_with_cache(&cache_dir);
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    let client = api_with_cache(&cache_dir);
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
@@ -1851,8 +1863,9 @@ async fn test_interop_scan_cache_counts_match() {
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Download multiple files via both libraries to populate the cache
-    let api = api_with_cache(&cache_dir);
-    api.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+    let client = api_with_cache(&cache_dir);
+    client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
             &RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string(), "*.md".to_string()])

@@ -25,7 +25,7 @@ pub struct Args {
     pub quiet: bool,
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let (namespace, name) = parse_bucket_id(&args.bucket_id)?;
     let bucket_id = format!("{}/{}", namespace, name);
 
@@ -39,7 +39,7 @@ pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
         }
     }
 
-    api.delete_bucket(&bucket_id, args.missing_ok).await?;
+    client.delete_bucket(&bucket_id, args.missing_ok).await?;
 
     if args.quiet {
         Ok(CommandResult::Raw(bucket_id))

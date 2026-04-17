@@ -10,7 +10,7 @@ use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileInfo, XetFileMetada
 
 use crate::client::HFClient;
 use crate::constants;
-use crate::error::{HFError, Result};
+use crate::error::{HFError, HFResult};
 use crate::repository::HFRepository;
 use crate::types::progress::{
     self, DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, UploadEvent, UploadPhase,
@@ -38,14 +38,19 @@ pub struct XetConnectionInfo {
 }
 
 async fn fetch_xet_connection_info(
-    api: &HFClient,
+    client: &HFClient,
     token_url: &str,
     not_found_id: Option<&str>,
     not_found_ctx: crate::error::NotFoundContext,
-) -> Result<XetConnectionInfo> {
-    let response = api.http_client().get(token_url).headers(api.auth_headers()).send().await?;
+) -> HFResult<XetConnectionInfo> {
+    let response = client
+        .http_client()
+        .get(token_url)
+        .headers(client.auth_headers())
+        .send()
+        .await?;
 
-    let response = api.check_response(response, not_found_id, not_found_ctx).await?;
+    let response = client.check_response(response, not_found_id, not_found_ctx).await?;
 
     let token_resp: XetTokenResponse = response.json().await?;
     Ok(XetConnectionInfo {
@@ -56,18 +61,18 @@ async fn fetch_xet_connection_info(
 }
 
 fn repo_xet_token_url(
-    api: &HFClient,
+    client: &HFClient,
     token_type: &str,
     repo_id: &str,
     repo_type: Option<RepoType>,
     revision: &str,
 ) -> String {
     let segment = constants::repo_type_api_segment(repo_type);
-    format!("{}/api/{}/{}/xet-{}-token/{}", api.endpoint(), segment, repo_id, token_type, revision)
+    format!("{}/api/{}/{}/xet-{}-token/{}", client.endpoint(), segment, repo_id, token_type, revision)
 }
 
-pub(crate) fn bucket_xet_token_url(api: &HFClient, token_type: &str, bucket_id: &str) -> String {
-    format!("{}/api/buckets/{}/xet-{}-token", api.endpoint(), bucket_id, token_type)
+pub(crate) fn bucket_xet_token_url(client: &HFClient, token_type: &str, bucket_id: &str) -> String {
+    format!("{}/api/buckets/{}/xet-{}-token", client.endpoint(), bucket_id, token_type)
 }
 
 /// Returns `true` if the error indicates the XetSession is permanently
@@ -197,7 +202,7 @@ impl HFRepository {
         local_dir: &std::path::Path,
         head_response: &reqwest::Response,
         progress: &Progress,
-    ) -> Result<PathBuf> {
+    ) -> HFResult<PathBuf> {
         let repo_path = self.repo_path();
         let repo_type = Some(self.repo_type);
         let file_hash = crate::api::files::extract_xet_hash(head_response)
@@ -272,7 +277,7 @@ impl HFRepository {
         file_size: u64,
         path: &std::path::Path,
         progress: &Progress,
-    ) -> Result<()> {
+    ) -> HFResult<()> {
         let repo_path = self.repo_path();
         let repo_type = Some(self.repo_type);
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, repo_type, revision);
@@ -340,7 +345,7 @@ impl HFRepository {
         revision: &str,
         files: &[XetBatchFile],
         progress: &Progress,
-    ) -> Result<()> {
+    ) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
         }
@@ -426,7 +431,7 @@ impl HFRepository {
         file_hash: &str,
         file_size: u64,
         range: Option<std::ops::Range<u64>>,
-    ) -> Result<impl futures::Stream<Item = Result<bytes::Bytes>> + use<>> {
+    ) -> HFResult<impl futures::Stream<Item = HFResult<bytes::Bytes>> + use<>> {
         let repo_path = self.repo_path();
         let repo_type = Some(self.repo_type);
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, repo_type, revision);
@@ -483,7 +488,7 @@ impl HFRepository {
         files: &[(String, AddSource)],
         revision: &str,
         progress: &Progress,
-    ) -> Result<Vec<XetFileInfo>> {
+    ) -> HFResult<Vec<XetFileInfo>> {
         let repo_path = self.repo_path();
         let repo_type = Some(self.repo_type);
         tracing::info!(repo = repo_path.as_str(), "fetching xet write token");
@@ -650,7 +655,7 @@ impl crate::bucket::HFBucket {
         &self,
         files: &[(String, AddSource)],
         progress: &Progress,
-    ) -> Result<Vec<XetFileInfo>> {
+    ) -> HFResult<Vec<XetFileInfo>> {
         let bucket_id = self.bucket_id();
         tracing::info!(bucket = bucket_id.as_str(), "fetching xet write token");
         let token_url = bucket_xet_token_url(&self.hf_client, "write", &bucket_id);
@@ -805,7 +810,7 @@ impl crate::bucket::HFBucket {
         Ok(xet_file_infos)
     }
 
-    pub(crate) async fn xet_download_batch(&self, files: &[XetBatchFile], progress: &Progress) -> Result<()> {
+    pub(crate) async fn xet_download_batch(&self, files: &[XetBatchFile], progress: &Progress) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
         }
@@ -887,7 +892,7 @@ impl crate::bucket::HFBucket {
 impl HFClient {
     /// Fetch a Xet connection token (read or write) for a repository.
     /// Endpoint: GET /api/{repo_type}s/{repo_id}/xet-{read|write}-token/{revision}
-    pub async fn get_xet_token(&self, params: &GetXetTokenParams) -> Result<XetConnectionInfo> {
+    pub async fn get_xet_token(&self, params: &GetXetTokenParams) -> HFResult<XetConnectionInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let token_url =
             repo_xet_token_url(self, params.token_type.as_str(), &params.repo_id, params.repo_type, revision);

@@ -41,16 +41,16 @@ pub enum BucketsCommand {
     Sync(sync::Args),
 }
 
-pub async fn execute(api: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
     match args.command {
-        BucketsCommand::Cp(a) => cp::execute(api, a, multi).await,
-        BucketsCommand::Create(a) => create::execute(api, a).await,
-        BucketsCommand::Delete(a) => delete::execute(api, a).await,
-        BucketsCommand::Info(a) => info::execute(api, a).await,
-        BucketsCommand::List(a) => list::execute(api, a).await,
-        BucketsCommand::Move(a) => move_bucket::execute(api, a).await,
-        BucketsCommand::Remove(a) => remove::execute(api, a).await,
-        BucketsCommand::Sync(a) => sync::execute(api, a, multi).await,
+        BucketsCommand::Cp(a) => cp::execute(client, a, multi).await,
+        BucketsCommand::Create(a) => create::execute(client, a).await,
+        BucketsCommand::Delete(a) => delete::execute(client, a).await,
+        BucketsCommand::Info(a) => info::execute(client, a).await,
+        BucketsCommand::List(a) => list::execute(client, a).await,
+        BucketsCommand::Move(a) => move_bucket::execute(client, a).await,
+        BucketsCommand::Remove(a) => remove::execute(client, a).await,
+        BucketsCommand::Sync(a) => sync::execute(client, a, multi).await,
     }
 }
 

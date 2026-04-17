@@ -44,10 +44,10 @@ use hf_hub::{HFClient, ModelInfoParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
+    let client = HFClient::new()?;
 
     // Get model info
-    let info = api.model_info(
+    let info = client.model_info(
         &ModelInfoParams::builder().repo_id("gpt2").build()
     ).await?;
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
@@ -66,14 +66,14 @@ use hf_hub::{HFClient, ListModelsParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
+    let client = HFClient::new()?;
 
     let params = ListModelsParams::builder()
         .author("meta-llama")
         .limit(5_usize)
         .build();
 
-    let stream = api.list_models(&params);
+    let stream = client.list_models(&params);
     futures::pin_mut!(stream);
 
     while let Some(model) = stream.next().await {
@@ -122,8 +122,8 @@ use hf_hub::{HFClient, RepoDownloadFileParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
-    let repo = api.model("openai-community", "gpt2");
+    let client = HFClient::new()?;
+    let repo = client.model("openai-community", "gpt2");
 
     let path = repo.download_file(
         &RepoDownloadFileParams::builder()
@@ -144,8 +144,8 @@ use hf_hub::{AddSource, HFClient, RepoUploadFileParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
-    let repo = api.model("your-username", "your-repo");
+    let client = HFClient::new()?;
+    let repo = client.model("your-username", "your-repo");
 
     let commit = repo.upload_file(
         &RepoUploadFileParams::builder()
@@ -167,9 +167,9 @@ use hf_hub::{CreateRepoParams, HFClient};
 
 #[tokio::main]
 async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
+    let client = HFClient::new()?;
 
-    let url = api.create_repo(
+    let url = client.create_repo(
         &CreateRepoParams::builder()
             .repo_id("your-username/new-model")
             .private(true)

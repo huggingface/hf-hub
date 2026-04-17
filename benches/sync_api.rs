@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use hf_hub::{RepoDownloadFileParams, RepoGetFileMetadataParams, RepoInfoParams};
+use hf_hub::types::{RepoDownloadFileParams, RepoGetFileMetadataParams, RepoInfoParams};
 use tempfile::TempDir;
 // ---------------------------------------------------------------------------
 // Download benchmarks

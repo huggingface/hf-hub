@@ -15,9 +15,9 @@ pub struct Args {
     pub quiet: bool,
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let (namespace, name) = parse_bucket_id(&args.bucket_id)?;
-    let bucket = api.bucket(&namespace, &name);
+    let bucket = client.bucket(&namespace, &name);
     let info = bucket.info().await?;
 
     if args.quiet {

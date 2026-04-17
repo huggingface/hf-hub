@@ -32,12 +32,12 @@ pub enum AuthCommand {
     Whoami(whoami::Args),
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     match args.command {
-        AuthCommand::Login(a) => login::execute(api, a).await,
-        AuthCommand::Logout(a) => logout::execute(api, a).await,
-        AuthCommand::Switch(a) => switch::execute(api, a).await,
-        AuthCommand::List(a) => list::execute(api, a).await,
-        AuthCommand::Whoami(a) => whoami::execute(api, a).await,
+        AuthCommand::Login(a) => login::execute(client, a).await,
+        AuthCommand::Logout(a) => logout::execute(client, a).await,
+        AuthCommand::Switch(a) => switch::execute(client, a).await,
+        AuthCommand::List(a) => list::execute(client, a).await,
+        AuthCommand::Whoami(a) => whoami::execute(client, a).await,
     }
 }

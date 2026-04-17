@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
-use hf_hub::{GatedApprovalMode, GatedNotificationsMode, HFClient, RepoUpdateSettingsParams};
+use hf_hub::HFClient;
+use hf_hub::types::{GatedApprovalMode, GatedNotificationsMode, RepoUpdateSettingsParams};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -40,9 +41,9 @@ pub struct Args {
     pub gated_notifications_mode: Option<String>,
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(api, &args.repo_id, repo_type);
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
+    let repo_type: hf_hub::types::RepoType = args.r#type.into();
+    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
 
     let gated: Option<GatedApprovalMode> = args.gated.map(|g| g.parse()).transpose()?;
     let gated_notifications_mode: Option<GatedNotificationsMode> =

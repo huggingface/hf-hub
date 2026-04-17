@@ -14,8 +14,8 @@ pub struct Args {
     pub format: OutputFormat,
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
-    let user = api.whoami().await?;
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
+    let user = client.whoami().await?;
     let orgs: Vec<String> = user
         .orgs
         .as_deref()

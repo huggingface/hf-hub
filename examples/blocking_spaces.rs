@@ -5,27 +5,28 @@
 //! Requires HF_TOKEN and the "blocking" + "spaces" features.
 //! Run: cargo run -p examples --features blocking --example blocking_spaces
 
-use hf_hub::{
-    CreateRepoParams, DeleteRepoParams, HFClientSync, RepoType, SpaceSecretDeleteParams, SpaceSecretParams,
+use hf_hub::HFClientSync;
+use hf_hub::types::{
+    CreateRepoParams, DeleteRepoParams, RepoType, SpaceSecretDeleteParams, SpaceSecretParams,
     SpaceVariableDeleteParams, SpaceVariableParams,
 };
 
-fn main() -> hf_hub::Result<()> {
-    let api = HFClientSync::new()?;
+fn main() -> hf_hub::HFResult<()> {
+    let client = HFClientSync::new()?;
 
     // --- Read operations ---
 
-    let reference_space = api.space("huggingface", "transformers-benchmarks");
+    let reference_space = client.space("huggingface", "transformers-benchmarks");
     let runtime = reference_space.runtime()?;
     println!("Space runtime: {runtime:?}");
 
     // --- Write operations (creates real resources on the Hub) ---
 
-    let user = api.whoami()?;
+    let user = client.whoami()?;
     let unique = std::process::id();
-    let space = api.space(&user.username, format!("blocking-example-space-{unique}"));
+    let space = client.space(&user.username, format!("blocking-example-space-{unique}"));
 
-    api.create_repo(
+    client.create_repo(
         &CreateRepoParams::builder()
             .repo_id(space.repo_path())
             .repo_type(RepoType::Space)
@@ -54,7 +55,7 @@ fn main() -> hf_hub::Result<()> {
     let restarted = space.restart()?;
     println!("Restarted space: {restarted:?}");
 
-    api.delete_repo(
+    client.delete_repo(
         &DeleteRepoParams::builder()
             .repo_id(space.repo_path())
             .repo_type(RepoType::Space)

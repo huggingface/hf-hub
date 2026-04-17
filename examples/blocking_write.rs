@@ -5,21 +5,22 @@
 //! Requires HF_TOKEN environment variable.
 //! Run: cargo run -p examples --features blocking --example blocking_write
 
-use hf_hub::{
-    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, HFClientSync, RepoCreateBranchParams,
-    RepoCreateCommitParams, RepoCreateTagParams, RepoDeleteBranchParams, RepoDeleteFileParams, RepoDeleteTagParams,
-    RepoDownloadFileParams, RepoListFilesParams, RepoListRefsParams, RepoUploadFileParams, RepoUploadFolderParams,
+use hf_hub::HFClientSync;
+use hf_hub::types::{
+    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, RepoCreateBranchParams, RepoCreateCommitParams,
+    RepoCreateTagParams, RepoDeleteBranchParams, RepoDeleteFileParams, RepoDeleteTagParams, RepoDownloadFileParams,
+    RepoFileExistsParams, RepoListFilesParams, RepoListRefsParams, RepoUploadFileParams, RepoUploadFolderParams,
 };
 
-fn main() -> hf_hub::Result<()> {
-    let api = HFClientSync::new()?;
-    let user = api.whoami()?;
+fn main() -> hf_hub::HFResult<()> {
+    let client = HFClientSync::new()?;
+    let user = client.whoami()?;
     let unique = std::process::id();
-    let repo = api.model(&user.username, format!("sync-example-{unique}"));
+    let repo = client.model(&user.username, format!("sync-example-{unique}"));
 
     // --- Create repo ---
 
-    let repo_url = api.create_repo(
+    let repo_url = client.create_repo(
         &CreateRepoParams::builder()
             .repo_id(repo.repo_path())
             .private(true)
@@ -113,12 +114,12 @@ fn main() -> hf_hub::Result<()> {
     // --- Delete a file ---
 
     repo.delete_file(&RepoDeleteFileParams::builder().path_in_repo("hello.txt").build())?;
-    let gone = !repo.file_exists(&hf_hub::RepoFileExistsParams::builder().filename("hello.txt").build())?;
+    let gone = !repo.file_exists(&RepoFileExistsParams::builder().filename("hello.txt").build())?;
     println!("\nhello.txt deleted: {gone}");
 
     // --- Clean up ---
 
-    api.delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())?;
+    client.delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())?;
     println!("Deleted repo");
 
     Ok(())

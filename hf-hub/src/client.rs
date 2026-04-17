@@ -7,7 +7,7 @@ use reqwest_retry::policies::ExponentialBackoff;
 use tracing::debug;
 
 use crate::constants;
-use crate::error::{HFError, NotFoundContext, Result};
+use crate::error::{HFError, HFResult, NotFoundContext};
 
 /// Async client for the Hugging Face Hub API.
 ///
@@ -129,7 +129,7 @@ impl HFClientBuilder {
     ///
     /// Returns an error if the endpoint URL is not a valid URL or if the `reqwest` client
     /// cannot be constructed (e.g., an invalid `User-Agent` string was provided).
-    pub fn build(self) -> Result<HFClient> {
+    pub fn build(self) -> HFResult<HFClient> {
         let endpoint = self
             .endpoint
             .or_else(|| std::env::var(constants::HF_ENDPOINT).ok())
@@ -188,7 +188,6 @@ impl HFClientBuilder {
         })
     }
 
-
     /// Builds the [`crate::blocking::HFClientSync`].
     ///
     /// # Errors
@@ -197,7 +196,7 @@ impl HFClientBuilder {
     /// cannot be constructed (e.g., an invalid `User-Agent` string was provided), or if the
     /// tokio runtime handle could not be correctly created for the blocking client.
     #[cfg(feature = "blocking")]
-    pub fn build_sync(self) -> Result<crate::blocking::HFClientSync> {
+    pub fn build_sync(self) -> HFResult<crate::blocking::HFClientSync> {
         let async_client = self.build()?;
         let client = crate::blocking::HFClientSync::from_inner(async_client)?;
         Ok(client)
@@ -217,7 +216,7 @@ impl HFClient {
     /// # Errors
     ///
     /// Fails if the resolved endpoint URL is invalid or the HTTP client cannot be built.
-    pub fn new() -> Result<Self> {
+    pub fn new() -> HFResult<Self> {
         HFClientBuilder::new().build()
     }
 
@@ -298,7 +297,7 @@ impl HFClient {
         response: reqwest::Response,
         repo_id: Option<&str>,
         not_found_ctx: NotFoundContext,
-    ) -> Result<reqwest::Response> {
+    ) -> HFResult<reqwest::Response> {
         let status = response.status();
         if status.is_success() {
             return Ok(response);
@@ -339,7 +338,7 @@ impl HFClient {
     /// [`replace_xet_session`](Self::replace_xet_session) so that only the
     /// caller that observed the error triggers a replacement — concurrent
     /// callers that already obtained a fresh session won't clobber it.
-    pub(crate) fn xet_session(&self) -> Result<(xet::xet_session::XetSession, u64)> {
+    pub(crate) fn xet_session(&self) -> HFResult<(xet::xet_session::XetSession, u64)> {
         let mut guard = self
             .inner
             .xet_state
@@ -421,14 +420,14 @@ mod tests {
 
     #[test]
     fn test_builder_cache_dir_explicit() {
-        let api = HFClientBuilder::new().cache_dir("/tmp/my-cache").build().unwrap();
-        assert_eq!(api.cache_dir(), std::path::Path::new("/tmp/my-cache"));
+        let client = HFClientBuilder::new().cache_dir("/tmp/my-cache").build().unwrap();
+        assert_eq!(client.cache_dir(), std::path::Path::new("/tmp/my-cache"));
     }
 
     #[test]
     fn test_builder_cache_dir_default() {
-        let api = HFClientBuilder::new().build().unwrap();
-        let path_str = api.cache_dir().to_string_lossy();
+        let client = HFClientBuilder::new().build().unwrap();
+        let path_str = client.cache_dir().to_string_lossy();
         assert!(path_str.contains("huggingface") && path_str.ends_with("hub"));
     }
 

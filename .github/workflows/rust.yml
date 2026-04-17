@@ -71,10 +71,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
-          python-version: "3.11"
+          python-version: "3.14"
 
       - name: Build workspace (all targets, all features)
         run: cargo build --workspace --all-targets --all-features --verbose
+
+      - name: Install huggingface_hub CLI in venv
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install huggingface_hub[cli]
 
       - name: Run tests
         env:
@@ -82,7 +88,9 @@ jobs:
           HF_CI_TOKEN: ${{ secrets.HF_CI_TOKEN }}
           HF_PROD_TOKEN: ${{ secrets.HF_PROD_TOKEN }}
           HF_TEST_WRITE: "1"
-        run: cargo test --workspace --all-features --verbose
+        run: |
+          source venv/bin/activate
+          cargo test --workspace --all-features --verbose
 
   docs:
     name: Docs

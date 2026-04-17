@@ -1,6 +1,7 @@
 pub mod token;
 
-use hf_hub::{HFClient, HFRepository, RepoType};
+use hf_hub::types::RepoType;
+use hf_hub::{HFClient, HFRepository};
 
 /// Split a repo ID like "owner/name" into (owner, name).
 /// If no slash is present, treats the whole string as the name with an empty owner.
@@ -11,8 +12,8 @@ pub fn split_repo_id(repo_id: &str) -> (&str, &str) {
     }
 }
 
-/// Create an HFRepository handle from an api client, repo_id string, and repo_type.
-pub fn make_repo(api: &HFClient, repo_id: &str, repo_type: RepoType) -> HFRepository {
+/// Create an HFRepository handle from an client client, repo_id string, and repo_type.
+pub fn make_repo(client: &HFClient, repo_id: &str, repo_type: RepoType) -> HFRepository {
     let (owner, name) = split_repo_id(repo_id);
-    api.repo(repo_type, owner, name)
+    client.repo(repo_type, owner, name)
 }

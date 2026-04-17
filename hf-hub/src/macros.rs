@@ -36,7 +36,7 @@ macro_rules! sync_api_stream {
         impl $crate::blocking::$sync_type {
             $(
                 #[doc = concat!("Blocking wrapper around [`", stringify!($async_type), "::", stringify!($name), "`]. Collects all items into a `Vec`.")]
-                pub fn $name(&self $(, $pname : $ptype)*) -> $crate::error::Result<Vec<$item>> {
+                pub fn $name(&self $(, $pname : $ptype)*) -> $crate::error::HFResult<Vec<$item>> {
                     use futures::StreamExt;
                     self.runtime.block_on(async {
                         let stream = self.inner.$name($($pname),*)?;
@@ -68,7 +68,7 @@ macro_rules! sync_api_async_stream {
         impl $crate::blocking::$sync_type {
             $(
                 #[doc = concat!("Blocking wrapper around [`", stringify!($async_type), "::", stringify!($name), "`]. Collects all items into a `Vec`.")]
-                pub fn $name(&self $(, $pname : $ptype)*) -> $crate::error::Result<Vec<$item>> {
+                pub fn $name(&self $(, $pname : $ptype)*) -> $crate::error::HFResult<Vec<$item>> {
                     use futures::StreamExt;
                     self.runtime.block_on(async {
                         let stream = self.inner.$name($($pname),*).await?;

@@ -7,9 +7,9 @@
 
 use std::sync::Arc;
 
-use hf_hub::{
-    DownloadEvent, FileStatus, HFClient, ProgressEvent, ProgressHandler, RepoDownloadFileParams, UploadEvent,
-    UploadPhase,
+use hf_hub::HFClient;
+use hf_hub::types::{
+    DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, RepoDownloadFileParams, UploadEvent, UploadPhase,
 };
 
 struct PrintProgressHandler;
@@ -98,9 +98,9 @@ impl ProgressHandler for PrintProgressHandler {
 }
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
-    let model = api.model("openai-community", "gpt2");
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
+    let model = client.model("openai-community", "gpt2");
 
     let tmp_dir = tempfile::tempdir().expect("failed to create tempdir");
 

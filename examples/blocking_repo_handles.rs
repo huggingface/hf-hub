@@ -6,9 +6,10 @@
 //! Read-only operations require no auth.
 //! Run: cargo run -p examples --features blocking --example blocking_repo_handles
 
-use hf_hub::{HFClientSync, HFSpaceSync, RepoFileExistsParams, RepoInfo, RepoInfoParams, RepoType};
+use hf_hub::types::{RepoFileExistsParams, RepoInfo, RepoInfoParams, RepoType};
+use hf_hub::{HFClientSync, HFSpaceSync};
 
-fn main() -> hf_hub::Result<()> {
+fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
 
     let model = client.model("openai-community", "gpt2");

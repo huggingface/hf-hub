@@ -3,7 +3,8 @@ use std::io::{self, Write};
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures::StreamExt;
-use hf_hub::{BucketTreeEntry, HFClient, ListBucketTreeParams};
+use hf_hub::HFClient;
+use hf_hub::types::{BucketTreeEntry, ListBucketTreeParams};
 
 use crate::output::CommandResult;
 
@@ -55,7 +56,7 @@ fn parse_bucket_path(input: &str) -> Result<(String, String, Option<String>)> {
     }
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     if (!args.include.is_empty() || !args.exclude.is_empty()) && !args.recursive {
         anyhow::bail!("--include and --exclude require --recursive");
     }
@@ -66,7 +67,7 @@ pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
         anyhow::bail!("Must specify a file path, or use --recursive to delete all files under a prefix");
     }
 
-    let bucket = api.bucket(&namespace, &bucket_name);
+    let bucket = client.bucket(&namespace, &bucket_name);
     let bucket_id = format!("{namespace}/{bucket_name}");
 
     let paths_to_delete = if args.recursive {

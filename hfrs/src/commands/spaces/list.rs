@@ -1,7 +1,8 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures::StreamExt;
-use hf_hub::{HFClient, ListSpacesParams};
+use hf_hub::HFClient;
+use hf_hub::types::ListSpacesParams;
 use serde_json::json;
 
 use crate::cli::OutputFormat;
@@ -39,7 +40,7 @@ pub struct Args {
     pub quiet: bool,
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let filter = if args.filter.is_empty() {
         None
     } else {
@@ -55,7 +56,7 @@ pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
         limit: Some(args.limit),
     };
 
-    let stream = api.list_spaces(&params)?;
+    let stream = client.list_spaces(&params)?;
     futures::pin_mut!(stream);
 
     let mut spaces = Vec::new();

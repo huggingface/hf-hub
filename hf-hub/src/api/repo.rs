@@ -3,7 +3,7 @@ use url::Url;
 
 use crate::client::HFClient;
 use crate::constants;
-use crate::error::{HFError, Result};
+use crate::error::{HFError, HFResult};
 use crate::repository::HFRepository;
 use crate::types::{
     CreateRepoParams, DatasetInfo, DeleteRepoParams, ListDatasetsParams, ListModelsParams, ListSpacesParams, ModelInfo,
@@ -13,7 +13,11 @@ use crate::types::{
 impl HFRepository {
     /// Get info about a model repository.
     /// Endpoint: GET /api/models/{repo_id} or /api/models/{repo_id}/revision/{revision}
-    pub(crate) async fn model_info(&self, revision: Option<String>, expand: Option<Vec<String>>) -> Result<ModelInfo> {
+    pub(crate) async fn model_info(
+        &self,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> HFResult<ModelInfo> {
         let mut url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
         if let Some(ref revision) = revision {
             url = format!("{url}/revision/{revision}");
@@ -39,7 +43,7 @@ impl HFRepository {
         &self,
         revision: Option<String>,
         expand: Option<Vec<String>>,
-    ) -> Result<DatasetInfo> {
+    ) -> HFResult<DatasetInfo> {
         let mut url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
         if let Some(ref revision) = revision {
             url = format!("{url}/revision/{revision}");
@@ -61,7 +65,11 @@ impl HFRepository {
 
     /// Get info about a space.
     /// Endpoint: GET /api/spaces/{repo_id} or /api/spaces/{repo_id}/revision/{revision}
-    pub(crate) async fn space_info(&self, revision: Option<String>, expand: Option<Vec<String>>) -> Result<SpaceInfo> {
+    pub(crate) async fn space_info(
+        &self,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> HFResult<SpaceInfo> {
         let mut url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
         if let Some(ref revision) = revision {
             url = format!("{url}/revision/{revision}");
@@ -82,7 +90,7 @@ impl HFRepository {
     }
 
     /// Return `true` if the repository exists and is accessible with the current credentials.
-    pub async fn exists(&self) -> Result<bool> {
+    pub async fn exists(&self) -> HFResult<bool> {
         let url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
         let response = self
             .hf_client
@@ -108,7 +116,7 @@ impl HFRepository {
     }
 
     /// Return `true` if the given revision (branch, tag, or commit SHA) exists.
-    pub async fn revision_exists(&self, params: &RepoRevisionExistsParams) -> Result<bool> {
+    pub async fn revision_exists(&self, params: &RepoRevisionExistsParams) -> HFResult<bool> {
         let url =
             format!("{}/revision/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.revision);
         let response = self
@@ -135,7 +143,7 @@ impl HFRepository {
     }
 
     /// Return `true` if the given file exists in the repository at the specified revision.
-    pub async fn file_exists(&self, params: &RepoFileExistsParams) -> Result<bool> {
+    pub async fn file_exists(&self, params: &RepoFileExistsParams) -> HFResult<bool> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = self
             .hf_client
@@ -178,7 +186,7 @@ impl HFRepository {
     /// Update repository settings such as visibility, gating policy, description,
     /// discussion settings, and gated notification preferences.
     /// Endpoint: PUT /api/{repo_type}s/{repo_id}/settings
-    pub async fn update_settings(&self, params: &RepoUpdateSettingsParams) -> Result<()> {
+    pub async fn update_settings(&self, params: &RepoUpdateSettingsParams) -> HFResult<()> {
         let url = format!("{}/settings", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()));
 
         let response = self
@@ -201,7 +209,7 @@ impl HFRepository {
 impl HFClient {
     /// List models on the Hub.
     /// Endpoint: GET /api/models
-    pub fn list_models(&self, params: &ListModelsParams) -> Result<impl Stream<Item = Result<ModelInfo>> + '_> {
+    pub fn list_models(&self, params: &ListModelsParams) -> HFResult<impl Stream<Item = HFResult<ModelInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/models", self.endpoint()))?;
         let mut query: Vec<(String, String)> = Vec::new();
         if let Some(ref search) = params.search {
@@ -240,7 +248,10 @@ impl HFClient {
 
     /// List datasets on the Hub.
     /// Endpoint: GET /api/datasets
-    pub fn list_datasets(&self, params: &ListDatasetsParams) -> Result<impl Stream<Item = Result<DatasetInfo>> + '_> {
+    pub fn list_datasets(
+        &self,
+        params: &ListDatasetsParams,
+    ) -> HFResult<impl Stream<Item = HFResult<DatasetInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/datasets", self.endpoint()))?;
         let mut query: Vec<(String, String)> = Vec::new();
         if let Some(ref search) = params.search {
@@ -270,7 +281,7 @@ impl HFClient {
 
     /// List spaces on the Hub.
     /// Endpoint: GET /api/spaces
-    pub fn list_spaces(&self, params: &ListSpacesParams) -> Result<impl Stream<Item = Result<SpaceInfo>> + '_> {
+    pub fn list_spaces(&self, params: &ListSpacesParams) -> HFResult<impl Stream<Item = HFResult<SpaceInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/spaces", self.endpoint()))?;
         let mut query: Vec<(String, String)> = Vec::new();
         if let Some(ref search) = params.search {
@@ -300,7 +311,7 @@ impl HFClient {
 
     /// Create a new repository.
     /// Endpoint: POST /api/repos/create
-    pub async fn create_repo(&self, params: &CreateRepoParams) -> Result<RepoUrl> {
+    pub async fn create_repo(&self, params: &CreateRepoParams) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/create", self.endpoint());
 
         let (namespace, name) = split_repo_id(&params.repo_id);
@@ -344,7 +355,7 @@ impl HFClient {
 
     /// Delete a repository.
     /// Endpoint: DELETE /api/repos/delete
-    pub async fn delete_repo(&self, params: &DeleteRepoParams) -> Result<()> {
+    pub async fn delete_repo(&self, params: &DeleteRepoParams) -> HFResult<()> {
         let url = format!("{}/api/repos/delete", self.endpoint());
 
         let (namespace, name) = split_repo_id(&params.repo_id);
@@ -376,7 +387,7 @@ impl HFClient {
 
     /// Move (rename) a repository.
     /// Endpoint: POST /api/repos/move
-    pub async fn move_repo(&self, params: &MoveRepoParams) -> Result<RepoUrl> {
+    pub async fn move_repo(&self, params: &MoveRepoParams) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/move", self.endpoint());
         let mut body = serde_json::json!({
             "fromRepo": params.from_id,
@@ -456,9 +467,9 @@ mod tests {
 
 sync_api! {
     impl HFClient -> HFClientSync {
-        fn create_repo(&self, params: &CreateRepoParams) -> Result<RepoUrl>;
-        fn delete_repo(&self, params: &DeleteRepoParams) -> Result<()>;
-        fn move_repo(&self, params: &MoveRepoParams) -> Result<RepoUrl>;
+        fn create_repo(&self, params: &CreateRepoParams) -> HFResult<RepoUrl>;
+        fn delete_repo(&self, params: &DeleteRepoParams) -> HFResult<()>;
+        fn move_repo(&self, params: &MoveRepoParams) -> HFResult<RepoUrl>;
     }
 }
 
@@ -472,10 +483,10 @@ sync_api_stream! {
 
 sync_api! {
     impl HFRepository -> HFRepositorySync {
-        fn info(&self, params: &crate::types::RepoInfoParams) -> Result<crate::types::RepoInfo>;
-        fn exists(&self) -> Result<bool>;
-        fn revision_exists(&self, params: &RepoRevisionExistsParams) -> Result<bool>;
-        fn file_exists(&self, params: &RepoFileExistsParams) -> Result<bool>;
-        fn update_settings(&self, params: &RepoUpdateSettingsParams) -> Result<()>;
+        fn info(&self, params: &crate::types::RepoInfoParams) -> HFResult<crate::types::RepoInfo>;
+        fn exists(&self) -> HFResult<bool>;
+        fn revision_exists(&self, params: &RepoRevisionExistsParams) -> HFResult<bool>;
+        fn file_exists(&self, params: &RepoFileExistsParams) -> HFResult<bool>;
+        fn update_settings(&self, params: &RepoUpdateSettingsParams) -> HFResult<()>;
     }
 }

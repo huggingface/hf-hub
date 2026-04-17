@@ -3,10 +3,10 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::client::HFClient;
-use crate::error::{HFError, Result};
+use crate::error::{HFError, HFResult};
 use crate::{repository as repo, types};
 
-fn build_runtime() -> Result<Arc<tokio::runtime::Runtime>> {
+fn build_runtime() -> HFResult<Arc<tokio::runtime::Runtime>> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -93,7 +93,7 @@ impl HFClientSync {
     /// # Errors
     ///
     /// Returns an error if the tokio runtime cannot be created or if `HFClient::new` fails.
-    pub fn new() -> Result<Self> {
+    pub fn new() -> HFResult<Self> {
         Ok(Self {
             inner: HFClient::new()?,
             runtime: build_runtime()?,
@@ -105,7 +105,7 @@ impl HFClientSync {
     /// # Errors
     ///
     /// Returns an error if the tokio runtime cannot be created.
-    pub fn from_inner(inner: HFClient) -> Result<Self> {
+    pub fn from_inner(inner: HFClient) -> HFResult<Self> {
         Ok(Self {
             inner,
             runtime: build_runtime()?,
@@ -219,7 +219,7 @@ impl Deref for HFBucketSync {
 impl TryFrom<HFRepositorySync> for HFSpaceSync {
     type Error = HFError;
 
-    fn try_from(repo: HFRepositorySync) -> Result<Self> {
+    fn try_from(repo: HFRepositorySync) -> HFResult<Self> {
         if repo.inner.repo_type() != types::RepoType::Space {
             return Err(HFError::InvalidRepoType {
                 expected: types::RepoType::Space,
@@ -251,22 +251,22 @@ mod tests {
 
     #[test]
     fn test_hfapisync_creation() {
-        let sync_api = HFClientSync::new();
-        assert!(sync_api.is_ok());
+        let client = HFClientSync::new();
+        assert!(client.is_ok());
     }
 
     #[test]
     fn test_hfapisync_from_api() {
-        let api = HFClient::builder().build().unwrap();
-        let sync_api = HFClientSync::from_inner(api);
-        assert!(sync_api.is_ok());
+        let async_client = HFClient::builder().build().unwrap();
+        let client = HFClientSync::from_inner(async_client);
+        assert!(client.is_ok());
     }
 
     #[test]
     fn test_sync_repo_constructors() {
-        let api = HFClientSync::from_inner(HFClient::builder().build().unwrap()).unwrap();
-        let repo = api.model("openai-community", "gpt2");
-        let space = api.space("huggingface", "transformers-benchmarks");
+        let client = HFClientSync::from_inner(HFClient::builder().build().unwrap()).unwrap();
+        let repo = client.model("openai-community", "gpt2");
+        let space = client.space("huggingface", "transformers-benchmarks");
 
         assert_eq!(repo.owner(), "openai-community");
         assert_eq!(repo.name(), "gpt2");
@@ -276,11 +276,11 @@ mod tests {
 
     #[test]
     fn test_sync_space_try_from_repo() {
-        let api = HFClientSync::from_inner(HFClient::builder().build().unwrap()).unwrap();
-        let space_repo = api.repo(types::RepoType::Space, "owner", "space");
+        let client = HFClientSync::from_inner(HFClient::builder().build().unwrap()).unwrap();
+        let space_repo = client.repo(types::RepoType::Space, "owner", "space");
         assert!(HFSpaceSync::try_from(space_repo).is_ok());
 
-        let model_repo = api.repo(types::RepoType::Model, "owner", "model");
+        let model_repo = client.repo(types::RepoType::Model, "owner", "model");
         let error = HFSpaceSync::try_from(model_repo).unwrap_err();
         match error {
             HFError::InvalidRepoType { expected, actual } => {

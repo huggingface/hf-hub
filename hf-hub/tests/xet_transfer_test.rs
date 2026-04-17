@@ -17,11 +17,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use hf_hub::test_utils::*;
-use hf_hub::types::{AddSource, CreateRepoParams, DeleteRepoParams};
-use hf_hub::{
-    HFClient, HFClientBuilder, HFRepository, RepoDownloadFileParams, RepoDownloadFileStreamParams,
+use hf_hub::types::{
+    AddSource, CreateRepoParams, DeleteRepoParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
     RepoFileExistsParams, RepoUploadFileParams,
 };
+use hf_hub::{HFClient, HFClientBuilder, HFRepository};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
@@ -71,13 +71,13 @@ fn unique_suffix() -> String {
 }
 
 /// Split a `"owner/name"` repo_id into an [`HFRepository`] handle.
-fn repo_handle(api: &HFClient, owner: &str, name: &str) -> HFRepository {
-    api.model(owner, name)
+fn repo_handle(client: &HFClient, owner: &str, name: &str) -> HFRepository {
+    client.model(owner, name)
 }
 
-async fn create_test_repo(api: &HFClient, suffix: &str) -> (String, String) {
+async fn create_test_repo(client: &HFClient, suffix: &str) -> (String, String) {
     let username = WHOAMI_USERNAME
-        .get_or_init(|| async { api.whoami().await.expect("whoami failed").username })
+        .get_or_init(|| async { client.whoami().await.expect("whoami failed").username })
         .await;
     let name = format!("hf-hub-xet-test-{suffix}");
     let repo_id = format!("{username}/{name}");
@@ -86,13 +86,13 @@ async fn create_test_repo(api: &HFClient, suffix: &str) -> (String, String) {
         .private(true)
         .exist_ok(true)
         .build();
-    api.create_repo(&params).await.expect("create_repo failed");
+    client.create_repo(&params).await.expect("create_repo failed");
     (username.clone(), name)
 }
 
-async fn delete_test_repo(api: &HFClient, repo_id: &str) {
+async fn delete_test_repo(client: &HFClient, repo_id: &str) {
     let params = DeleteRepoParams::builder().repo_id(repo_id).build();
-    let _ = api.delete_repo(&params).await;
+    let _ = client.delete_repo(&params).await;
 }
 
 fn generate_random_bytes(size: usize) -> Vec<u8> {
@@ -111,14 +111,14 @@ fn sha256_hex(data: &[u8]) -> String {
 
 #[tokio::test]
 async fn test_upload_small_text_file_roundtrip() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
-    let (owner, name) = create_test_repo(&api, &unique_suffix()).await;
+    let (owner, name) = create_test_repo(&client, &unique_suffix()).await;
     let repo_id = format!("{owner}/{name}");
-    let repo = repo_handle(&api, &owner, &name);
+    let repo = repo_handle(&client, &owner, &name);
 
     let data = b"Hello from the xet transfer test!".to_vec();
     let commit = repo
@@ -145,19 +145,19 @@ async fn test_upload_small_text_file_roundtrip() {
         .unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), data);
 
-    delete_test_repo(&api, &repo_id).await;
+    delete_test_repo(&client, &repo_id).await;
 }
 
 #[tokio::test]
 async fn test_upload_empty_file() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
-    let (owner, name) = create_test_repo(&api, &unique_suffix()).await;
+    let (owner, name) = create_test_repo(&client, &unique_suffix()).await;
     let repo_id = format!("{owner}/{name}");
-    let repo = repo_handle(&api, &owner, &name);
+    let repo = repo_handle(&client, &owner, &name);
 
     repo.upload_file(
         &RepoUploadFileParams::builder()
@@ -181,19 +181,19 @@ async fn test_upload_empty_file() {
         .unwrap();
     assert!(std::fs::read(&path).unwrap().is_empty());
 
-    delete_test_repo(&api, &repo_id).await;
+    delete_test_repo(&client, &repo_id).await;
 }
 
 #[tokio::test]
 async fn test_upload_then_overwrite_same_path() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
-    let (owner, name) = create_test_repo(&api, &unique_suffix()).await;
+    let (owner, name) = create_test_repo(&client, &unique_suffix()).await;
     let repo_id = format!("{owner}/{name}");
-    let repo = repo_handle(&api, &owner, &name);
+    let repo = repo_handle(&client, &owner, &name);
 
     repo.upload_file(
         &RepoUploadFileParams::builder()
@@ -227,19 +227,19 @@ async fn test_upload_then_overwrite_same_path() {
         .unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "version 2 updated");
 
-    delete_test_repo(&api, &repo_id).await;
+    delete_test_repo(&client, &repo_id).await;
 }
 
 #[tokio::test]
 async fn test_upload_file_with_nested_path() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
-    let (owner, name) = create_test_repo(&api, &unique_suffix()).await;
+    let (owner, name) = create_test_repo(&client, &unique_suffix()).await;
     let repo_id = format!("{owner}/{name}");
-    let repo = repo_handle(&api, &owner, &name);
+    let repo = repo_handle(&client, &owner, &name);
 
     let data = b"deeply nested content".to_vec();
     repo.upload_file(
@@ -265,19 +265,19 @@ async fn test_upload_file_with_nested_path() {
     assert_eq!(path, dir.path().join("a/b/c/d/deep.txt"));
     assert_eq!(std::fs::read(&path).unwrap(), data);
 
-    delete_test_repo(&api, &repo_id).await;
+    delete_test_repo(&client, &repo_id).await;
 }
 
 #[tokio::test]
 async fn test_upload_from_file_path() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
-    let (owner, name) = create_test_repo(&api, &unique_suffix()).await;
+    let (owner, name) = create_test_repo(&client, &unique_suffix()).await;
     let repo_id = format!("{owner}/{name}");
-    let repo = repo_handle(&api, &owner, &name);
+    let repo = repo_handle(&client, &owner, &name);
 
     let tmp = tempfile::tempdir().unwrap();
     let data = b"content from a local file on disk".to_vec();
@@ -307,7 +307,7 @@ async fn test_upload_from_file_path() {
         .unwrap();
     assert_eq!(sha256_hex(&std::fs::read(&path).unwrap()), expected_hash);
 
-    delete_test_repo(&api, &repo_id).await;
+    delete_test_repo(&client, &repo_id).await;
 }
 
 // --- Large file / xet tests ---
@@ -316,10 +316,10 @@ async fn test_upload_from_file_path() {
 
 #[tokio::test]
 async fn test_download_from_known_xet_repo() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
 
     let dir = tempfile::tempdir().unwrap();
-    let result = repo_handle(&api, "hf-internal-testing", "tiny-gemma3")
+    let result = repo_handle(&client, "hf-internal-testing", "tiny-gemma3")
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("model.safetensors")
@@ -345,14 +345,14 @@ async fn test_download_from_known_xet_repo() {
 
 #[tokio::test]
 async fn test_upload_200mb_random_data_and_verify() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
-    let (owner, name) = create_test_repo(&api, &unique_suffix()).await;
+    let (owner, name) = create_test_repo(&client, &unique_suffix()).await;
     let repo_id = format!("{owner}/{name}");
-    let repo = repo_handle(&api, &owner, &name);
+    let repo = repo_handle(&client, &owner, &name);
 
     let data_200mb = generate_random_bytes(200 * 1024 * 1024);
     let expected_hash = sha256_hex(&data_200mb);
@@ -396,16 +396,16 @@ async fn test_upload_200mb_random_data_and_verify() {
     assert_eq!(downloaded_data.len(), 200 * 1024 * 1024);
     assert_eq!(sha256_hex(&downloaded_data), expected_hash);
 
-    delete_test_repo(&api, &repo_id).await;
+    delete_test_repo(&client, &repo_id).await;
 }
 
 // --- Xet streaming / range download tests ---
 
 #[tokio::test]
 async fn test_xet_download_stream_full() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
 
-    let repo = repo_handle(&api, "hf-internal-testing", "tiny-gemma3");
+    let repo = repo_handle(&client, "hf-internal-testing", "tiny-gemma3");
 
     let result = repo
         .download_file_stream(&RepoDownloadFileStreamParams::builder().filename("model.safetensors").build())
@@ -436,9 +436,9 @@ async fn test_xet_download_stream_full() {
 
 #[tokio::test]
 async fn test_xet_download_stream_range() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
 
-    let repo = repo_handle(&api, "hf-internal-testing", "tiny-gemma3");
+    let repo = repo_handle(&client, "hf-internal-testing", "tiny-gemma3");
 
     // Download first 1024 bytes via range
     let result = repo
@@ -473,9 +473,9 @@ async fn test_xet_download_stream_range() {
 
 #[tokio::test]
 async fn test_xet_download_stream_range_middle() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
 
-    let repo = repo_handle(&api, "hf-internal-testing", "tiny-gemma3");
+    let repo = repo_handle(&client, "hf-internal-testing", "tiny-gemma3");
 
     // Download bytes 1000..2000
     let result = repo

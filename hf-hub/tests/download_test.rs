@@ -12,13 +12,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
-use hf_hub::repository::HFRepository;
 use hf_hub::test_utils::*;
-use hf_hub::{
-    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, DownloadEvent, FileStatus, HFClient,
-    HFClientBuilder, ProgressEvent, ProgressHandler, RepoCreateCommitParams, RepoDownloadFileParams,
-    RepoDownloadFileStreamParams, RepoSnapshotDownloadParams, RepoUploadFileParams, UploadEvent, UploadPhase,
+use hf_hub::types::{
+    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, DownloadEvent, FileStatus, ProgressEvent,
+    ProgressHandler, RepoCreateCommitParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
+    RepoSnapshotDownloadParams, RepoUploadFileParams, UploadEvent, UploadPhase,
 };
+use hf_hub::{HFClient, HFClientBuilder, HFRepository};
 use sha2::{Digest, Sha256};
 
 fn prod_api() -> Option<HFClient> {
@@ -57,45 +57,45 @@ fn uuid_short() -> String {
     format!("{:016x}", rand::random::<u64>())
 }
 
-async fn cached_username(api: &HFClient) -> String {
-    api.whoami().await.expect("whoami failed").username
+async fn cached_username(client: &HFClient) -> String {
+    client.whoami().await.expect("whoami failed").username
 }
 
-async fn create_test_repo(api: &HFClient) -> String {
-    let username = cached_username(api).await;
+async fn create_test_repo(client: &HFClient) -> String {
+    let username = cached_username(client).await;
     let repo_id = format!("{}/hfrs-progress-test-{}", username, uuid_short());
     let params = CreateRepoParams::builder()
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(false)
         .build();
-    api.create_repo(&params).await.expect("create_repo failed");
+    client.create_repo(&params).await.expect("create_repo failed");
     repo_id
 }
 
-async fn delete_test_repo(api: &HFClient, repo_id: &str) {
+async fn delete_test_repo(client: &HFClient, repo_id: &str) {
     let params = DeleteRepoParams::builder().repo_id(repo_id).build();
-    let _ = api.delete_repo(&params).await;
+    let _ = client.delete_repo(&params).await;
 }
 
 const TEST_MODEL_PARTS: (&str, &str) = ("hf-internal-testing", "tiny-gemma3");
 const TEST_DATASET_PARTS: (&str, &str) = ("hf-internal-testing", "cats_vs_dogs_sample");
 
-fn model(api: &HFClient, owner: &str, name: &str) -> HFRepository {
-    api.model(owner, name)
+fn model(client: &HFClient, owner: &str, name: &str) -> HFRepository {
+    client.model(owner, name)
 }
 
-fn dataset(api: &HFClient, owner: &str, name: &str) -> HFRepository {
-    api.dataset(owner, name)
+fn dataset(client: &HFClient, owner: &str, name: &str) -> HFRepository {
+    client.dataset(owner, name)
 }
 
 #[tokio::test]
 async fn test_download_small_json_file() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
     let (owner, name) = TEST_MODEL_PARTS;
 
-    let path = model(&api, owner, name)
+    let path = model(&client, owner, name)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -113,11 +113,11 @@ async fn test_download_small_json_file() {
 
 #[tokio::test]
 async fn test_download_preserves_subdirectory_structure() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
     let (owner, name) = TEST_MODEL_PARTS;
 
-    let path = model(&api, owner, name)
+    let path = model(&client, owner, name)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -133,11 +133,11 @@ async fn test_download_preserves_subdirectory_structure() {
 
 #[tokio::test]
 async fn test_download_with_specific_revision() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
     let (owner, name) = TEST_MODEL_PARTS;
 
-    let path = model(&api, owner, name)
+    let path = model(&client, owner, name)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -156,11 +156,11 @@ async fn test_download_with_specific_revision() {
 
 #[tokio::test]
 async fn test_download_dataset_file() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
     let (owner, name) = TEST_DATASET_PARTS;
 
-    let path = dataset(&api, owner, name)
+    let path = dataset(&client, owner, name)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("README.md")
@@ -177,11 +177,11 @@ async fn test_download_dataset_file() {
 
 #[tokio::test]
 async fn test_download_nonexistent_file_returns_error() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
     let (owner, name) = TEST_MODEL_PARTS;
 
-    let result = model(&api, owner, name)
+    let result = model(&client, owner, name)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("this_file_does_not_exist_at_all.bin")
@@ -195,10 +195,10 @@ async fn test_download_nonexistent_file_returns_error() {
 
 #[tokio::test]
 async fn test_download_from_nonexistent_repo_returns_error() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
 
-    let result = model(&api, "this-user-does-not-exist-99999", "this-repo-does-not-exist")
+    let result = model(&client, "this-user-does-not-exist-99999", "this-repo-does-not-exist")
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("anything.txt")
@@ -212,10 +212,10 @@ async fn test_download_from_nonexistent_repo_returns_error() {
 
 #[tokio::test]
 async fn test_download_multiple_files_to_same_dir() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
 
     for filename in &["config.json", "README.md"] {
         let path = repo
@@ -236,11 +236,11 @@ async fn test_download_multiple_files_to_same_dir() {
 
 #[tokio::test]
 async fn test_download_file_content_is_deterministic() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let dir1 = tempfile::tempdir().unwrap();
     let dir2 = tempfile::tempdir().unwrap();
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
 
     for dir in [&dir1, &dir2] {
         repo.download_file(
@@ -263,14 +263,14 @@ async fn test_download_file_content_is_deterministic() {
 
 #[tokio::test]
 async fn test_download_overwrites_existing_file() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
     let (owner, name) = TEST_MODEL_PARTS;
 
     let dest = dir.path().join("config.json");
     std::fs::write(&dest, "old content").unwrap();
 
-    model(&api, owner, name)
+    model(&client, owner, name)
         .download_file(
             &RepoDownloadFileParams::builder()
                 .filename("config.json")
@@ -289,9 +289,9 @@ async fn test_download_overwrites_existing_file() {
 
 #[tokio::test]
 async fn test_download_stream_full_file() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
 
     let (content_length, stream) = repo
         .download_file_stream(&RepoDownloadFileStreamParams::builder().filename("config.json").build())
@@ -312,9 +312,9 @@ async fn test_download_stream_full_file() {
 
 #[tokio::test]
 async fn test_download_stream_range_first_bytes() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
 
     // Download just the first 20 bytes
     let (content_length, stream) = repo
@@ -339,9 +339,9 @@ async fn test_download_stream_range_first_bytes() {
 
 #[tokio::test]
 async fn test_download_stream_range_middle_bytes() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
 
     // First download the full file for comparison
     let (_len, full_stream) = repo
@@ -379,9 +379,9 @@ async fn test_download_stream_range_middle_bytes() {
 
 #[tokio::test]
 async fn test_download_stream_range_content_matches_full_download() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
     let dir = tempfile::tempdir().unwrap();
 
     // Download full file to disk for reference
@@ -443,9 +443,9 @@ impl ProgressHandler for RecordingHandler {
 
 #[tokio::test]
 async fn test_download_file_with_progress_to_local_dir() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
 
     let handler = Arc::new(RecordingHandler::new());
 
@@ -494,9 +494,9 @@ async fn test_download_file_with_progress_to_local_dir() {
 
 #[tokio::test]
 async fn test_download_file_with_progress_to_cache() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
 
     let handler = Arc::new(RecordingHandler::new());
 
@@ -524,9 +524,9 @@ async fn test_download_file_with_progress_to_cache() {
 
 #[tokio::test]
 async fn test_download_with_no_progress_handler() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
 
     let dir = tempfile::tempdir().unwrap();
     let params = RepoDownloadFileParams::builder()
@@ -540,19 +540,19 @@ async fn test_download_with_no_progress_handler() {
 
 // --- Upload progress tests (write to hub-ci) ---
 
-fn repo_from_id(api: &HFClient, repo_id: &str) -> HFRepository {
+fn repo_from_id(client: &HFClient, repo_id: &str) -> HFRepository {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    api.model(parts[0], parts[1])
+    client.model(parts[0], parts[1])
 }
 
 #[tokio::test]
 async fn test_upload_file_with_progress() {
-    let Some(api) = hub_ci_api() else { return };
+    let Some(client) = hub_ci_api() else { return };
     if !write_enabled() {
         return;
     }
-    let repo_id = create_test_repo(&api).await;
-    let repo = repo_from_id(&api, &repo_id);
+    let repo_id = create_test_repo(&client).await;
+    let repo = repo_from_id(&client, &repo_id);
 
     let handler = Arc::new(RecordingHandler::new());
 
@@ -567,7 +567,7 @@ async fn test_upload_file_with_progress() {
         )
         .await;
 
-    delete_test_repo(&api, &repo_id).await;
+    delete_test_repo(&client, &repo_id).await;
     let commit = result.unwrap();
     assert!(commit.commit_oid.is_some());
 
@@ -610,12 +610,12 @@ async fn test_upload_file_with_progress() {
 
 #[tokio::test]
 async fn test_create_commit_with_progress_multiple_files() {
-    let Some(api) = hub_ci_api() else { return };
+    let Some(client) = hub_ci_api() else { return };
     if !write_enabled() {
         return;
     }
-    let repo_id = create_test_repo(&api).await;
-    let repo = repo_from_id(&api, &repo_id);
+    let repo_id = create_test_repo(&client).await;
+    let repo = repo_from_id(&client, &repo_id);
 
     let handler = Arc::new(RecordingHandler::new());
 
@@ -638,7 +638,7 @@ async fn test_create_commit_with_progress_multiple_files() {
         )
         .await;
 
-    delete_test_repo(&api, &repo_id).await;
+    delete_test_repo(&client, &repo_id).await;
     let commit = result.unwrap();
     assert!(commit.commit_oid.is_some());
 
@@ -664,12 +664,12 @@ async fn test_create_commit_with_progress_multiple_files() {
 
 #[tokio::test]
 async fn test_upload_with_no_progress_handler() {
-    let Some(api) = hub_ci_api() else { return };
+    let Some(client) = hub_ci_api() else { return };
     if !write_enabled() {
         return;
     }
-    let repo_id = create_test_repo(&api).await;
-    let repo = repo_from_id(&api, &repo_id);
+    let repo_id = create_test_repo(&client).await;
+    let repo = repo_from_id(&client, &repo_id);
 
     let result = repo
         .upload_file(
@@ -681,15 +681,15 @@ async fn test_upload_with_no_progress_handler() {
         )
         .await;
 
-    delete_test_repo(&api, &repo_id).await;
+    delete_test_repo(&client, &repo_id).await;
     result.unwrap();
 }
 
 #[tokio::test]
 async fn test_snapshot_download_exactly_one_complete_per_file() {
-    let Some(api) = prod_api() else { return };
+    let Some(client) = prod_api() else { return };
     let (owner, name) = TEST_MODEL_PARTS;
-    let repo = model(&api, owner, name);
+    let repo = model(&client, owner, name);
 
     let handler = Arc::new(RecordingHandler::new());
     let dir = tempfile::tempdir().unwrap();

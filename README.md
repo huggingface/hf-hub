@@ -40,16 +40,21 @@ This builds in release mode by default. Once installed, run `hfrs --help` to see
 ## Quick Start
 
 ```rust,no_run
-use hf_hub::{HFClient, ModelInfoParams};
+use hf_hub::HFClient;
+use hf_hub::types::{RepoInfo, RepoInfoParams};
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
 
     // Get model info
-    let info = api.model_info(
-        &ModelInfoParams::builder().repo_id("gpt2").build()
-    ).await?;
+    let RepoInfo::Model(info) = client
+        .model("openai-community", "gpt2")
+        .info(&RepoInfoParams::default())
+        .await?
+    else {
+        unreachable!("handle type guarantees the Model variant");
+    };
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
     Ok(())
@@ -62,18 +67,19 @@ async fn main() -> hf_hub::Result<()> {
 
 ```rust,no_run
 use futures::StreamExt;
-use hf_hub::{HFClient, ListModelsParams};
+use hf_hub::HFClient;
+use hf_hub::types::ListModelsParams;
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
 
     let params = ListModelsParams::builder()
         .author("meta-llama")
         .limit(5_usize)
         .build();
 
-    let stream = api.list_models(&params);
+    let stream = client.list_models(&params)?;
     futures::pin_mut!(stream);
 
     while let Some(model) = stream.next().await {
@@ -88,10 +94,11 @@ async fn main() -> hf_hub::Result<()> {
 ### Work with a repository handle
 
 ```rust,no_run
-use hf_hub::{HFClient, RepoFileExistsParams, RepoInfo, RepoInfoParams};
+use hf_hub::HFClient;
+use hf_hub::types::{RepoFileExistsParams, RepoInfo, RepoInfoParams};
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
+async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
     let repo = client.model("openai-community", "gpt2");
 
@@ -118,12 +125,13 @@ async fn main() -> hf_hub::Result<()> {
 
 ```rust,no_run
 use std::path::PathBuf;
-use hf_hub::{HFClient, RepoDownloadFileParams};
+use hf_hub::HFClient;
+use hf_hub::types::RepoDownloadFileParams;
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
-    let repo = api.model("openai-community", "gpt2");
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
+    let repo = client.model("openai-community", "gpt2");
 
     let path = repo.download_file(
         &RepoDownloadFileParams::builder()
@@ -140,12 +148,13 @@ async fn main() -> hf_hub::Result<()> {
 ### Upload a file
 
 ```rust,no_run
-use hf_hub::{AddSource, HFClient, RepoUploadFileParams};
+use hf_hub::HFClient;
+use hf_hub::types::{AddSource, RepoUploadFileParams};
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
-    let repo = api.model("your-username", "your-repo");
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
+    let repo = client.model("your-username", "your-repo");
 
     let commit = repo.upload_file(
         &RepoUploadFileParams::builder()
@@ -163,13 +172,14 @@ async fn main() -> hf_hub::Result<()> {
 ### Create a repository
 
 ```rust,no_run
-use hf_hub::{CreateRepoParams, HFClient};
+use hf_hub::HFClient;
+use hf_hub::types::CreateRepoParams;
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
 
-    let url = api.create_repo(
+    let url = client.create_repo(
         &CreateRepoParams::builder()
             .repo_id("your-username/new-model")
             .private(true)

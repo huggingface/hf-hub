@@ -41,15 +41,15 @@ pub enum ReposCommand {
     Tag(tag::Args),
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     match args.command {
-        ReposCommand::Create(a) => create::execute(api, a).await,
-        ReposCommand::Delete(a) => delete::execute(api, a).await,
-        ReposCommand::Move(a) => move_repo::execute(api, a).await,
-        ReposCommand::Settings(a) => settings::execute(api, a).await,
-        ReposCommand::DeleteFiles(a) => delete_files::execute(api, a).await,
-        ReposCommand::FileMetadata(a) => file_metadata::execute(api, a).await,
-        ReposCommand::Branch(a) => branch::execute(api, a).await,
-        ReposCommand::Tag(a) => tag::execute(api, a).await,
+        ReposCommand::Create(a) => create::execute(client, a).await,
+        ReposCommand::Delete(a) => delete::execute(client, a).await,
+        ReposCommand::Move(a) => move_repo::execute(client, a).await,
+        ReposCommand::Settings(a) => settings::execute(client, a).await,
+        ReposCommand::DeleteFiles(a) => delete_files::execute(client, a).await,
+        ReposCommand::FileMetadata(a) => file_metadata::execute(client, a).await,
+        ReposCommand::Branch(a) => branch::execute(client, a).await,
+        ReposCommand::Tag(a) => tag::execute(client, a).await,
     }
 }

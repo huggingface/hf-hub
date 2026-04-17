@@ -11,18 +11,18 @@
 //! Run: cargo run -p examples --example download_upload
 
 use futures::StreamExt;
-use hf_hub::types::AddSource;
-use hf_hub::{
-    CreateRepoParams, DeleteRepoParams, HFClient, RepoDownloadFileParams, RepoDownloadFileStreamParams,
+use hf_hub::HFClient;
+use hf_hub::types::{
+    AddSource, CreateRepoParams, DeleteRepoParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
     RepoSnapshotDownloadParams, RepoUploadFileParams, RepoUploadFolderParams,
 };
 use tokio::io::AsyncWriteExt;
 
 #[tokio::main]
-async fn main() -> hf_hub::Result<()> {
-    let api = HFClient::new()?;
+async fn main() -> hf_hub::HFResult<()> {
+    let client = HFClient::new()?;
     let tmp_dir = tempfile::tempdir().expect("failed to create tempdir");
-    let model = api.model("openai-community", "gpt2");
+    let model = client.model("openai-community", "gpt2");
 
     // --- Download to HF cache ---
 
@@ -33,7 +33,7 @@ async fn main() -> hf_hub::Result<()> {
 
     // --- Download a large xet-backed file to local directory ---
 
-    let xet_repo = api.model("Lightricks", "LTX-2.3");
+    let xet_repo = client.model("Lightricks", "LTX-2.3");
     let xet_path = xet_repo
         .download_file(
             &RepoDownloadFileParams::builder()
@@ -117,17 +117,18 @@ async fn main() -> hf_hub::Result<()> {
         return Ok(());
     }
 
-    let user = api.whoami().await?;
-    let repo = api.model(&user.username, format!("example-download-upload-{}", std::process::id()));
+    let user = client.whoami().await?;
+    let repo = client.model(&user.username, format!("example-download-upload-{}", std::process::id()));
 
-    api.create_repo(
-        &CreateRepoParams::builder()
-            .repo_id(repo.repo_path())
-            .private(true)
-            .exist_ok(true)
-            .build(),
-    )
-    .await?;
+    client
+        .create_repo(
+            &CreateRepoParams::builder()
+                .repo_id(repo.repo_path())
+                .private(true)
+                .exist_ok(true)
+                .build(),
+        )
+        .await?;
     println!("\nCreated repo: {}", repo.repo_path());
 
     // Upload from bytes
@@ -175,7 +176,8 @@ async fn main() -> hf_hub::Result<()> {
     println!("Uploaded folder: {:?}", commit.commit_url);
 
     // Cleanup
-    api.delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
+    client
+        .delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
         .await?;
     println!("Cleaned up repo: {}", repo.repo_path());
 

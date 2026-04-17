@@ -97,10 +97,7 @@ hf-hub/
 │   │   │   ├── user.rs             # User, Organization, OrgMembership
 │   │   │   ├── commit.rs           # CommitInfo, GitCommitInfo, GitRefs, CommitOperation, AddSource
 │   │   │   ├── params.rs           # All *Params structs with TypedBuilder
-│   │   │   ├── buckets/
-│   │   │   │   ├── mod.rs          # BucketInfo, BucketUrl, BucketTreeEntry, BucketFileMetadata types
-│   │   │   │   └── sync.rs         # SyncPlan, SyncOperation, SyncAction types
-│   │   │   ├── bucket_params.rs    # Bucket parameter structs with TypedBuilder
+│   │   │   ├── buckets.rs          # Bucket params, info/url/tree/metadata types, and sync plan types
 │   │   │   └── spaces.rs           # SpaceRuntime, SpaceVariable (behind "spaces" feature)
 │   │   └── api/
 │   │       ├── mod.rs              # Module declarations

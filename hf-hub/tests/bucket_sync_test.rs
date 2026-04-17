@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hf_hub::test_utils::*;
-use hf_hub::{BucketSyncParams, CreateBucketParams, HFClient, HFClientBuilder, SyncAction, SyncDirection};
+use hf_hub::types::{BucketSyncAction, BucketSyncDirection, BucketSyncParams, CreateBucketParams};
+use hf_hub::{HFClient, HFClientBuilder};
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
@@ -41,32 +42,33 @@ fn unique_suffix() -> String {
     format!("{:x}{:x}-{count}", t.as_secs(), t.subsec_nanos())
 }
 
-async fn get_username(api: &HFClient) -> String {
+async fn get_username(client: &HFClient) -> String {
     WHOAMI_USERNAME
-        .get_or_init(|| async { api.whoami().await.expect("whoami failed").username })
+        .get_or_init(|| async { client.whoami().await.expect("whoami failed").username })
         .await
         .clone()
 }
 
-async fn create_test_bucket(api: &HFClient, suffix: &str) -> (String, String) {
-    let username = get_username(api).await;
+async fn create_test_bucket(client: &HFClient, suffix: &str) -> (String, String) {
+    let username = get_username(client).await;
     let name = format!("hfrs-sync-test-{suffix}");
-    api.create_bucket(
-        &CreateBucketParams::builder()
-            .namespace(&username)
-            .name(&name)
-            .private(true)
-            .exist_ok(true)
-            .build(),
-    )
-    .await
-    .expect("create_bucket failed");
+    client
+        .create_bucket(
+            &CreateBucketParams::builder()
+                .namespace(&username)
+                .name(&name)
+                .private(true)
+                .exist_ok(true)
+                .build(),
+        )
+        .await
+        .expect("create_bucket failed");
     (username, name)
 }
 
-async fn delete_test_bucket(api: &HFClient, namespace: &str, name: &str) {
+async fn delete_test_bucket(client: &HFClient, namespace: &str, name: &str) {
     let bucket_id = format!("{namespace}/{name}");
-    let _ = api.delete_bucket(&bucket_id, true).await;
+    let _ = client.delete_bucket(&bucket_id, true).await;
 }
 
 fn create_local_files(dir: &std::path::Path, files: &[(&str, &[u8])]) {
@@ -95,14 +97,14 @@ fn sha256_hex(data: &[u8]) -> String {
 
 #[tokio::test]
 async fn test_sync_upload_new_files() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     let local_dir = tempfile::tempdir().unwrap();
     create_local_files(local_dir.path(), &[("file1.txt", b"hello world"), ("subdir/file2.txt", b"nested content")]);
@@ -112,7 +114,7 @@ async fn test_sync_upload_new_files() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .verbose(true)
                 .build(),
         )
@@ -122,22 +124,22 @@ async fn test_sync_upload_new_files() {
     assert_eq!(plan.uploads(), 3);
     assert_eq!(plan.downloads(), 0);
     assert_eq!(plan.deletes(), 0);
-    assert!(plan.operations.iter().all(|op| op.action == SyncAction::Upload));
+    assert!(plan.operations.iter().all(|op| op.action == BucketSyncAction::Upload));
     assert!(plan.operations.iter().all(|op| op.reason == "new file"));
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }
 
 #[tokio::test]
 async fn test_sync_upload_then_download() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     let upload_dir = tempfile::tempdir().unwrap();
     create_local_files(
@@ -155,7 +157,7 @@ async fn test_sync_upload_then_download() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(upload_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .build(),
         )
         .await
@@ -166,7 +168,7 @@ async fn test_sync_upload_then_download() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(download_dir.path().to_path_buf())
-                .direction(SyncDirection::Download)
+                .direction(BucketSyncDirection::Download)
                 .verbose(true)
                 .build(),
         )
@@ -183,19 +185,19 @@ async fn test_sync_upload_then_download() {
     assert_eq!(downloaded_bin.len(), RANDOM_BIN_SIZE);
     assert_eq!(sha256_hex(&downloaded_bin), bin_hash);
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }
 
 #[tokio::test]
 async fn test_sync_upload_skip_identical() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     let local_dir = tempfile::tempdir().unwrap();
     create_local_files(local_dir.path(), &[("file.txt", b"same content")]);
@@ -204,7 +206,7 @@ async fn test_sync_upload_skip_identical() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .build(),
         )
         .await
@@ -215,7 +217,7 @@ async fn test_sync_upload_skip_identical() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .ignore_times(true)
                 .verbose(true)
                 .build(),
@@ -227,19 +229,19 @@ async fn test_sync_upload_skip_identical() {
     assert_eq!(plan.skips(), 1);
     assert_eq!(plan.operations[0].reason, "same size");
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }
 
 #[tokio::test]
 async fn test_sync_upload_with_delete() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     // Upload two files
     let local_dir = tempfile::tempdir().unwrap();
@@ -249,7 +251,7 @@ async fn test_sync_upload_with_delete() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .build(),
         )
         .await
@@ -262,7 +264,7 @@ async fn test_sync_upload_with_delete() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .delete(true)
                 .ignore_times(true)
                 .verbose(true)
@@ -272,22 +274,22 @@ async fn test_sync_upload_with_delete() {
         .unwrap();
 
     assert_eq!(plan.deletes(), 1);
-    let delete_op = plan.operations.iter().find(|op| op.action == SyncAction::Delete).unwrap();
+    let delete_op = plan.operations.iter().find(|op| op.action == BucketSyncAction::Delete).unwrap();
     assert_eq!(delete_op.path, "remove.txt");
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }
 
 #[tokio::test]
 async fn test_sync_with_include_filter() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     let local_dir = tempfile::tempdir().unwrap();
     create_local_files(
@@ -303,7 +305,7 @@ async fn test_sync_with_include_filter() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .include(vec!["*.txt".to_string()])
                 .verbose(true)
                 .build(),
@@ -314,19 +316,19 @@ async fn test_sync_with_include_filter() {
     assert_eq!(plan.uploads(), 2);
     assert!(plan.operations.iter().all(|op| op.path.ends_with(".txt")));
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }
 
 #[tokio::test]
 async fn test_sync_with_exclude_filter() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     let local_dir = tempfile::tempdir().unwrap();
     create_local_files(
@@ -342,7 +344,7 @@ async fn test_sync_with_exclude_filter() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .exclude(vec!["*.key".to_string()])
                 .verbose(true)
                 .build(),
@@ -353,19 +355,19 @@ async fn test_sync_with_exclude_filter() {
     assert_eq!(plan.uploads(), 2);
     assert!(plan.operations.iter().all(|op| !op.path.ends_with(".key")));
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }
 
 #[tokio::test]
 async fn test_sync_with_prefix() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     let local_dir = tempfile::tempdir().unwrap();
     create_local_files(local_dir.path(), &[("file1.txt", b"in prefix"), ("file2.txt", b"also in prefix")]);
@@ -375,7 +377,7 @@ async fn test_sync_with_prefix() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .prefix("my-prefix")
                 .build(),
         )
@@ -388,7 +390,7 @@ async fn test_sync_with_prefix() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(download_dir.path().to_path_buf())
-                .direction(SyncDirection::Download)
+                .direction(BucketSyncDirection::Download)
                 .prefix("my-prefix")
                 .verbose(true)
                 .build(),
@@ -399,19 +401,19 @@ async fn test_sync_with_prefix() {
     assert_eq!(plan.downloads(), 2);
     assert_eq!(std::fs::read_to_string(download_dir.path().join("file1.txt")).unwrap(), "in prefix");
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }
 
 #[tokio::test]
 async fn test_sync_download_with_delete() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     // Upload a file
     let upload_dir = tempfile::tempdir().unwrap();
@@ -421,7 +423,7 @@ async fn test_sync_download_with_delete() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(upload_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .build(),
         )
         .await
@@ -435,7 +437,7 @@ async fn test_sync_download_with_delete() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(download_dir.path().to_path_buf())
-                .direction(SyncDirection::Download)
+                .direction(BucketSyncDirection::Download)
                 .delete(true)
                 .verbose(true)
                 .build(),
@@ -449,19 +451,19 @@ async fn test_sync_download_with_delete() {
     assert!(download_dir.path().join("remote.txt").exists());
     assert!(!download_dir.path().join("local_only.txt").exists());
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }
 
 #[tokio::test]
 async fn test_sync_existing_flag() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     // Upload one file
     let upload_dir = tempfile::tempdir().unwrap();
@@ -471,7 +473,7 @@ async fn test_sync_existing_flag() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(upload_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .build(),
         )
         .await
@@ -485,7 +487,7 @@ async fn test_sync_existing_flag() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(upload_dir2.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .existing(true)
                 .verbose(true)
                 .build(),
@@ -496,21 +498,21 @@ async fn test_sync_existing_flag() {
     // existing.txt should be uploaded (size differs), new.txt should be skipped
     assert!(plan.uploads() <= 1);
     let new_file_ops: Vec<_> = plan.operations.iter().filter(|op| op.path == "new.txt").collect();
-    assert!(new_file_ops.is_empty() || new_file_ops[0].action == SyncAction::Skip);
+    assert!(new_file_ops.is_empty() || new_file_ops[0].action == BucketSyncAction::Skip);
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }
 
 #[tokio::test]
 async fn test_sync_ignore_existing_flag() {
-    let Some(api) = api() else { return };
+    let Some(client) = api() else { return };
     if !write_enabled() {
         return;
     }
 
     let suffix = unique_suffix();
-    let (namespace, name) = create_test_bucket(&api, &suffix).await;
-    let bucket = api.bucket(&namespace, &name);
+    let (namespace, name) = create_test_bucket(&client, &suffix).await;
+    let bucket = client.bucket(&namespace, &name);
 
     // Upload one file
     let upload_dir = tempfile::tempdir().unwrap();
@@ -520,7 +522,7 @@ async fn test_sync_ignore_existing_flag() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(upload_dir.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .build(),
         )
         .await
@@ -534,7 +536,7 @@ async fn test_sync_ignore_existing_flag() {
         .sync(
             &BucketSyncParams::builder()
                 .local_path(upload_dir2.path().to_path_buf())
-                .direction(SyncDirection::Upload)
+                .direction(BucketSyncDirection::Upload)
                 .ignore_existing(true)
                 .verbose(true)
                 .build(),
@@ -543,12 +545,20 @@ async fn test_sync_ignore_existing_flag() {
         .unwrap();
 
     assert_eq!(plan.uploads(), 1);
-    let uploaded: Vec<_> = plan.operations.iter().filter(|op| op.action == SyncAction::Upload).collect();
+    let uploaded: Vec<_> = plan
+        .operations
+        .iter()
+        .filter(|op| op.action == BucketSyncAction::Upload)
+        .collect();
     assert_eq!(uploaded[0].path, "new.txt");
 
-    let skipped: Vec<_> = plan.operations.iter().filter(|op| op.action == SyncAction::Skip).collect();
+    let skipped: Vec<_> = plan
+        .operations
+        .iter()
+        .filter(|op| op.action == BucketSyncAction::Skip)
+        .collect();
     assert_eq!(skipped.len(), 1);
     assert_eq!(skipped[0].path, "existing.txt");
 
-    delete_test_bucket(&api, &namespace, &name).await;
+    delete_test_bucket(&client, &namespace, &name).await;
 }

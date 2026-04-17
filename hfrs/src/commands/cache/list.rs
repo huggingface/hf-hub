@@ -39,9 +39,8 @@ pub struct Args {
     pub format: OutputFormat,
 }
 
-pub async fn execute(_client: &HFClient, args: Args) -> Result<CommandResult> {
-    let cache_dir = hf_hub::resolve_cache_dir();
-    let cache_info = hf_hub::cache::scan_cache_dir(&cache_dir).await?;
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
+    let cache_info = client.scan_cache().await?;
 
     if cache_info.repos.is_empty() && matches!(args.format, OutputFormat::Table) {
         return Ok(CommandResult::Raw("No cached repos found.".to_string()));

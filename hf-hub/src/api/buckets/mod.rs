@@ -5,7 +5,7 @@ use url::Url;
 
 use crate::bucket::HFBucket;
 use crate::client::HFClient;
-use crate::error::{HFError, NotFoundContext, Result};
+use crate::error::{HFError, HFResult, NotFoundContext};
 use crate::types::progress::{self, DownloadEvent, Progress, ProgressEvent, UploadEvent};
 use crate::types::{
     BatchBucketFilesParams, BucketFileMetadata, BucketInfo, BucketTreeEntry, BucketUrl, CreateBucketParams,
@@ -19,7 +19,7 @@ impl HFClient {
     /// Create a new bucket on the Hub.
     ///
     /// Endpoint: `POST /api/buckets/{namespace}/{name}`
-    pub async fn create_bucket(&self, params: &CreateBucketParams) -> Result<BucketUrl> {
+    pub async fn create_bucket(&self, params: &CreateBucketParams) -> HFResult<BucketUrl> {
         let url = format!("{}/api/buckets/{}/{}", self.endpoint(), params.namespace, params.name);
 
         let mut body = serde_json::json!({});
@@ -55,7 +55,7 @@ impl HFClient {
     /// Delete a bucket from the Hub.
     ///
     /// Endpoint: `DELETE /api/buckets/{bucket_id}`
-    pub async fn delete_bucket(&self, bucket_id: &str, missing_ok: bool) -> Result<()> {
+    pub async fn delete_bucket(&self, bucket_id: &str, missing_ok: bool) -> HFResult<()> {
         let url = self.bucket_api_url(bucket_id);
 
         let response = self.http_client().delete(&url).headers(self.auth_headers()).send().await?;
@@ -71,7 +71,7 @@ impl HFClient {
     /// List buckets in a namespace.
     ///
     /// Endpoint: `GET /api/buckets/{namespace}` (paginated)
-    pub fn list_buckets(&self, namespace: &str) -> Result<impl Stream<Item = Result<BucketInfo>> + '_> {
+    pub fn list_buckets(&self, namespace: &str) -> HFResult<impl Stream<Item = HFResult<BucketInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/buckets/{}", self.endpoint(), namespace))?;
         Ok(self.paginate(url, vec![], None))
     }
@@ -79,7 +79,7 @@ impl HFClient {
     /// Move (rename) a bucket.
     ///
     /// Endpoint: `POST /api/repos/move` with `type: "bucket"`
-    pub async fn move_bucket(&self, from_id: &str, to_id: &str) -> Result<()> {
+    pub async fn move_bucket(&self, from_id: &str, to_id: &str) -> HFResult<()> {
         let url = format!("{}/api/repos/move", self.endpoint());
         let body = serde_json::json!({
             "fromRepo": from_id,
@@ -104,7 +104,7 @@ impl HFBucket {
     /// Get metadata about this bucket.
     ///
     /// Endpoint: `GET /api/buckets/{bucket_id}`
-    pub async fn info(&self) -> Result<BucketInfo> {
+    pub async fn info(&self) -> HFResult<BucketInfo> {
         let bucket_id = self.bucket_id();
         let url = self.hf_client.bucket_api_url(&bucket_id);
 
@@ -126,7 +126,10 @@ impl HFBucket {
     /// List files and directories in this bucket.
     ///
     /// Endpoint: `GET /api/buckets/{bucket_id}/tree[/{prefix}]` (paginated)
-    pub fn list_tree(&self, params: &ListBucketTreeParams) -> Result<impl Stream<Item = Result<BucketTreeEntry>> + '_> {
+    pub fn list_tree(
+        &self,
+        params: &ListBucketTreeParams,
+    ) -> HFResult<impl Stream<Item = HFResult<BucketTreeEntry>> + '_> {
         let bucket_id = self.bucket_id();
         let mut url_str = format!("{}/api/buckets/{}/tree", self.hf_client.endpoint(), bucket_id);
         if let Some(ref prefix) = params.prefix {
@@ -146,7 +149,7 @@ impl HFBucket {
     /// Get info about specific paths in this bucket.
     ///
     /// Endpoint: `POST /api/buckets/{bucket_id}/paths-info`
-    pub async fn get_paths_info(&self, paths: &[String]) -> Result<Vec<BucketTreeEntry>> {
+    pub async fn get_paths_info(&self, paths: &[String]) -> HFResult<Vec<BucketTreeEntry>> {
         let bucket_id = self.bucket_id();
         let url = format!("{}/api/buckets/{}/paths-info", self.hf_client.endpoint(), bucket_id);
 
@@ -177,7 +180,7 @@ impl HFBucket {
     /// Get metadata for a single file in this bucket via a HEAD request.
     ///
     /// Endpoint: `HEAD /buckets/{bucket_id}/resolve/{path}`
-    pub async fn get_file_metadata(&self, remote_path: &str) -> Result<BucketFileMetadata> {
+    pub async fn get_file_metadata(&self, remote_path: &str) -> HFResult<BucketFileMetadata> {
         let bucket_id = self.bucket_id();
         let url = format!("{}/buckets/{}/resolve/{}", self.hf_client.endpoint(), bucket_id, remote_path);
 
@@ -220,7 +223,7 @@ impl HFBucket {
     /// Execute batch file operations (add, delete, copy) on this bucket.
     ///
     /// Endpoint: `POST /api/buckets/{bucket_id}/batch` (NDJSON)
-    pub async fn batch(&self, params: &BatchBucketFilesParams) -> Result<()> {
+    pub async fn batch(&self, params: &BatchBucketFilesParams) -> HFResult<()> {
         let bucket_id = self.bucket_id();
         let url = format!("{}/api/buckets/{}/batch", self.hf_client.endpoint(), bucket_id);
 
@@ -283,7 +286,7 @@ impl HFBucket {
     }
 
     /// Delete files from this bucket by path.
-    pub async fn delete_files(&self, paths: &[String]) -> Result<()> {
+    pub async fn delete_files(&self, paths: &[String]) -> HFResult<()> {
         let params = BatchBucketFilesParams {
             add: vec![],
             delete: paths.to_vec(),
@@ -295,7 +298,7 @@ impl HFBucket {
     /// Upload local files to the bucket.
     ///
     /// Uploads file contents to xet, then registers them via the batch endpoint.
-    pub async fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Progress) -> Result<()> {
+    pub async fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Progress) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
         }
@@ -359,7 +362,7 @@ impl HFBucket {
         &self,
         params: &crate::types::BucketDownloadFilesParams,
         progress: &Progress,
-    ) -> Result<()> {
+    ) -> HFResult<()> {
         if params.files.is_empty() {
             return Ok(());
         }
@@ -421,9 +424,9 @@ impl HFBucket {
 
 sync_api! {
     impl HFClient -> HFClientSync {
-        fn create_bucket(&self, params: &CreateBucketParams) -> Result<BucketUrl>;
-        fn delete_bucket(&self, bucket_id: &str, missing_ok: bool) -> Result<()>;
-        fn move_bucket(&self, from_id: &str, to_id: &str) -> Result<()>;
+        fn create_bucket(&self, params: &CreateBucketParams) -> HFResult<BucketUrl>;
+        fn delete_bucket(&self, bucket_id: &str, missing_ok: bool) -> HFResult<()>;
+        fn move_bucket(&self, from_id: &str, to_id: &str) -> HFResult<()>;
     }
 }
 
@@ -435,13 +438,13 @@ sync_api_stream! {
 
 sync_api! {
     impl HFBucket -> HFBucketSync {
-        fn info(&self) -> Result<BucketInfo>;
-        fn get_file_metadata(&self, remote_path: &str) -> Result<BucketFileMetadata>;
-        fn get_paths_info(&self, paths: &[String]) -> Result<Vec<BucketTreeEntry>>;
-        fn batch(&self, params: &BatchBucketFilesParams) -> Result<()>;
-        fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Progress) -> Result<()>;
-        fn download_files(&self, params: &crate::types::BucketDownloadFilesParams, progress: &Progress) -> Result<()>;
-        fn delete_files(&self, paths: &[String]) -> Result<()>;
+        fn info(&self) -> HFResult<BucketInfo>;
+        fn get_file_metadata(&self, remote_path: &str) -> HFResult<BucketFileMetadata>;
+        fn get_paths_info(&self, paths: &[String]) -> HFResult<Vec<BucketTreeEntry>>;
+        fn batch(&self, params: &BatchBucketFilesParams) -> HFResult<()>;
+        fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Progress) -> HFResult<()>;
+        fn download_files(&self, params: &crate::types::BucketDownloadFilesParams, progress: &Progress) -> HFResult<()>;
+        fn delete_files(&self, paths: &[String]) -> HFResult<()>;
     }
 }
 

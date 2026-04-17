@@ -14,13 +14,13 @@ pub struct Args {
     pub to_id: String,
 }
 
-pub async fn execute(api: &HFClient, args: Args) -> Result<CommandResult> {
+pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let (from_ns, from_name) = parse_bucket_id(&args.from_id)?;
     let (to_ns, to_name) = parse_bucket_id(&args.to_id)?;
     let from = format!("{}/{}", from_ns, from_name);
     let to = format!("{}/{}", to_ns, to_name);
 
-    api.move_bucket(&from, &to).await?;
+    client.move_bucket(&from, &to).await?;
 
     Ok(CommandResult::Raw(format!("Bucket moved: {from} -> {to}")))
 }

@@ -14,7 +14,7 @@ use crate::client::HFClient;
 ///
 /// ```rust,no_run
 /// # use hf_hub::HFClient;
-/// # #[tokio::main] async fn main() -> hf_hub::error::Result<()> {
+/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 /// let client = HFClient::builder().build()?;
 /// let bucket = client.bucket("my-org", "my-bucket");
 /// assert_eq!(bucket.bucket_id(), "my-org/my-bucket");
