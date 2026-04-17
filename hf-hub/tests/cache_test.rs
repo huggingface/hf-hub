@@ -514,11 +514,12 @@ async fn test_download_by_commit_hash() {
         .unwrap();
 
     assert!(path.exists());
-    assert!(
-        path.to_string_lossy().contains(&format!("snapshots/{commit_hash}")),
-        "Path should contain snapshots/<commit_hash>: {}",
-        path.display()
-    );
+    let has_snapshot_segment = path
+        .components()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|w| w[0].as_os_str() == "snapshots" && w[1].as_os_str() == commit_hash.as_str());
+    assert!(has_snapshot_segment, "Path should contain snapshots/<commit_hash>: {}", path.display());
 }
 
 // =============================================================================
