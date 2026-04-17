@@ -84,6 +84,25 @@ jobs:
           HF_TEST_WRITE: "1"
         run: cargo test --workspace --all-features --verbose
 
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Rust Stable
+        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af  # v1
+        with:
+          toolchain: stable
+          override: true
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Build docs
+        run: cargo doc --workspace --all-features --no-deps
+
   audit:
     name: Audit
     runs-on: ubuntu-latest
