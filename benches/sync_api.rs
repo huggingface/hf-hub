@@ -12,12 +12,15 @@ fn bench_download_small_file(c: &mut Criterion) {
 
     group.bench_function("small file (cold cache)", |b| {
         b.iter_with_setup(
-            || TempDir::new().unwrap(),
-            |tmp| {
+            || {
+                let tmp = TempDir::new().unwrap();
                 let client = hf_hub::HFClientBuilder::new()
                     .cache_dir(tmp.path().to_path_buf())
                     .build_sync()
                     .unwrap();
+                (tmp, client)
+            },
+            |(_tmp, client)| {
                 client
                     .model("julien-c", "dummy-unknown")
                     .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
@@ -35,12 +38,15 @@ fn bench_download_with_revision(c: &mut Criterion) {
 
     group.bench_function("with revision (cold cache)", |b| {
         b.iter_with_setup(
-            || TempDir::new().unwrap(),
-            |tmp| {
+            || {
+                let tmp = TempDir::new().unwrap();
                 let client = hf_hub::HFClientBuilder::new()
                     .cache_dir(tmp.path().to_path_buf())
                     .build_sync()
                     .unwrap();
+                (tmp, client)
+            },
+            |(_tmp, client)| {
                 client
                     .model("julien-c", "dummy-unknown")
                     .download_file(
