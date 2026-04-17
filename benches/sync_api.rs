@@ -1,6 +1,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use hf_hub::types::{RepoDownloadFileParams, RepoGetFileMetadataParams, RepoInfoParams};
 use tempfile::TempDir;
+
 // ---------------------------------------------------------------------------
 // Download benchmarks
 // ---------------------------------------------------------------------------
@@ -76,10 +77,6 @@ fn bench_get_warm_cache(c: &mut Criterion) {
 
     group.bench_function("get (warm cache, via Api)", |b| {
         b.iter(|| {
-            let client = hf_hub::HFClientBuilder::new()
-                .cache_dir(tmp.path().to_path_buf())
-                .build_sync()
-                .unwrap();
             client
                 .model("julien-c", "dummy-unknown")
                 .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
@@ -106,10 +103,6 @@ fn bench_cache_repo_get(c: &mut Criterion) {
 
     group.bench_function("CacheRepo::get (warm cache, no network)", |b| {
         b.iter(|| {
-            let client = hf_hub::HFClientBuilder::new()
-                .cache_dir(tmp.path().to_path_buf())
-                .build_sync()
-                .unwrap();
             client
                 .model("julien-c", "dummy-unknown")
                 .download_file(
