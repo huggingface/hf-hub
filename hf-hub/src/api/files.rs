@@ -1690,7 +1690,14 @@ async fn collect_files_recursive(
                 .await?;
         } else if metadata.is_file() {
             let relative = path.strip_prefix(root).map_err(|e| HFError::Other(e.to_string()))?;
-            let relative_str = relative.to_string_lossy();
+            let relative_str: String = relative
+                .components()
+                .filter_map(|c| match c {
+                    std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("/");
 
             if let Some(allow) = allow_patterns
                 && !matches_any_glob(allow, &relative_str)
@@ -1704,7 +1711,7 @@ async fn collect_files_recursive(
             }
 
             let repo_path = if base_repo_path.is_empty() {
-                relative_str.to_string()
+                relative_str
             } else {
                 format!("{}/{}", base_repo_path.trim_end_matches('/'), relative_str)
             };
