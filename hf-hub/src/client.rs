@@ -188,7 +188,8 @@ impl HFClientBuilder {
         })
     }
 
-    /// Builds the [`HFClientSync`].
+
+    /// Builds the [`crate::blocking::HFClientSync`].
     ///
     /// # Errors
     ///
