@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use hf_hub::types::{
     DownloadEvent, FileProgress, FileStatus, ProgressEvent, ProgressHandler, UploadEvent, UploadPhase,
 };
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::{HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
 
 /// Renders indicatif progress bars in the terminal for download and upload operations.
 const MAX_VISIBLE_FILE_BARS: usize = 10;
@@ -58,6 +58,36 @@ fn truncate_filename(name: &str, max_len: usize) -> String {
     }
     let suffix = &name[name.len() - (max_len - 1)..];
     format!("…{suffix}")
+}
+
+#[allow(dead_code)]
+fn format_rate(bytes_per_sec: Option<f64>) -> String {
+    match bytes_per_sec {
+        Some(r) if r.is_finite() && r > 0.0 => format!("{}/s", HumanBytes(r as u64)),
+        _ => "--".to_string(),
+    }
+}
+
+/// Hard cap: if the computed ETA is longer than this, show "--" instead.
+/// Protects against the "ETA in years" display when the upstream rate
+/// dips toward zero between progress events.
+#[allow(dead_code)]
+const MAX_REASONABLE_ETA_SECS: u64 = 24 * 60 * 60;
+
+#[allow(dead_code)]
+fn format_eta(remaining_bytes: u64, bytes_per_sec: Option<f64>) -> String {
+    if remaining_bytes == 0 {
+        return "0s".to_string();
+    }
+    let rate = match bytes_per_sec {
+        Some(r) if r.is_finite() && r > 0.0 => r,
+        _ => return "--".to_string(),
+    };
+    let secs = (remaining_bytes as f64 / rate).ceil();
+    if !secs.is_finite() || secs < 0.0 || secs > MAX_REASONABLE_ETA_SECS as f64 {
+        return "--".to_string();
+    }
+    format!("{}", HumanDuration(std::time::Duration::from_secs(secs as u64)))
 }
 
 impl CliProgressHandler {
@@ -367,6 +397,66 @@ impl ProgressHandler for CliProgressHandler {
 
 pub fn progress_disabled_by_env() -> bool {
     std::env::var("HF_HUB_DISABLE_PROGRESS_BARS").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_rate_returns_placeholder_for_none() {
+        assert_eq!(format_rate(None), "--");
+    }
+
+    #[test]
+    fn format_rate_returns_placeholder_for_zero() {
+        assert_eq!(format_rate(Some(0.0)), "--");
+    }
+
+    #[test]
+    fn format_rate_returns_placeholder_for_negative() {
+        assert_eq!(format_rate(Some(-1.0)), "--");
+    }
+
+    #[test]
+    fn format_rate_returns_placeholder_for_nan() {
+        assert_eq!(format_rate(Some(f64::NAN)), "--");
+    }
+
+    #[test]
+    fn format_rate_formats_mb_per_sec() {
+        let s = format_rate(Some(42_100_000.0));
+        assert!(s.ends_with("/s"), "expected trailing /s, got {s}");
+        assert!(s.contains("MB") || s.contains("MiB"), "expected MB unit, got {s}");
+    }
+
+    #[test]
+    fn format_eta_returns_placeholder_for_no_rate() {
+        assert_eq!(format_eta(1_000, None), "--");
+    }
+
+    #[test]
+    fn format_eta_returns_placeholder_for_zero_rate() {
+        assert_eq!(format_eta(1_000, Some(0.0)), "--");
+    }
+
+    #[test]
+    fn format_eta_returns_zero_when_nothing_remaining() {
+        assert_eq!(format_eta(0, Some(1_000_000.0)), "0s");
+    }
+
+    #[test]
+    fn format_eta_formats_duration() {
+        let s = format_eta(1_000_000, Some(1_000_000.0));
+        assert!(s.contains('s'), "expected seconds in {s}");
+        assert!(!s.contains("year"), "must never render as years, got {s}");
+    }
+
+    #[test]
+    fn format_eta_caps_absurd_values() {
+        let s = format_eta(1_000_000_000_000_000, Some(1.0));
+        assert_eq!(s, "--");
+    }
 }
 
 /// An `io::Write` adapter that routes output through `MultiProgress::println()`,
