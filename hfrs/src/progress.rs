@@ -42,6 +42,12 @@ fn bytes_style() -> ProgressStyle {
     .progress_chars("##-")
 }
 
+fn aggregate_bytes_style() -> ProgressStyle {
+    ProgressStyle::with_template("{msg}: {percent}%|{wide_bar:.cyan/blue}| {bytes}/{total_bytes} [{elapsed}]")
+        .expect("hardcoded template")
+        .progress_chars("##-")
+}
+
 fn files_style() -> ProgressStyle {
     ProgressStyle::with_template("{msg}: {percent}%|{wide_bar:.green/blue}| {pos}/{len} [{elapsed}<{eta}]")
         .expect("hardcoded template")
@@ -60,7 +66,6 @@ fn truncate_filename(name: &str, max_len: usize) -> String {
     format!("…{suffix}")
 }
 
-#[allow(dead_code)]
 fn format_rate(bytes_per_sec: Option<f64>) -> String {
     match bytes_per_sec {
         Some(r) if r.is_finite() && r > 0.0 => format!("{}/s", HumanBytes(r as u64)),
@@ -68,13 +73,8 @@ fn format_rate(bytes_per_sec: Option<f64>) -> String {
     }
 }
 
-/// Hard cap: if the computed ETA is longer than this, show "--" instead.
-/// Protects against the "ETA in years" display when the upstream rate
-/// dips toward zero between progress events.
-#[allow(dead_code)]
 const MAX_REASONABLE_ETA_SECS: u64 = 24 * 60 * 60;
 
-#[allow(dead_code)]
 fn format_eta(remaining_bytes: u64, bytes_per_sec: Option<f64>) -> String {
     if remaining_bytes == 0 {
         return "0s".to_string();
@@ -235,8 +235,10 @@ impl CliProgressHandler {
                 phase,
                 bytes_completed,
                 total_bytes,
+                bytes_per_sec,
                 transfer_bytes_completed,
                 transfer_bytes,
+                transfer_bytes_per_sec,
                 files,
                 ..
             } => {
@@ -263,12 +265,12 @@ impl CliProgressHandler {
                         },
                         UploadPhase::Uploading => {
                             let pbar = self.multi.add(ProgressBar::new(0));
-                            pbar.set_style(bytes_style());
+                            pbar.set_style(aggregate_bytes_style());
                             pbar.set_message(format!("Processing Files (0 / {})", state.upload_total_files));
                             state.processing_bar = Some(pbar);
 
                             let tbar = self.multi.add(ProgressBar::new(0));
-                            tbar.set_style(bytes_style());
+                            tbar.set_style(aggregate_bytes_style());
                             tbar.set_message("New Data Upload");
                             state.transfer_bar = Some(tbar);
                         },
@@ -287,15 +289,29 @@ impl CliProgressHandler {
                 if *phase == UploadPhase::Uploading {
                     let completed_count = state.upload_completed_files.len();
                     let total_count = state.upload_total_files;
+
                     if let Some(ref bar) = state.processing_bar {
                         bar.set_length(*total_bytes);
                         bar.set_position(*bytes_completed);
-                        bar.set_message(format!("Processing Files ({} / {})", completed_count, total_count));
+                        let remaining = total_bytes.saturating_sub(*bytes_completed);
+                        bar.set_message(format!(
+                            "Processing Files ({} / {}) • {} • ETA {}",
+                            completed_count,
+                            total_count,
+                            format_rate(*bytes_per_sec),
+                            format_eta(remaining, *bytes_per_sec),
+                        ));
                     }
 
                     if let Some(ref bar) = state.transfer_bar {
                         bar.set_length(*transfer_bytes);
                         bar.set_position(*transfer_bytes_completed);
+                        let remaining = transfer_bytes.saturating_sub(*transfer_bytes_completed);
+                        bar.set_message(format!(
+                            "New Data Upload • {} • ETA {}",
+                            format_rate(*transfer_bytes_per_sec),
+                            format_eta(remaining, *transfer_bytes_per_sec),
+                        ));
                     }
 
                     for fp in files {
