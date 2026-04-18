@@ -54,9 +54,6 @@ pub enum HFError {
     Request(#[from] reqwest::Error),
 
     #[error(transparent)]
-    Middleware(#[from] reqwest_middleware::Error),
-
-    #[error(transparent)]
     Io(#[from] std::io::Error),
 
     #[error(transparent)]
@@ -81,16 +78,6 @@ impl HFError {
     pub(crate) fn is_transient(&self) -> bool {
         match self {
             HFError::Request(e) => e.is_connect() || e.is_timeout(),
-            HFError::Middleware(e) => {
-                if e.is_connect() || e.is_timeout() {
-                    return true;
-                }
-                // reqwest_retry wraps exhausted-retry errors as Middleware(anyhow),
-                // which type-erases the underlying reqwest::Error. Check the
-                // alternate Display output for known transient error patterns.
-                let msg = format!("{e:#}");
-                msg.contains("client error (Connect)") || msg.contains("client error (Timeout)")
-            },
             HFError::Http { status, .. } => {
                 matches!(status.as_u16(), 500 | 502 | 503 | 504)
             },

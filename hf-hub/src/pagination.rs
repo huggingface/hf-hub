@@ -64,13 +64,20 @@ impl HFClient {
                     None => return Ok(None),
                 };
 
-                let mut request = self.http_client().get(url.clone()).headers(self.auth_headers());
+                let headers = self.auth_headers();
+                let is_first_page = state.is_first_page;
+                let response = self
+                    .retry(|| {
+                        let mut req = self.http_client().get(url.clone()).headers(headers.clone());
+                        if is_first_page {
+                            req = req.query(&params);
+                        }
+                        req.send()
+                    })
+                    .await?;
                 if state.is_first_page {
-                    request = request.query(&params);
                     state.is_first_page = false;
                 }
-
-                let response = request.send().await?;
 
                 if !response.status().is_success() {
                     let status = response.status();

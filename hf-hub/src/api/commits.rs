@@ -36,13 +36,17 @@ impl HFRepository {
             query.push(("include_prs", "1".into()));
         }
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .get(&url)
-            .headers(self.hf_client.auth_headers())
-            .query(&query)
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .http_client()
+                    .get(&url)
+                    .headers(headers.clone())
+                    .query(&query)
+                    .send()
+            })
             .await?;
 
         let repo_path = self.repo_path();
@@ -59,12 +63,10 @@ impl HFRepository {
         let url =
             format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .get(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().get(&url).headers(headers.clone()).send())
             .await?;
 
         let repo_path = self.repo_path();
@@ -81,13 +83,17 @@ impl HFRepository {
         let url =
             format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .get(&url)
-            .headers(self.hf_client.auth_headers())
-            .query(&[("raw", "true")])
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .http_client()
+                    .get(&url)
+                    .headers(headers.clone())
+                    .query(&[("raw", "true")])
+                    .send()
+            })
             .await?;
 
         let repo_path = self.repo_path();
@@ -111,13 +117,17 @@ impl HFRepository {
         let url =
             format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .get(&url)
-            .headers(self.hf_client.auth_headers())
-            .query(&[("raw", "true")])
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .http_client()
+                    .get(&url)
+                    .headers(headers.clone())
+                    .query(&[("raw", "true")])
+                    .send()
+            })
             .await?;
 
         let repo_path = self.repo_path();
@@ -140,13 +150,17 @@ impl HFRepository {
             body.insert("startingPoint".into(), serde_json::Value::String(revision.clone()));
         }
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .post(&url)
-            .headers(self.hf_client.auth_headers())
-            .json(&body)
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .http_client()
+                    .post(&url)
+                    .headers(headers.clone())
+                    .json(&body)
+                    .send()
+            })
             .await?;
 
         let repo_path = self.repo_path();
@@ -162,12 +176,10 @@ impl HFRepository {
         let url =
             format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.branch);
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .delete(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().delete(&url).headers(headers.clone()).send())
             .await?;
 
         let repo_path = self.repo_path();
@@ -188,13 +200,17 @@ impl HFRepository {
             body["message"] = serde_json::Value::String(message.clone());
         }
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .post(&url)
-            .headers(self.hf_client.auth_headers())
-            .json(&body)
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .http_client()
+                    .post(&url)
+                    .headers(headers.clone())
+                    .json(&body)
+                    .send()
+            })
             .await?;
 
         let repo_path = self.repo_path();
@@ -209,12 +225,10 @@ impl HFRepository {
     pub async fn delete_tag(&self, params: &RepoDeleteTagParams) -> HFResult<()> {
         let url = format!("{}/tag/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.tag);
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .delete(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().delete(&url).headers(headers.clone()).send())
             .await?;
 
         let repo_path = self.repo_path();

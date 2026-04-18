@@ -45,11 +45,9 @@ async fn fetch_xet_connection_info(
     not_found_id: Option<&str>,
     not_found_ctx: crate::error::NotFoundContext,
 ) -> HFResult<XetConnectionInfo> {
+    let headers = client.auth_headers();
     let response = client
-        .http_client()
-        .get(token_url)
-        .headers(client.auth_headers())
-        .send()
+        .retry(|| client.http_client().get(token_url).headers(headers.clone()).send())
         .await?;
 
     let response = client.check_response(response, not_found_id, not_found_ctx).await?;

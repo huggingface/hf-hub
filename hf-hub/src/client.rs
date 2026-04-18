@@ -1,13 +1,13 @@
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
-use reqwest_middleware::ClientWithMiddleware;
-use reqwest_retry::RetryTransientMiddleware;
-use reqwest_retry::policies::ExponentialBackoff;
 use tracing::debug;
 
 use crate::constants;
 use crate::error::{HFError, HFResult, NotFoundContext};
+use crate::retry::{self, RetryConfig};
 
 /// Async client for the Hugging Face Hub API.
 ///
@@ -39,8 +39,9 @@ impl Clone for HFClient {
 }
 
 pub(crate) struct HFClientInner {
-    pub(crate) client: ClientWithMiddleware,
-    pub(crate) no_redirect_client: ClientWithMiddleware,
+    pub(crate) client: reqwest::Client,
+    pub(crate) no_redirect_client: reqwest::Client,
+    pub(crate) retry_config: RetryConfig,
     pub(crate) endpoint: String,
     pub(crate) token: Option<String>,
     pub(crate) cache_dir: std::path::PathBuf,
@@ -60,6 +61,8 @@ pub struct HFClientBuilder {
     client: Option<reqwest::Client>,
     cache_dir: Option<std::path::PathBuf>,
     cache_enabled: Option<bool>,
+    retry_max_attempts: Option<usize>,
+    retry_base_delay: Option<Duration>,
 }
 
 impl HFClientBuilder {
@@ -73,6 +76,8 @@ impl HFClientBuilder {
             client: None,
             cache_dir: None,
             cache_enabled: None,
+            retry_max_attempts: None,
+            retry_base_delay: None,
         }
     }
 
@@ -123,6 +128,18 @@ impl HFClientBuilder {
         self
     }
 
+    /// Overrides the maximum number of retry attempts after an initial failure (default: 3).
+    pub fn retry_max_attempts(mut self, n: usize) -> Self {
+        self.retry_max_attempts = Some(n);
+        self
+    }
+
+    /// Overrides the base delay for exponential backoff between retries (default: 100ms).
+    pub fn retry_base_delay(mut self, delay: Duration) -> Self {
+        self.retry_base_delay = Some(delay);
+        self
+    }
+
     /// Builds the [`HFClient`].
     ///
     /// # Errors
@@ -155,30 +172,26 @@ impl HFClientBuilder {
             HeaderValue::from_str(&user_agent).map_err(|e| HFError::Other(format!("Invalid user agent: {e}")))?,
         );
 
-        let raw_client = match self.client {
+        let client = match self.client {
             Some(c) => c,
             None => reqwest::Client::builder().default_headers(default_headers.clone()).build()?,
         };
 
-        let no_redirect_raw = reqwest::Client::builder()
+        let no_redirect_client = reqwest::Client::builder()
             .default_headers(default_headers)
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
 
-        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(3);
-        let client = reqwest_middleware::ClientBuilder::new(raw_client)
-            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-            .build();
-
-        let no_redirect_retry = ExponentialBackoff::builder().build_with_max_retries(3);
-        let no_redirect_client = reqwest_middleware::ClientBuilder::new(no_redirect_raw)
-            .with(RetryTransientMiddleware::new_with_policy(no_redirect_retry))
-            .build();
+        let retry_config = RetryConfig {
+            max_attempts: self.retry_max_attempts.unwrap_or(retry::DEFAULT_MAX_ATTEMPTS),
+            base_delay: self.retry_base_delay.unwrap_or(retry::DEFAULT_BASE_DELAY),
+        };
 
         Ok(HFClient {
             inner: Arc::new(HFClientInner {
                 client,
                 no_redirect_client,
+                retry_config,
                 endpoint: endpoint.trim_end_matches('/').to_string(),
                 token,
                 cache_dir,
@@ -225,12 +238,27 @@ impl HFClient {
         HFClientBuilder::new()
     }
 
-    pub(crate) fn http_client(&self) -> &ClientWithMiddleware {
+    pub(crate) fn http_client(&self) -> &reqwest::Client {
         &self.inner.client
     }
 
-    pub(crate) fn no_redirect_client(&self) -> &ClientWithMiddleware {
+    pub(crate) fn no_redirect_client(&self) -> &reqwest::Client {
         &self.inner.no_redirect_client
+    }
+
+    /// Run `f` with retries. On each attempt the closure is invoked to
+    /// build a fresh `send()` future (so headers/body are reconstructed
+    /// per attempt — consumed bodies can't be replayed otherwise).
+    ///
+    /// Returns the final `Response` — including responses with non-retryable
+    /// error statuses (e.g., 404, 401). Call `check_response` on the result
+    /// to map those to typed [`HFError`] variants.
+    pub(crate) async fn retry<F, Fut>(&self, f: F) -> Result<reqwest::Response, reqwest::Error>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
+    {
+        retry::retry(&self.inner.retry_config, f).await
     }
 
     pub(crate) fn endpoint(&self) -> &str {

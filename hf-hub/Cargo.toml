@@ -10,10 +10,10 @@ features = ["blocking"]
 
 [dependencies]
 bytes = "1"
-reqwest = { version = "0.13", features = ["json", "stream", "multipart"] }
-reqwest-middleware = { version = "0.5", features = ["json", "multipart", "query"] }
-reqwest-retry = "0.9"
+reqwest = { version = "0.13", features = ["json", "stream", "multipart", "query"] }
+hyper = "1"
 tokio = { version = "1", features = ["io-util"] }
+tokio-retry = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

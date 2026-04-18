@@ -23,12 +23,19 @@ impl HFRepository {
         if let Some(ref revision) = revision {
             url = format!("{url}/revision/{revision}");
         }
-        let mut request = self.hf_client.http_client().get(&url).headers(self.hf_client.auth_headers());
-        if let Some(ref expand) = expand {
-            let expand_params: Vec<(&str, &str)> = expand.iter().map(|v| ("expand", v.as_str())).collect();
-            request = request.query(&expand_params);
-        }
-        let response = request.send().await?;
+        let headers = self.hf_client.auth_headers();
+        let expand_params: Option<Vec<(&str, &str)>> =
+            expand.as_ref().map(|e| e.iter().map(|v| ("expand", v.as_str())).collect());
+        let response = self
+            .hf_client
+            .retry(|| {
+                let mut req = self.hf_client.http_client().get(&url).headers(headers.clone());
+                if let Some(ref params) = expand_params {
+                    req = req.query(params);
+                }
+                req.send()
+            })
+            .await?;
         let repo_path = self.repo_path();
         let not_found_ctx = match revision {
             Some(rev) => crate::error::NotFoundContext::Revision { revision: rev },
@@ -65,12 +72,10 @@ impl HFRepository {
     /// Return `true` if the repository exists and is accessible with the current credentials.
     pub async fn exists(&self) -> HFResult<bool> {
         let url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .get(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().get(&url).headers(headers.clone()).send())
             .await?;
         match response.status().as_u16() {
             200..=299 => Ok(true),
@@ -92,12 +97,10 @@ impl HFRepository {
     pub async fn revision_exists(&self, params: &RepoRevisionExistsParams) -> HFResult<bool> {
         let url =
             format!("{}/revision/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.revision);
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .get(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().get(&url).headers(headers.clone()).send())
             .await?;
         match response.status().as_u16() {
             200..=299 => Ok(true),
@@ -121,12 +124,10 @@ impl HFRepository {
         let url = self
             .hf_client
             .download_url(Some(self.repo_type), &self.repo_path(), revision, &params.filename);
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .head(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().head(&url).headers(headers.clone()).send())
             .await?;
         match response.status().as_u16() {
             200..=299 => Ok(true),
@@ -161,14 +162,18 @@ impl HFRepository {
     /// Endpoint: PUT /api/{repo_type}s/{repo_id}/settings
     pub async fn update_settings(&self, params: &RepoUpdateSettingsParams) -> HFResult<()> {
         let url = format!("{}/settings", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()));
+        let headers = self.hf_client.auth_headers();
 
         let response = self
             .hf_client
-            .http_client()
-            .put(&url)
-            .headers(self.hf_client.auth_headers())
-            .json(params)
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .http_client()
+                    .put(&url)
+                    .headers(headers.clone())
+                    .json(params)
+                    .send()
+            })
             .await?;
 
         let repo_path = self.repo_path();
@@ -304,12 +309,9 @@ impl HFClient {
             body["sdk"] = serde_json::Value::String(sdk.clone());
         }
 
+        let headers = self.auth_headers();
         let response = self
-            .http_client()
-            .post(&url)
-            .headers(self.auth_headers())
-            .json(&body)
-            .send()
+            .retry(|| self.http_client().post(&url).headers(headers.clone()).json(&body).send())
             .await?;
 
         if response.status().as_u16() == 409 && params.exist_ok {
@@ -341,12 +343,9 @@ impl HFClient {
             body["type"] = serde_json::Value::String(repo_type.to_string());
         }
 
+        let headers = self.auth_headers();
         let response = self
-            .http_client()
-            .delete(&url)
-            .headers(self.auth_headers())
-            .json(&body)
-            .send()
+            .retry(|| self.http_client().delete(&url).headers(headers.clone()).json(&body).send())
             .await?;
 
         if response.status().as_u16() == 404 && params.missing_ok {
@@ -370,12 +369,9 @@ impl HFClient {
             body["type"] = serde_json::Value::String(repo_type.to_string());
         }
 
+        let headers = self.auth_headers();
         let response = self
-            .http_client()
-            .post(&url)
-            .headers(self.auth_headers())
-            .json(&body)
-            .send()
+            .retry(|| self.http_client().post(&url).headers(headers.clone()).json(&body).send())
             .await?;
 
         self.check_response(response, None, crate::error::NotFoundContext::Generic)

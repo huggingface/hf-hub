@@ -77,13 +77,17 @@ impl HFRepository {
             "paths": params.paths,
         });
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .post(&url)
-            .headers(self.hf_client.auth_headers())
-            .json(&body)
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .http_client()
+                    .post(&url)
+                    .headers(headers.clone())
+                    .json(&body)
+                    .send()
+            })
             .await?;
 
         let repo_path = self.repo_path();
@@ -114,12 +118,10 @@ impl HFRepository {
             .hf_client
             .download_url(Some(self.repo_type), &repo_path, revision, &filename);
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .head(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().head(&url).headers(headers.clone()).send())
             .await?;
         let response = self
             .hf_client
@@ -214,12 +216,10 @@ impl HFRepository {
             .hf_client
             .download_url(Some(self.repo_type), &repo_path, revision, &params.filename);
 
+        let headers = self.hf_client.auth_headers();
         let head_response = self
             .hf_client
-            .http_client()
-            .head(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().head(&url).headers(headers.clone()).send())
             .await?;
         let head_response = self
             .hf_client
@@ -247,14 +247,20 @@ impl HFRepository {
             return Ok((content_length, Box::new(Box::pin(stream))));
         }
 
-        let mut request = self.hf_client.http_client().get(&url).headers(self.hf_client.auth_headers());
-
-        if let Some(ref range) = params.range {
-            request = request
-                .header(reqwest::header::RANGE, format!("bytes={}-{}", range.start, range.end.saturating_sub(1)));
-        }
-
-        let response = request.send().await?;
+        let range_header = params
+            .range
+            .as_ref()
+            .map(|r| format!("bytes={}-{}", r.start, r.end.saturating_sub(1)));
+        let response = self
+            .hf_client
+            .retry(|| {
+                let mut req = self.hf_client.http_client().get(&url).headers(headers.clone());
+                if let Some(ref range) = range_header {
+                    req = req.header(reqwest::header::RANGE, range);
+                }
+                req.send()
+            })
+            .await?;
         let response = self
             .hf_client
             .check_response(
@@ -295,12 +301,10 @@ impl HFRepository {
             .hf_client
             .download_url(Some(self.repo_type), &repo_path, revision, &params.filename);
 
+        let headers = self.hf_client.auth_headers();
         let head_response = self
             .hf_client
-            .http_client()
-            .head(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().head(&url).headers(headers.clone()).send())
             .await?;
 
         let head_response = self
@@ -326,10 +330,7 @@ impl HFRepository {
 
         let response = self
             .hf_client
-            .http_client()
-            .get(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().get(&url).headers(headers.clone()).send())
             .await?;
         let response = self
             .hf_client
@@ -480,10 +481,13 @@ impl HFRepository {
 
         let head_response = self
             .hf_client
-            .no_redirect_client()
-            .head(&url)
-            .headers(head_headers)
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .no_redirect_client()
+                    .head(&url)
+                    .headers(head_headers.clone())
+                    .send()
+            })
             .await?;
 
         let status = head_response.status();
@@ -577,12 +581,10 @@ impl HFRepository {
             std::fs::create_dir_all(parent)?;
         }
 
+        let dl_headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .get(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().get(&url).headers(dl_headers.clone()).send())
             .await?;
         stream_response_to_file_with_progress(
             response,
@@ -730,12 +732,14 @@ impl HFRepository {
         let head_futs = filenames.iter().map(|filename| {
                 let url = self
                     .hf_client.download_url(Some(self.repo_type), &repo_path, commit_hash_ref, filename);
-                let client = self.hf_client.no_redirect_client();
                 let auth = self.hf_client.auth_headers();
                 let filename = filename.clone();
                 let repo_folder_ref = &repo_folder;
                 async move {
-                    let resp = client.head(&url).headers(auth).send().await?;
+                    let resp = self
+                        .hf_client
+                        .retry(|| self.hf_client.no_redirect_client().head(&url).headers(auth.clone()).send())
+                        .await?;
                     // Per-file 404 resilience: write a .no_exist marker and skip
                     // the file rather than aborting the entire snapshot download.
                     // This matches the Python huggingface_hub library behavior.
@@ -1218,13 +1222,22 @@ impl HFRepository {
         let mut headers = self.hf_client.auth_headers();
         headers.insert(reqwest::header::CONTENT_TYPE, "application/x-ndjson".parse().unwrap());
 
-        let mut request = self.hf_client.http_client().post(&url).headers(headers).body(body);
-
-        if params.create_pr == Some(true) {
-            request = request.query(&[("create_pr", "1")]);
-        }
-
-        let response = request.send().await?;
+        let create_pr = params.create_pr == Some(true);
+        let response = self
+            .hf_client
+            .retry(|| {
+                let mut req = self
+                    .hf_client
+                    .http_client()
+                    .post(&url)
+                    .headers(headers.clone())
+                    .body(body.clone());
+                if create_pr {
+                    req = req.query(&[("create_pr", "1")]);
+                }
+                req.send()
+            })
+            .await?;
         let repo_path = self.repo_path();
         let response = self
             .hf_client
@@ -1500,13 +1513,17 @@ impl HFRepository {
 
         let body = serde_json::json!({ "files": files_payload });
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .post(&url)
-            .headers(self.hf_client.auth_headers())
-            .json(&body)
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .http_client()
+                    .post(&url)
+                    .headers(headers.clone())
+                    .json(&body)
+                    .send()
+            })
             .await?;
 
         let response = self
@@ -1607,11 +1624,14 @@ impl HFRepository {
 
         let response = self
             .hf_client
-            .http_client()
-            .post(&url)
-            .headers(headers)
-            .json(&body)
-            .send()
+            .retry(|| {
+                self.hf_client
+                    .http_client()
+                    .post(&url)
+                    .headers(headers.clone())
+                    .json(&body)
+                    .send()
+            })
             .await?;
 
         let response = self

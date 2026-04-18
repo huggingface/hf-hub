@@ -221,16 +221,6 @@ fn format_hf_error(err: &HFError) -> String {
                 format!("Network error: {e}")
             }
         },
-        HFError::Middleware(e) => {
-            let msg = format!("{e:#}");
-            if msg.contains("Connect") {
-                "Connection failed. Check your internet connection.".to_string()
-            } else if msg.contains("Timeout") {
-                "Request timed out. The server may be slow or unreachable.".to_string()
-            } else {
-                format!("Network error: {e}")
-            }
-        },
         HFError::Io(e) => {
             format!("I/O error: {e}")
         },

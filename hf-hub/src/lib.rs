@@ -209,6 +209,7 @@ pub mod diff;
 mod error;
 mod pagination;
 mod repository;
+mod retry;
 pub mod types;
 mod xet;
 

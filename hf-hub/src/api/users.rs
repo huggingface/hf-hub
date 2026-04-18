@@ -10,7 +10,10 @@ impl HFClient {
     /// Endpoint: GET /api/whoami-v2
     pub async fn whoami(&self) -> HFResult<User> {
         let url = format!("{}/api/whoami-v2", self.endpoint());
-        let response = self.http_client().get(&url).headers(self.auth_headers()).send().await?;
+        let headers = self.auth_headers();
+        let response = self
+            .retry(|| self.http_client().get(&url).headers(headers.clone()).send())
+            .await?;
         let response = self
             .check_response(response, None, crate::error::NotFoundContext::Generic)
             .await?;
@@ -29,7 +32,10 @@ impl HFClient {
     /// Endpoint: GET /api/users/{username}/overview
     pub async fn get_user_overview(&self, username: &str) -> HFResult<User> {
         let url = format!("{}/api/users/{}/overview", self.endpoint(), username);
-        let response = self.http_client().get(&url).headers(self.auth_headers()).send().await?;
+        let headers = self.auth_headers();
+        let response = self
+            .retry(|| self.http_client().get(&url).headers(headers.clone()).send())
+            .await?;
         let response = self
             .check_response(response, None, crate::error::NotFoundContext::Generic)
             .await?;
@@ -40,7 +46,10 @@ impl HFClient {
     /// Endpoint: GET /api/organizations/{organization}/overview
     pub async fn get_organization_overview(&self, organization: &str) -> HFResult<Organization> {
         let url = format!("{}/api/organizations/{}/overview", self.endpoint(), organization);
-        let response = self.http_client().get(&url).headers(self.auth_headers()).send().await?;
+        let headers = self.auth_headers();
+        let response = self
+            .retry(|| self.http_client().get(&url).headers(headers.clone()).send())
+            .await?;
         let response = self
             .check_response(response, None, crate::error::NotFoundContext::Generic)
             .await?;

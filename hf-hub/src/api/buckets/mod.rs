@@ -30,12 +30,9 @@ impl HFClient {
             body["resourceGroupId"] = serde_json::Value::String(rg.clone());
         }
 
+        let headers = self.auth_headers();
         let response = self
-            .http_client()
-            .post(&url)
-            .headers(self.auth_headers())
-            .json(&body)
-            .send()
+            .retry(|| self.http_client().post(&url).headers(headers.clone()).json(&body).send())
             .await?;
 
         let bucket_id = format!("{}/{}", params.namespace, params.name);
@@ -58,7 +55,10 @@ impl HFClient {
     pub async fn delete_bucket(&self, bucket_id: &str, missing_ok: bool) -> HFResult<()> {
         let url = self.bucket_api_url(bucket_id);
 
-        let response = self.http_client().delete(&url).headers(self.auth_headers()).send().await?;
+        let headers = self.auth_headers();
+        let response = self
+            .retry(|| self.http_client().delete(&url).headers(headers.clone()).send())
+            .await?;
 
         if response.status().as_u16() == 404 && missing_ok {
             return Ok(());
@@ -87,12 +87,9 @@ impl HFClient {
             "type": "bucket",
         });
 
+        let headers = self.auth_headers();
         let response = self
-            .http_client()
-            .post(&url)
-            .headers(self.auth_headers())
-            .json(&body)
-            .send()
+            .retry(|| self.http_client().post(&url).headers(headers.clone()).json(&body).send())
             .await?;
 
         self.check_response(response, None, NotFoundContext::Generic).await?;
@@ -108,12 +105,10 @@ impl HFBucket {
         let bucket_id = self.bucket_id();
         let url = self.hf_client.bucket_api_url(&bucket_id);
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .http_client()
-            .get(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.http_client().get(&url).headers(headers.clone()).send())
             .await?;
 
         let response = self
@@ -153,17 +148,21 @@ impl HFBucket {
         let bucket_id = self.bucket_id();
         let url = format!("{}/api/buckets/{}/paths-info", self.hf_client.endpoint(), bucket_id);
 
+        let headers = self.hf_client.auth_headers();
         let mut all_entries = Vec::new();
         for chunk in paths.chunks(BUCKET_PATHS_INFO_BATCH_SIZE) {
             let body = serde_json::json!({ "paths": chunk });
 
             let response = self
                 .hf_client
-                .http_client()
-                .post(&url)
-                .headers(self.hf_client.auth_headers())
-                .json(&body)
-                .send()
+                .retry(|| {
+                    self.hf_client
+                        .http_client()
+                        .post(&url)
+                        .headers(headers.clone())
+                        .json(&body)
+                        .send()
+                })
                 .await?;
 
             let response = self
@@ -184,12 +183,10 @@ impl HFBucket {
         let bucket_id = self.bucket_id();
         let url = format!("{}/buckets/{}/resolve/{}", self.hf_client.endpoint(), bucket_id, remote_path);
 
+        let headers = self.hf_client.auth_headers();
         let response = self
             .hf_client
-            .no_redirect_client()
-            .head(&url)
-            .headers(self.hf_client.auth_headers())
-            .send()
+            .retry(|| self.hf_client.no_redirect_client().head(&url).headers(headers.clone()).send())
             .await?;
 
         let response = self
@@ -264,17 +261,21 @@ impl HFBucket {
             lines.push(serde_json::to_string(&obj)?);
         }
 
+        let headers = self.hf_client.auth_headers();
         for chunk in lines.chunks(BUCKET_BATCH_CHUNK_SIZE) {
             let body = chunk.join("\n") + "\n";
 
             let response = self
                 .hf_client
-                .http_client()
-                .post(&url)
-                .headers(self.hf_client.auth_headers())
-                .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
-                .body(body)
-                .send()
+                .retry(|| {
+                    self.hf_client
+                        .http_client()
+                        .post(&url)
+                        .headers(headers.clone())
+                        .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
+                        .body(body.clone())
+                        .send()
+                })
                 .await?;
 
             self.hf_client
