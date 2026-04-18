@@ -5,7 +5,7 @@ use reqwest::{Error as ReqwestError, Response, StatusCode};
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::{debug, error};
 
-pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 3;
+pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 5;
 pub(crate) const DEFAULT_BASE_DELAY: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy)]
