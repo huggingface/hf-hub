@@ -107,7 +107,9 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<Response, ReqwestError>>,
 {
-    let mut delays = ExponentialBackoff::from_millis(config.base_delay.as_millis().min(u64::MAX as u128) as u64)
+    let base_ms = config.base_delay.as_millis().min(u64::MAX as u128) as u64;
+    let mut delays = ExponentialBackoff::from_millis(2)
+        .factor(base_ms)
         .map(jitter)
         .take(config.max_attempts);
 
@@ -179,5 +181,23 @@ mod tests {
         let err = reqwest::Client::new().get("not-a-url").send().await.unwrap_err();
         assert!(err.is_builder(), "expected builder error, got {err:?}");
         assert!(!is_transient_reqwest_error(&err));
+    }
+
+    /// Regression: confirm the backoff schedule is `base_delay * 2^n`, not `base_delay^n`.
+    /// With max_attempts=4 and base_delay=10ms, the total sleep budget must stay under
+    /// a few hundred ms. A buggy `ExponentialBackoff::from_millis(10)` would yield
+    /// 10ms + 100ms + 1000ms + 10000ms = 11s+ for the same inputs.
+    #[tokio::test]
+    async fn retry_delay_budget_is_bounded() {
+        let config = RetryConfig {
+            max_attempts: 4,
+            base_delay: std::time::Duration::from_millis(10),
+        };
+        let client = reqwest::Client::new();
+        let start = std::time::Instant::now();
+        let result = retry(&config, || client.get("http://127.0.0.1:1").send()).await;
+        let elapsed = start.elapsed();
+        assert!(result.is_err());
+        assert!(elapsed < std::time::Duration::from_secs(1), "retry loop took {elapsed:?}, expected <1s");
     }
 }
