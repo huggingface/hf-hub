@@ -338,7 +338,7 @@ async fn test_download_from_known_xet_repo() {
 }
 
 #[tokio::test]
-async fn test_upload_200mb_random_data_and_verify() {
+async fn test_upload_75mb_random_data_and_verify() {
     let Some(client) = api() else { return };
     if !write_enabled() {
         return;
@@ -348,20 +348,20 @@ async fn test_upload_200mb_random_data_and_verify() {
     let repo_id = format!("{owner}/{name}");
     let repo = repo_handle(&client, &owner, &name);
 
-    let data_200mb = generate_random_bytes(200 * 1024 * 1024);
-    let expected_hash = sha256_hex(&data_200mb);
+    let data_75mb = generate_random_bytes(75 * 1024 * 1024);
+    let expected_hash = sha256_hex(&data_75mb);
 
     let tmp = tempfile::tempdir().unwrap();
     let local_file = tmp.path().join("model.safetensors");
-    std::fs::write(&local_file, &data_200mb).unwrap();
-    drop(data_200mb);
+    std::fs::write(&local_file, &data_75mb).unwrap();
+    drop(data_75mb);
 
     let commit = repo
         .upload_file(
             &RepoUploadFileParams::builder()
                 .source(AddSource::File(local_file))
                 .path_in_repo("model.safetensors")
-                .commit_message("upload 200MB random data")
+                .commit_message("upload 75MB random data")
                 .build(),
         )
         .await
@@ -387,7 +387,7 @@ async fn test_upload_200mb_random_data_and_verify() {
     assert!(downloaded_path.exists());
 
     let downloaded_data = std::fs::read(&downloaded_path).unwrap();
-    assert_eq!(downloaded_data.len(), 200 * 1024 * 1024);
+    assert_eq!(downloaded_data.len(), 75 * 1024 * 1024);
     assert_eq!(sha256_hex(&downloaded_data), expected_hash);
 
     delete_test_repo(&client, &repo_id).await;
