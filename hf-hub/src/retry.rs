@@ -98,6 +98,19 @@ fn log_exhausted(max_attempts: usize, result: &Result<Response, ReqwestError>) {
     error!(url = %url, max_attempts, "retry exhausted");
 }
 
+/// Delay iterator used between retry attempts.
+///
+/// Yields at most `config.max_attempts` durations. With `base_delay = B` and `max_attempts = N`
+/// the pre-jitter schedule is `2B, 4B, 8B, ..., 2^N * B`; `jitter` multiplies each by a random
+/// factor in `[0, 1)`, so the total sleep budget is bounded above by `B * (2^(N+1) - 2)`.
+fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> {
+    let base_ms = config.base_delay.as_millis().min(u64::MAX as u128) as u64;
+    ExponentialBackoff::from_millis(2)
+        .factor(base_ms)
+        .map(jitter)
+        .take(config.max_attempts)
+}
+
 /// Retry the provided async request factory using the given config.
 /// On each attempt the closure is invoked to build a fresh `send()` future.
 /// Returns the final `Response` (including non-retryable error statuses) or
@@ -107,11 +120,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<Response, ReqwestError>>,
 {
-    let base_ms = config.base_delay.as_millis().min(u64::MAX as u128) as u64;
-    let mut delays = ExponentialBackoff::from_millis(2)
-        .factor(base_ms)
-        .map(jitter)
-        .take(config.max_attempts);
+    let mut delays = delay_strategy(config);
 
     let mut attempt = 0usize;
     loop {
@@ -184,20 +193,17 @@ mod tests {
     }
 
     /// Regression: confirm the backoff schedule is `base_delay * 2^n`, not `base_delay^n`.
-    /// With max_attempts=4 and base_delay=10ms, the total sleep budget must stay under
-    /// a few hundred ms. A buggy `ExponentialBackoff::from_millis(10)` would yield
-    /// 10ms + 100ms + 1000ms + 10000ms = 11s+ for the same inputs.
-    #[tokio::test]
-    async fn retry_delay_budget_is_bounded() {
+    /// With max_attempts=4 and base_delay=10ms, the pre-jitter schedule is
+    /// 20 + 40 + 80 + 160 = 300ms; jitter only shortens delays, so the total must stay
+    /// well under that. A buggy `ExponentialBackoff::from_millis(10)` would yield
+    /// 10 + 100 + 1000 + 10000 = 11110ms.
+    #[test]
+    fn retry_delay_budget_is_bounded() {
         let config = RetryConfig {
             max_attempts: 4,
-            base_delay: std::time::Duration::from_millis(10),
+            base_delay: Duration::from_millis(10),
         };
-        let client = reqwest::Client::new();
-        let start = std::time::Instant::now();
-        let result = retry(&config, || client.get("http://127.0.0.1:1").send()).await;
-        let elapsed = start.elapsed();
-        assert!(result.is_err());
-        assert!(elapsed < std::time::Duration::from_secs(1), "retry loop took {elapsed:?}, expected <1s");
+        let total: Duration = delay_strategy(&config).sum();
+        assert!(total < Duration::from_millis(500), "total sleep budget {total:?} exceeds 500ms");
     }
 }

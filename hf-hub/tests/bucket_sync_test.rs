@@ -8,11 +8,14 @@
 //! --nocapture
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use futures::TryStreamExt;
 use hf_hub::test_utils::*;
-use hf_hub::types::{BucketSyncAction, BucketSyncDirection, BucketSyncParams, CreateBucketParams};
-use hf_hub::{HFClient, HFClientBuilder};
+use hf_hub::types::{
+    BucketSyncAction, BucketSyncDirection, BucketSyncParams, BucketTreeEntry, CreateBucketParams, ListBucketTreeParams,
+};
+use hf_hub::{HFBucket, HFClient, HFClientBuilder};
 use rand::RngExt;
 use tokio::sync::OnceCell;
 
@@ -68,6 +71,24 @@ async fn create_test_bucket(client: &HFClient, suffix: &str) -> (String, String)
 async fn delete_test_bucket(client: &HFClient, namespace: &str, name: &str) {
     let bucket_id = format!("{namespace}/{name}");
     let _ = client.delete_bucket(&bucket_id, true).await;
+}
+
+/// Poll the bucket tree until `path` is visible. The batch endpoint returns before
+/// the tree index is consistent on the CI backend, so a tiny upload can race with a
+/// subsequent `list_tree` call that still sees an empty bucket.
+async fn wait_for_bucket_file(bucket: &HFBucket, path: &str) {
+    let params = ListBucketTreeParams::builder().recursive(true).build();
+    for _ in 0..20 {
+        let entries: Vec<BucketTreeEntry> = bucket.list_tree(&params).unwrap().try_collect().await.unwrap();
+        if entries
+            .iter()
+            .any(|e| matches!(e, BucketTreeEntry::File { path: p, .. } if p == path))
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("bucket tree never reflected uploaded file {path}");
 }
 
 fn create_local_files(dir: &std::path::Path, files: &[(&str, &[u8])]) {
@@ -423,6 +444,7 @@ async fn test_sync_download_with_delete() {
         )
         .await
         .unwrap();
+    wait_for_bucket_file(&bucket, "remote.txt").await;
 
     // Create local dir with an extra file
     let download_dir = tempfile::tempdir().unwrap();
