@@ -14,9 +14,7 @@ use crate::client::HFClient;
 use crate::constants;
 use crate::error::{HFError, HFResult};
 use crate::repository::HFRepository;
-use crate::types::progress::{
-    self, DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, UploadEvent, UploadPhase,
-};
+use crate::types::progress::{self, DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, UploadEvent};
 use crate::types::{AddSource, GetXetTokenParams, RepoType};
 
 #[derive(Debug, Deserialize)]
@@ -95,26 +93,24 @@ pub(crate) struct TrackedDownload {
     pub complete_emitted: AtomicBool,
 }
 
-fn emit_remaining_completes(progress: &Progress, tracked: &[TrackedDownload]) {
-    for t in tracked {
-        if !t.complete_emitted.swap(true, Ordering::Relaxed) {
-            progress::emit(
-                progress,
-                ProgressEvent::Download(DownloadEvent::Progress {
-                    files: vec![FileProgress {
-                        filename: t.filename.clone(),
-                        bytes_completed: t.file_size,
-                        total_bytes: t.file_size,
-                        status: FileStatus::Complete,
-                    }],
-                }),
-            );
-        }
+fn emit_remaining_completes(progress: &Option<Progress>, tracked: &[TrackedDownload]) {
+    let files: Vec<FileProgress> = tracked
+        .iter()
+        .filter(|t| !t.complete_emitted.swap(true, Ordering::Relaxed))
+        .map(|t| FileProgress {
+            filename: t.filename.clone(),
+            bytes_completed: t.file_size,
+            total_bytes: t.file_size,
+            status: FileStatus::Complete,
+        })
+        .collect();
+    if !files.is_empty() {
+        progress::emit(progress, ProgressEvent::Download(DownloadEvent::Progress { files }));
     }
 }
 
 fn spawn_download_progress_poller(
-    progress: &Progress,
+    progress: &Option<Progress>,
     group: &xet::xet_session::XetFileDownloadGroup,
     tracked: Arc<Vec<TrackedDownload>>,
 ) -> Option<tokio::task::JoinHandle<()>> {
@@ -131,8 +127,7 @@ fn spawn_download_progress_poller(
                 bytes_per_sec: report.total_bytes_completion_rate,
             }));
 
-            let mut completed = Vec::new();
-            let mut in_progress = Vec::new();
+            let mut files = Vec::new();
 
             for t in tracked.iter() {
                 if t.complete_emitted.load(Ordering::Relaxed) {
@@ -140,7 +135,7 @@ fn spawn_download_progress_poller(
                 }
                 if t.handle.result().is_some() {
                     if !t.complete_emitted.swap(true, Ordering::Relaxed) {
-                        completed.push(FileProgress {
+                        files.push(FileProgress {
                             filename: t.filename.clone(),
                             bytes_completed: t.file_size,
                             total_bytes: t.file_size,
@@ -153,7 +148,7 @@ fn spawn_download_progress_poller(
                     let total = item.total_bytes.max(t.file_size);
                     if item.bytes_completed >= total && total > 0 {
                         if !t.complete_emitted.swap(true, Ordering::Relaxed) {
-                            completed.push(FileProgress {
+                            files.push(FileProgress {
                                 filename: t.filename.clone(),
                                 bytes_completed: total,
                                 total_bytes: total,
@@ -166,7 +161,7 @@ fn spawn_download_progress_poller(
                         } else {
                             FileStatus::Started
                         };
-                        in_progress.push(FileProgress {
+                        files.push(FileProgress {
                             filename: t.filename.clone(),
                             bytes_completed: item.bytes_completed,
                             total_bytes: total,
@@ -176,11 +171,8 @@ fn spawn_download_progress_poller(
                 }
             }
 
-            if !completed.is_empty() {
-                handler.on_progress(&ProgressEvent::Download(DownloadEvent::Progress { files: completed }));
-            }
-            if !in_progress.is_empty() {
-                handler.on_progress(&ProgressEvent::Download(DownloadEvent::Progress { files: in_progress }));
+            if !files.is_empty() {
+                handler.on_progress(&ProgressEvent::Download(DownloadEvent::Progress { files }));
             }
         }
     }))
@@ -206,7 +198,7 @@ async fn xet_upload_inner(
     owner_id: &str,
     not_found_ctx: crate::error::NotFoundContext,
     owner_kind: &'static str,
-    progress: &Progress,
+    progress: &Option<Progress>,
 ) -> HFResult<Vec<XetFileInfo>> {
     tracing::info!(owner_kind, owner = owner_id, "fetching xet write token");
     let conn = fetch_xet_connection_info(hf_client, &token_url, Some(owner_id), not_found_ctx).await?;
@@ -302,7 +294,6 @@ async fn xet_upload_inner(
                     })
                     .collect();
                 handler.on_progress(&ProgressEvent::Upload(UploadEvent::Progress {
-                    phase: UploadPhase::Uploading,
                     bytes_completed: report.total_bytes_completed,
                     total_bytes: report.total_bytes,
                     bytes_per_sec: report.total_bytes_completion_rate,
@@ -342,7 +333,6 @@ async fn xet_upload_inner(
     progress::emit(
         progress,
         ProgressEvent::Upload(UploadEvent::Progress {
-            phase: UploadPhase::Uploading,
             bytes_completed: results.progress.total_bytes_completed,
             total_bytes: results.progress.total_bytes,
             bytes_per_sec: results.progress.total_bytes_completion_rate,
@@ -372,7 +362,7 @@ impl HFRepository {
         filename: &str,
         local_dir: &std::path::Path,
         head_response: &reqwest::Response,
-        progress: &Progress,
+        progress: &Option<Progress>,
     ) -> HFResult<PathBuf> {
         let repo_path = self.repo_path();
         let repo_type = Some(self.repo_type);
@@ -447,7 +437,7 @@ impl HFRepository {
         file_hash: &str,
         file_size: u64,
         path: &std::path::Path,
-        progress: &Progress,
+        progress: &Option<Progress>,
     ) -> HFResult<()> {
         let repo_path = self.repo_path();
         let repo_type = Some(self.repo_type);
@@ -515,7 +505,7 @@ impl HFRepository {
         &self,
         revision: &str,
         files: &[XetBatchFile],
-        progress: &Progress,
+        progress: &Option<Progress>,
     ) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
@@ -658,7 +648,7 @@ impl HFRepository {
         &self,
         files: &[(String, AddSource)],
         revision: &str,
-        progress: &Progress,
+        progress: &Option<Progress>,
     ) -> HFResult<Vec<XetFileInfo>> {
         let repo_path = self.repo_path();
         let token_url = repo_xet_token_url(&self.hf_client, "write", &repo_path, Some(self.repo_type), revision);
@@ -679,7 +669,7 @@ impl crate::bucket::HFBucket {
     pub(crate) async fn xet_upload(
         &self,
         files: &[(String, AddSource)],
-        progress: &Progress,
+        progress: &Option<Progress>,
     ) -> HFResult<Vec<XetFileInfo>> {
         let bucket_id = self.bucket_id();
         let token_url = bucket_xet_token_url(&self.hf_client, "write", &bucket_id);
@@ -695,7 +685,7 @@ impl crate::bucket::HFBucket {
         .await
     }
 
-    pub(crate) async fn xet_download_batch(&self, files: &[XetBatchFile], progress: &Progress) -> HFResult<()> {
+    pub(crate) async fn xet_download_batch(&self, files: &[XetBatchFile], progress: &Option<Progress>) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
         }

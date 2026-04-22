@@ -2,9 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::sync::Mutex;
 
-use hf_hub::types::{
-    DownloadEvent, FileProgress, FileStatus, ProgressEvent, ProgressHandler, UploadEvent, UploadPhase,
-};
+use hf_hub::types::{DownloadEvent, FileProgress, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
 use indicatif::{HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
 
 /// Renders indicatif progress bars in the terminal for download and upload operations.
@@ -19,7 +17,13 @@ pub struct CliProgressHandler {
 struct ProgressState {
     // Download state
     files_bar: Option<ProgressBar>,
-    bytes_bar: Option<ProgressBar>,
+    /// Byte bar for single-file downloads. Created from `Start`/`Started`
+    /// when `total_files == 1`. Kept separate from `aggregate_bar` so per-file
+    /// Complete/InProgress updates never clobber the aggregate position.
+    single_file_bar: Option<ProgressBar>,
+    /// Aggregate byte bar driven exclusively by `AggregateProgress` events
+    /// (xet). Never touched by per-file events.
+    aggregate_bar: Option<ProgressBar>,
     file_bars: HashMap<String, ProgressBar>,
     download_queue: VecDeque<(String, u64)>,
     total_files: usize,
@@ -29,8 +33,8 @@ struct ProgressState {
     upload_file_bars: HashMap<String, ProgressBar>,
     upload_queue: VecDeque<(String, u64)>,
     upload_completed_files: HashSet<String>,
-    last_upload_phase: Option<UploadPhase>,
     spinner: Option<ProgressBar>,
+    upload_bars_active: bool,
     upload_total_files: usize,
 }
 
@@ -99,7 +103,8 @@ impl CliProgressHandler {
             multi,
             state: Mutex::new(ProgressState {
                 files_bar: None,
-                bytes_bar: None,
+                single_file_bar: None,
+                aggregate_bar: None,
                 file_bars: HashMap::new(),
                 download_queue: VecDeque::new(),
                 total_files: 0,
@@ -108,8 +113,8 @@ impl CliProgressHandler {
                 upload_file_bars: HashMap::new(),
                 upload_queue: VecDeque::new(),
                 upload_completed_files: HashSet::new(),
-                last_upload_phase: None,
                 spinner: None,
+                upload_bars_active: false,
                 upload_total_files: 0,
             }),
         }
@@ -133,18 +138,18 @@ impl CliProgressHandler {
                     let bar = self.multi.add(ProgressBar::new(*total_bytes));
                     bar.set_style(bytes_style());
                     bar.set_message("Downloading");
-                    state.bytes_bar = Some(bar);
+                    state.single_file_bar = Some(bar);
                 }
             },
             DownloadEvent::Progress { files } => {
                 for fp in files {
                     match fp.status {
                         FileStatus::Started => {
-                            if state.total_files == 1 && state.bytes_bar.is_none() && fp.total_bytes > 0 {
+                            if state.total_files == 1 && state.single_file_bar.is_none() && fp.total_bytes > 0 {
                                 let bar = self.multi.add(ProgressBar::new(fp.total_bytes));
                                 bar.set_style(bytes_style());
                                 bar.set_message("Downloading");
-                                state.bytes_bar = Some(bar);
+                                state.single_file_bar = Some(bar);
                             } else if state.file_bars.len() < MAX_VISIBLE_FILE_BARS {
                                 let bar = self.multi.add(ProgressBar::new(fp.total_bytes));
                                 bar.set_style(bytes_style());
@@ -164,7 +169,7 @@ impl CliProgressHandler {
                                 bar.set_position(fp.bytes_completed);
                                 state.file_bars.insert(fp.filename.clone(), bar);
                                 state.download_queue.retain(|(n, _)| n != &fp.filename);
-                            } else if let Some(ref bar) = state.bytes_bar {
+                            } else if let Some(ref bar) = state.single_file_bar {
                                 bar.set_position(fp.bytes_completed);
                             }
                         },
@@ -174,7 +179,7 @@ impl CliProgressHandler {
                                 self.multi.remove(&bar);
                             }
                             state.download_queue.retain(|(n, _)| n != &fp.filename);
-                            if let Some(ref bar) = state.bytes_bar {
+                            if let Some(ref bar) = state.single_file_bar {
                                 bar.set_position(fp.bytes_completed);
                             }
                             if let Some(ref bar) = state.files_bar {
@@ -199,13 +204,13 @@ impl CliProgressHandler {
                 total_bytes,
                 ..
             } => {
-                if state.bytes_bar.is_none() {
+                if state.aggregate_bar.is_none() {
                     let bar = self.multi.add(ProgressBar::new(*total_bytes));
                     bar.set_style(bytes_style());
                     bar.set_message("Downloading");
-                    state.bytes_bar = Some(bar);
+                    state.aggregate_bar = Some(bar);
                 }
-                if let Some(ref bar) = state.bytes_bar {
+                if let Some(ref bar) = state.aggregate_bar {
                     bar.set_length(*total_bytes);
                     bar.set_position(*bytes_completed);
                 }
@@ -214,7 +219,10 @@ impl CliProgressHandler {
                 if let Some(ref bar) = state.files_bar {
                     bar.finish_and_clear();
                 }
-                if let Some(ref bar) = state.bytes_bar {
+                if let Some(ref bar) = state.single_file_bar {
+                    bar.finish_and_clear();
+                }
+                if let Some(ref bar) = state.aggregate_bar {
                     bar.finish_and_clear();
                 }
                 for (_, bar) in state.file_bars.drain() {
@@ -233,9 +241,17 @@ impl CliProgressHandler {
                 total_bytes: _,
             } => {
                 state.upload_total_files = *total_files;
+                if let Some(spinner) = state.spinner.take() {
+                    spinner.finish_and_clear();
+                    self.multi.remove(&spinner);
+                }
+                let bar = self.multi.add(ProgressBar::new_spinner());
+                bar.set_style(spinner_style());
+                bar.set_message("Preparing upload...");
+                bar.enable_steady_tick(std::time::Duration::from_millis(100));
+                state.spinner = Some(bar);
             },
             UploadEvent::Progress {
-                phase,
                 bytes_completed,
                 total_bytes,
                 bytes_per_sec,
@@ -244,86 +260,68 @@ impl CliProgressHandler {
                 transfer_bytes_per_sec,
                 files,
             } => {
-                if state.last_upload_phase.as_ref() != Some(phase) {
-                    if let Some(ref spinner) = state.spinner {
+                if !state.upload_bars_active {
+                    if let Some(spinner) = state.spinner.take() {
                         spinner.finish_and_clear();
-                        self.multi.remove(spinner);
-                        state.spinner = None;
+                        self.multi.remove(&spinner);
                     }
-                    match phase {
-                        UploadPhase::Preparing => {
-                            let bar = self.multi.add(ProgressBar::new_spinner());
-                            bar.set_style(spinner_style());
-                            bar.set_message("Preparing files...");
-                            bar.enable_steady_tick(std::time::Duration::from_millis(100));
-                            state.spinner = Some(bar);
-                        },
-                        UploadPhase::CheckingUploadMode => {
-                            let bar = self.multi.add(ProgressBar::new_spinner());
-                            bar.set_style(spinner_style());
-                            bar.set_message("Checking upload mode...");
-                            bar.enable_steady_tick(std::time::Duration::from_millis(100));
-                            state.spinner = Some(bar);
-                        },
-                        UploadPhase::Uploading => {
-                            let pbar = self.multi.add(ProgressBar::new(0));
-                            pbar.set_style(aggregate_bytes_style());
-                            pbar.set_message(format!("Processing Files (0 / {})", state.upload_total_files));
-                            state.processing_bar = Some(pbar);
+                    let pbar = self.multi.add(ProgressBar::new(0));
+                    pbar.set_style(aggregate_bytes_style());
+                    pbar.set_message(format!("Processing Files (0 / {})", state.upload_total_files));
+                    state.processing_bar = Some(pbar);
 
-                            let tbar = self.multi.add(ProgressBar::new(0));
-                            tbar.set_style(aggregate_bytes_style());
-                            tbar.set_message("New Data Upload");
-                            state.transfer_bar = Some(tbar);
-                        },
-                        UploadPhase::Committing => {
-                            self.cleanup_upload_bars(&mut state);
-                            let bar = self.multi.add(ProgressBar::new_spinner());
-                            bar.set_style(spinner_style());
-                            bar.set_message("Creating commit...");
-                            bar.enable_steady_tick(std::time::Duration::from_millis(100));
-                            state.spinner = Some(bar);
-                        },
-                    }
-                    state.last_upload_phase = Some(phase.clone());
+                    let tbar = self.multi.add(ProgressBar::new(0));
+                    tbar.set_style(aggregate_bytes_style());
+                    tbar.set_message("New Data Upload");
+                    state.transfer_bar = Some(tbar);
+                    state.upload_bars_active = true;
                 }
 
-                if *phase == UploadPhase::Uploading {
-                    let completed_count = state.upload_completed_files.len();
-                    let total_count = state.upload_total_files;
+                let completed_count = state.upload_completed_files.len();
+                let total_count = state.upload_total_files;
 
-                    if let Some(ref bar) = state.processing_bar {
-                        bar.set_length(*total_bytes);
-                        bar.set_position(*bytes_completed);
-                        let remaining = total_bytes.saturating_sub(*bytes_completed);
-                        bar.set_message(format!(
-                            "Processing Files ({} / {}) • {} • ETA {}",
-                            completed_count,
-                            total_count,
-                            format_rate(*bytes_per_sec),
-                            format_eta(remaining, *bytes_per_sec),
-                        ));
-                    }
+                if let Some(ref bar) = state.processing_bar {
+                    bar.set_length(*total_bytes);
+                    bar.set_position(*bytes_completed);
+                    let remaining = total_bytes.saturating_sub(*bytes_completed);
+                    bar.set_message(format!(
+                        "Processing Files ({} / {}) • {} • ETA {}",
+                        completed_count,
+                        total_count,
+                        format_rate(*bytes_per_sec),
+                        format_eta(remaining, *bytes_per_sec),
+                    ));
+                }
 
-                    if let Some(ref bar) = state.transfer_bar {
-                        // No file count here: transfer bytes are post-dedup,
-                        // so they don't map 1:1 to files.
-                        bar.set_length(*transfer_bytes);
-                        bar.set_position(*transfer_bytes_completed);
-                        let remaining = transfer_bytes.saturating_sub(*transfer_bytes_completed);
-                        bar.set_message(format!(
-                            "New Data Upload • {} • ETA {}",
-                            format_rate(*transfer_bytes_per_sec),
-                            format_eta(remaining, *transfer_bytes_per_sec),
-                        ));
-                    }
+                if let Some(ref bar) = state.transfer_bar {
+                    // No file count here: transfer bytes are post-dedup,
+                    // so they don't map 1:1 to files.
+                    bar.set_length(*transfer_bytes);
+                    bar.set_position(*transfer_bytes_completed);
+                    let remaining = transfer_bytes.saturating_sub(*transfer_bytes_completed);
+                    bar.set_message(format!(
+                        "New Data Upload • {} • ETA {}",
+                        format_rate(*transfer_bytes_per_sec),
+                        format_eta(remaining, *transfer_bytes_per_sec),
+                    ));
+                }
 
-                    for fp in files {
-                        self.process_upload_file_progress(&mut state, fp);
-                    }
+                for fp in files {
+                    self.process_upload_file_progress(&mut state, fp);
                 }
             },
-            UploadEvent::FileComplete { .. } => {},
+            UploadEvent::Committing => {
+                self.cleanup_upload_bars(&mut state);
+                if let Some(spinner) = state.spinner.take() {
+                    spinner.finish_and_clear();
+                    self.multi.remove(&spinner);
+                }
+                let bar = self.multi.add(ProgressBar::new_spinner());
+                bar.set_style(spinner_style());
+                bar.set_message("Creating commit...");
+                bar.enable_steady_tick(std::time::Duration::from_millis(100));
+                state.spinner = Some(bar);
+            },
             UploadEvent::Complete => {
                 self.cleanup_upload_bars(&mut state);
                 if let Some(spinner) = state.spinner.take() {
@@ -403,6 +401,7 @@ impl CliProgressHandler {
             bar.finish_and_clear();
             self.multi.remove(&bar);
         }
+        state.upload_bars_active = false;
     }
 }
 

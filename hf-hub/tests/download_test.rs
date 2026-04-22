@@ -16,7 +16,7 @@ use hf_hub::test_utils::*;
 use hf_hub::types::{
     AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, DownloadEvent, FileStatus, ProgressEvent,
     ProgressHandler, RepoCreateCommitParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
-    RepoSnapshotDownloadParams, RepoUploadFileParams, UploadEvent, UploadPhase,
+    RepoSnapshotDownloadParams, RepoUploadFileParams, UploadEvent,
 };
 use hf_hub::{HFClient, HFClientBuilder, HFRepository};
 use sha2::{Digest, Sha256};
@@ -585,27 +585,10 @@ async fn test_upload_file_with_progress() {
         "last event should be Upload(Complete)"
     );
 
-    let has_preparing = events.iter().any(|e| {
-        matches!(
-            e,
-            ProgressEvent::Upload(UploadEvent::Progress {
-                phase: UploadPhase::Preparing,
-                ..
-            })
-        )
-    });
-    assert!(has_preparing, "should have a Preparing phase event");
-
-    let has_committing = events.iter().any(|e| {
-        matches!(
-            e,
-            ProgressEvent::Upload(UploadEvent::Progress {
-                phase: UploadPhase::Committing,
-                ..
-            })
-        )
-    });
-    assert!(has_committing, "should have a Committing phase event");
+    let has_committing = events
+        .iter()
+        .any(|e| matches!(e, ProgressEvent::Upload(UploadEvent::Committing)));
+    assert!(has_committing, "should have a Committing event");
 }
 
 #[tokio::test]

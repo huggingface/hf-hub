@@ -13,9 +13,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{HFError, HFResult};
 use crate::repository::HFRepository;
-use crate::types::progress::{
-    self, DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, UploadEvent, UploadPhase,
-};
+use crate::types::progress::{self, DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, UploadEvent};
 use crate::types::{
     AddSource, CommitInfo, CommitOperation, FileMetadataInfo, RepoCreateCommitParams, RepoDeleteFileParams,
     RepoDeleteFolderParams, RepoDownloadFileParams, RepoDownloadFileStreamParams, RepoDownloadFileToBytesParams,
@@ -160,13 +158,6 @@ impl HFRepository {
     ///
     /// Endpoint: GET {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}
     pub async fn download_file(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Download(DownloadEvent::Start {
-                total_files: 1,
-                total_bytes: 0,
-            }),
-        );
         let result = self.download_file_inner(params).await;
         if result.is_ok() {
             progress::emit(&params.progress, ProgressEvent::Download(DownloadEvent::Complete));
@@ -320,6 +311,14 @@ impl HFRepository {
 
         let file_size = extract_file_size(&head_response).unwrap_or(0);
         let has_xet_hash = head_response.headers().get(constants::HEADER_X_XET_HASH).is_some();
+
+        progress::emit(
+            &params.progress,
+            ProgressEvent::Download(DownloadEvent::Start {
+                total_files: 1,
+                total_bytes: file_size,
+            }),
+        );
 
         if has_xet_hash {
             let local_dir = params.local_dir.as_ref().unwrap();
@@ -542,6 +541,14 @@ impl HFRepository {
         let etag = etag?;
         let commit_hash = commit_hash.ok_or_else(|| HFError::Other("Missing X-Repo-Commit header".to_string()))?;
 
+        progress::emit(
+            &params.progress,
+            ProgressEvent::Download(DownloadEvent::Start {
+                total_files: 1,
+                total_bytes: file_size,
+            }),
+        );
+
         if has_xet_hash {
             let xet_hash = xet_hash.ok_or_else(|| HFError::Other("Missing X-Xet-Hash header".to_string()))?;
             let blob = cache::blob_path(cache_dir, repo_folder, &etag);
@@ -706,27 +713,6 @@ impl HFRepository {
             });
         }
 
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Download(DownloadEvent::Start {
-                total_files,
-                total_bytes: 0,
-            }),
-        );
-        for f in &cached_filenames {
-            progress::emit(
-                &params.progress,
-                ProgressEvent::Download(DownloadEvent::Progress {
-                    files: vec![FileProgress {
-                        filename: f.clone(),
-                        bytes_completed: 0,
-                        total_bytes: 0,
-                        status: FileStatus::Complete,
-                    }],
-                }),
-            );
-        }
-
         let repo_path = self.repo_path();
         let commit_hash_ref = &commit_hash;
         let head_futs = filenames.iter().map(|filename| {
@@ -788,6 +774,31 @@ impl HFRepository {
             .flatten()
             .collect();
 
+        let total_bytes: u64 = file_metas.iter().map(|m| m.file_size).sum();
+        progress::emit(
+            &params.progress,
+            ProgressEvent::Download(DownloadEvent::Start {
+                total_files,
+                total_bytes,
+            }),
+        );
+        if !cached_filenames.is_empty() {
+            progress::emit(
+                &params.progress,
+                ProgressEvent::Download(DownloadEvent::Progress {
+                    files: cached_filenames
+                        .iter()
+                        .map(|f| FileProgress {
+                            filename: f.clone(),
+                            bytes_completed: 0,
+                            total_bytes: 0,
+                            status: FileStatus::Complete,
+                        })
+                        .collect(),
+                }),
+            );
+        }
+
         let mut xet_metas = Vec::new();
         let mut non_xet_filenames = Vec::new();
 
@@ -805,16 +816,19 @@ impl HFRepository {
                     non_xet_filenames.push(meta.filename);
                 }
             }
-            for f in &local_cached {
+            if !local_cached.is_empty() {
                 progress::emit(
                     &params.progress,
                     ProgressEvent::Download(DownloadEvent::Progress {
-                        files: vec![FileProgress {
-                            filename: f.clone(),
-                            bytes_completed: 0,
-                            total_bytes: 0,
-                            status: FileStatus::Complete,
-                        }],
+                        files: local_cached
+                            .iter()
+                            .map(|f| FileProgress {
+                                filename: f.clone(),
+                                bytes_completed: 0,
+                                total_bytes: 0,
+                                status: FileStatus::Complete,
+                            })
+                            .collect(),
                     }),
                 );
             }
@@ -856,22 +870,18 @@ impl HFRepository {
         }
 
         // Cache mode
+        let mut cached_progress: Vec<FileProgress> = Vec::new();
         for meta in file_metas {
             let blob = cache::blob_path(cache_dir, &repo_folder, &meta.etag);
             if blob.exists() && !force {
                 cache::create_pointer_symlink(cache_dir, &repo_folder, &meta.commit_hash, &meta.filename, &meta.etag)
                     .await?;
-                progress::emit(
-                    &params.progress,
-                    ProgressEvent::Download(DownloadEvent::Progress {
-                        files: vec![FileProgress {
-                            filename: meta.filename.clone(),
-                            bytes_completed: meta.file_size,
-                            total_bytes: meta.file_size,
-                            status: FileStatus::Complete,
-                        }],
-                    }),
-                );
+                cached_progress.push(FileProgress {
+                    filename: meta.filename.clone(),
+                    bytes_completed: meta.file_size,
+                    total_bytes: meta.file_size,
+                    status: FileStatus::Complete,
+                });
                 continue;
             }
             if meta.xet_hash.is_some() {
@@ -879,6 +889,12 @@ impl HFRepository {
             } else {
                 non_xet_filenames.push(meta.filename);
             }
+        }
+        if !cached_progress.is_empty() {
+            progress::emit(
+                &params.progress,
+                ProgressEvent::Download(DownloadEvent::Progress { files: cached_progress }),
+            );
         }
 
         let xet_batch_fut = async {
@@ -1012,7 +1028,7 @@ fn build_download_params(
     commit_hash: &str,
     force_download: Option<bool>,
     local_dir: Option<PathBuf>,
-    progress: &Progress,
+    progress: &Option<Progress>,
 ) -> Vec<RepoDownloadFileParams> {
     filenames
         .iter()
@@ -1041,7 +1057,7 @@ async fn download_concurrently(
 async fn stream_response_to_file_with_progress(
     response: reqwest::Response,
     dest: &Path,
-    handler: &Progress,
+    handler: &Option<Progress>,
     filename: Option<&str>,
     total_bytes: u64,
 ) -> HFResult<()> {
@@ -1118,36 +1134,10 @@ impl HFRepository {
                 total_bytes,
             }),
         );
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Upload(UploadEvent::Progress {
-                phase: UploadPhase::Preparing,
-                bytes_completed: 0,
-                total_bytes,
-                bytes_per_sec: None,
-                transfer_bytes_completed: 0,
-                transfer_bytes: 0,
-                transfer_bytes_per_sec: None,
-                files: vec![],
-            }),
-        );
 
         // Determine which files should be uploaded via xet (LFS) vs. inline
         // (regular). Files uploaded via xet are referenced by their SHA256 OID
         // in the commit NDJSON.
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Upload(UploadEvent::Progress {
-                phase: UploadPhase::CheckingUploadMode,
-                bytes_completed: 0,
-                total_bytes,
-                bytes_per_sec: None,
-                transfer_bytes_completed: 0,
-                transfer_bytes: 0,
-                transfer_bytes_per_sec: None,
-                files: vec![],
-            }),
-        );
         let lfs_uploaded: HashMap<String, (String, u64)> =
             self.preupload_and_upload_lfs_files(params, revision).await?;
 
@@ -1205,19 +1195,7 @@ impl HFRepository {
             })
             .collect();
 
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Upload(UploadEvent::Progress {
-                phase: UploadPhase::Committing,
-                bytes_completed: total_bytes,
-                total_bytes,
-                bytes_per_sec: None,
-                transfer_bytes_completed: 0,
-                transfer_bytes: 0,
-                transfer_bytes_per_sec: None,
-                files: vec![],
-            }),
-        );
+        progress::emit(&params.progress, ProgressEvent::Upload(UploadEvent::Committing));
 
         let mut headers = self.hf_client.auth_headers();
         headers.insert(reqwest::header::CONTENT_TYPE, "application/x-ndjson".parse().unwrap());

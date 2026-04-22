@@ -8,8 +8,8 @@ pub trait ProgressHandler: Send + Sync {
     fn on_progress(&self, event: &ProgressEvent);
 }
 
-/// A clonable, optional handle to a progress handler.
-pub type Progress = Option<Arc<dyn ProgressHandler>>;
+/// A clonable handle to a progress handler.
+pub type Progress = Arc<dyn ProgressHandler>;
 
 /// Top-level progress event — either an upload or download event.
 #[derive(Debug, Clone)]
@@ -20,18 +20,18 @@ pub enum ProgressEvent {
 
 /// Progress events for upload operations.
 ///
-/// Every variant that represents an in-progress state carries the current
-/// `UploadPhase`, so consumers always know the phase from any single event
-/// without tracking state across events.
+/// `Start` and `Complete` bookend the operation. `Progress` always represents
+/// byte-level upload activity; `Committing` is a marker (no payload) emitted
+/// once the commit API call begins. The gap between `Start` and the first
+/// `Progress`, and the gap between `Committing` and `Complete`, are silent —
+/// consumers can show a generic spinner during those windows.
 #[derive(Debug, Clone)]
 pub enum UploadEvent {
     /// Upload operation has started; total file count and bytes are known.
     Start { total_files: usize, total_bytes: u64 },
     /// Byte-level progress during xet/LFS upload.
-    /// `files` contains per-file progress for xet uploads (may be empty
-    /// for phases without per-file granularity).
+    /// `files` contains per-file progress for xet uploads (may be empty).
     Progress {
-        phase: UploadPhase,
         bytes_completed: u64,
         total_bytes: u64,
         bytes_per_sec: Option<f64>,
@@ -40,9 +40,8 @@ pub enum UploadEvent {
         transfer_bytes_per_sec: Option<f64>,
         files: Vec<FileProgress>,
     },
-    /// One or more individual files completed. Batched for efficiency
-    /// during multi-file uploads (upload_folder).
-    FileComplete { files: Vec<String>, phase: UploadPhase },
+    /// Commit API call has begun; no byte-level activity follows until `Complete`.
+    Committing,
     /// Entire upload operation finished (all files, commit created).
     Complete,
 }
@@ -88,20 +87,7 @@ pub enum FileStatus {
     Complete,
 }
 
-/// Phases of an upload operation, in order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UploadPhase {
-    /// Scanning local files and computing sizes.
-    Preparing,
-    /// Calling preupload API to classify files as LFS vs regular.
-    CheckingUploadMode,
-    /// Transferring file data (xet or inline).
-    Uploading,
-    /// Creating the commit on the Hub.
-    Committing,
-}
-
-pub(crate) fn emit(handler: &Progress, event: ProgressEvent) {
+pub(crate) fn emit(handler: &Option<Progress>, event: ProgressEvent) {
     if let Some(h) = handler {
         h.on_progress(&event);
     }
@@ -143,14 +129,14 @@ mod tests {
 
     #[test]
     fn emit_with_none_is_noop() {
-        let progress: Progress = None;
+        let progress: Option<Progress> = None;
         emit(&progress, ProgressEvent::Download(DownloadEvent::Complete));
     }
 
     #[test]
     fn emit_records_events() {
         let handler = Arc::new(RecordingHandler::new());
-        let progress: Progress = Some(handler.clone());
+        let progress: Option<Progress> = Some(handler.clone());
 
         emit(
             &progress,
@@ -162,7 +148,6 @@ mod tests {
         emit(
             &progress,
             ProgressEvent::Upload(UploadEvent::Progress {
-                phase: UploadPhase::Uploading,
                 bytes_completed: 512,
                 total_bytes: 1024,
                 bytes_per_sec: Some(100.0),
@@ -184,7 +169,7 @@ mod tests {
     #[test]
     fn download_file_lifecycle() {
         let handler = Arc::new(RecordingHandler::new());
-        let progress: Progress = Some(handler.clone());
+        let progress: Option<Progress> = Some(handler.clone());
 
         emit(
             &progress,
@@ -233,53 +218,48 @@ mod tests {
     }
 
     #[test]
-    fn upload_phase_progression() {
+    fn upload_event_ordering() {
         let handler = Arc::new(RecordingHandler::new());
-        let progress: Progress = Some(handler.clone());
+        let progress: Option<Progress> = Some(handler.clone());
 
-        let phases = [
-            UploadPhase::Preparing,
-            UploadPhase::CheckingUploadMode,
-            UploadPhase::Uploading,
-            UploadPhase::Committing,
-        ];
-
-        for phase in &phases {
-            emit(
-                &progress,
-                ProgressEvent::Upload(UploadEvent::Progress {
-                    phase: phase.clone(),
-                    bytes_completed: 0,
-                    total_bytes: 100,
-                    bytes_per_sec: None,
-                    transfer_bytes_completed: 0,
-                    transfer_bytes: 0,
-                    transfer_bytes_per_sec: None,
-                    files: vec![],
-                }),
-            );
-        }
+        emit(
+            &progress,
+            ProgressEvent::Upload(UploadEvent::Start {
+                total_files: 1,
+                total_bytes: 100,
+            }),
+        );
+        emit(
+            &progress,
+            ProgressEvent::Upload(UploadEvent::Progress {
+                bytes_completed: 50,
+                total_bytes: 100,
+                bytes_per_sec: None,
+                transfer_bytes_completed: 0,
+                transfer_bytes: 0,
+                transfer_bytes_per_sec: None,
+                files: vec![],
+            }),
+        );
+        emit(&progress, ProgressEvent::Upload(UploadEvent::Committing));
+        emit(&progress, ProgressEvent::Upload(UploadEvent::Complete));
 
         let events = handler.events();
         assert_eq!(events.len(), 4);
-        for (i, phase) in phases.iter().enumerate() {
-            if let ProgressEvent::Upload(UploadEvent::Progress { phase: p, .. }) = &events[i] {
-                assert_eq!(p, phase);
-            } else {
-                panic!("expected Upload(Progress) at index {i}");
-            }
-        }
+        assert!(matches!(events[0], ProgressEvent::Upload(UploadEvent::Start { .. })));
+        assert!(matches!(events[1], ProgressEvent::Upload(UploadEvent::Progress { .. })));
+        assert!(matches!(events[2], ProgressEvent::Upload(UploadEvent::Committing)));
+        assert!(matches!(events[3], ProgressEvent::Upload(UploadEvent::Complete)));
     }
 
     #[test]
     fn upload_progress_with_per_file_data() {
         let handler = Arc::new(RecordingHandler::new());
-        let progress: Progress = Some(handler.clone());
+        let progress: Option<Progress> = Some(handler.clone());
 
         emit(
             &progress,
             ProgressEvent::Upload(UploadEvent::Progress {
-                phase: UploadPhase::Uploading,
                 bytes_completed: 500,
                 total_bytes: 1000,
                 bytes_per_sec: Some(100.0),
@@ -321,28 +301,6 @@ mod tests {
             assert_eq!(*transfer_bytes_per_sec, Some(50.0));
         } else {
             panic!("expected Upload(Progress)");
-        }
-    }
-
-    #[test]
-    fn batched_file_complete() {
-        let handler = Arc::new(RecordingHandler::new());
-        let progress: Progress = Some(handler.clone());
-
-        emit(
-            &progress,
-            ProgressEvent::Upload(UploadEvent::FileComplete {
-                files: vec!["a.bin".to_string(), "b.bin".to_string(), "c.bin".to_string()],
-                phase: UploadPhase::Uploading,
-            }),
-        );
-
-        let events = handler.events();
-        assert_eq!(events.len(), 1);
-        if let ProgressEvent::Upload(UploadEvent::FileComplete { files, .. }) = &events[0] {
-            assert_eq!(files.len(), 3);
-        } else {
-            panic!("expected FileComplete");
         }
     }
 }

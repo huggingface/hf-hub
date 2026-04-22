@@ -8,9 +8,7 @@
 use std::sync::Arc;
 
 use hf_hub::HFClient;
-use hf_hub::types::{
-    DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, RepoDownloadFileParams, UploadEvent, UploadPhase,
-};
+use hf_hub::types::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, RepoDownloadFileParams, UploadEvent};
 
 struct PrintProgressHandler;
 
@@ -54,7 +52,6 @@ impl ProgressHandler for PrintProgressHandler {
                     println!("Starting upload: {total_files} file(s), {total_bytes} bytes");
                 },
                 UploadEvent::Progress {
-                    phase,
                     bytes_completed,
                     total_bytes,
                     bytes_per_sec,
@@ -63,14 +60,8 @@ impl ProgressHandler for PrintProgressHandler {
                     transfer_bytes_per_sec,
                     files,
                 } => {
-                    let phase_str = match phase {
-                        UploadPhase::Preparing => "preparing",
-                        UploadPhase::CheckingUploadMode => "checking upload mode",
-                        UploadPhase::Uploading => "uploading",
-                        UploadPhase::Committing => "committing",
-                    };
                     let rate = bytes_per_sec.map(|r| format!(" ({:.1} B/s)", r)).unwrap_or_default();
-                    println!("  [{phase_str}] {bytes_completed}/{total_bytes}{rate}");
+                    println!("  [uploading] {bytes_completed}/{total_bytes}{rate}");
                     if *transfer_bytes > 0 {
                         let transfer_rate =
                             transfer_bytes_per_sec.map(|r| format!(" ({:.1} B/s)", r)).unwrap_or_default();
@@ -86,8 +77,8 @@ impl ProgressHandler for PrintProgressHandler {
                         println!("    {}: {pct}% ({}/{}) [{status}]", f.filename, f.bytes_completed, f.total_bytes);
                     }
                 },
-                UploadEvent::FileComplete { files, phase } => {
-                    println!("  Files completed during {phase:?}: {}", files.join(", "));
+                UploadEvent::Committing => {
+                    println!("  Phase: committing");
                 },
                 UploadEvent::Complete => {
                     println!("Upload complete.");
