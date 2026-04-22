@@ -1,10 +1,10 @@
 # hf-hub
 
-> **Note:** This library is experimental. APIs may change without notice between versions.
-
-Async Rust client for the [Hugging Face Hub API](https://huggingface.co/docs/hub/api).
+Rust client for the [Hugging Face Hub API](https://huggingface.co/docs/hub/api).
 
 `hf-hub` provides a typed, ergonomic interface for interacting with the Hugging Face Hub from Rust. It is the Rust equivalent of the Python [`huggingface_hub`](https://github.com/huggingface/huggingface_hub) library.
+
+Both an **async** interface (`HFClient`, on by default) and a **synchronous** interface (`HFClientSync`, enabled via the `blocking` feature) are provided. The two mirror each other method-for-method.
 
 ## Features
 
@@ -13,9 +13,10 @@ Async Rust client for the [Hugging Face Hub API](https://huggingface.co/docs/hub
 - **Commit operations** — create commits with multiple file operations, list commit history, view diffs between revisions
 - **Branch and tag management** — create and delete branches and tags, list refs
 - **User and organization info** — whoami, user profiles, organization details, followers
-- **Streaming pagination** — list endpoints return `impl Stream<Item = Result<T>>` for lazy, memory-efficient iteration
+- **Streaming pagination** — async list endpoints return `impl Stream<Item = Result<T>>` for lazy, memory-efficient iteration; blocking counterparts collect into `Vec<T>`
 - **Bucket operations** — create, delete, list, and move buckets; upload, download, and delete files within buckets
 - **Xet high-performance transfers** — support for Hugging Face's Xet storage backend
+- **Async or blocking** — use `HFClient` with your own tokio runtime, or `HFClientSync` for synchronous callers (requires the `blocking` feature)
 
 ## Installation
 
@@ -23,8 +24,14 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-hf-hub = { git = "https://github.com/huggingface/hf-hub.git" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+hf-hub = "1.0.0"
+```
+
+To use the synchronous interface, enable the `blocking` feature:
+
+```toml
+[dependencies]
+hf-hub = { version = "1.0.0", features = ["blocking"] }
 ```
 
 ## CLI Installation
@@ -38,6 +45,8 @@ cargo install --git https://github.com/huggingface/hf-hub.git hfrs
 This builds in release mode by default. Once installed, run `hfrs --help` to see available commands.
 
 ## Quick Start
+
+### Async
 
 ```rust,no_run
 use hf_hub::HFClient;
@@ -60,6 +69,31 @@ async fn main() -> hf_hub::HFResult<()> {
     Ok(())
 }
 ```
+
+### Blocking
+
+Requires the `blocking` feature. `HFClientSync` manages a dedicated tokio runtime internally, so callers do not need their own.
+
+```rust,ignore
+use hf_hub::HFClientSync;
+use hf_hub::types::{RepoInfo, RepoInfoParams};
+
+fn main() -> hf_hub::HFResult<()> {
+    let client = HFClientSync::new()?;
+
+    let RepoInfo::Model(info) = client
+        .model("openai-community", "gpt2")
+        .info(&RepoInfoParams::default())?
+    else {
+        unreachable!("handle type guarantees the Model variant");
+    };
+    println!("Model: {} (downloads: {:?})", info.id, info.downloads);
+
+    Ok(())
+}
+```
+
+The blocking handles (`HFClientSync`, `HFRepositorySync`, `HFSpaceSync`, `HFBucketSync`) mirror their async counterparts method-for-method. See the `blocking_*` examples in `examples/` for runnable programs.
 
 ## Usage Examples
 

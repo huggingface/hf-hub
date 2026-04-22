@@ -163,8 +163,8 @@ impl HFClientBuilder {
         let user_agent = self.user_agent.unwrap_or_else(|| {
             let ua_origin = std::env::var(constants::HF_HUB_USER_AGENT_ORIGIN).ok();
             match ua_origin {
-                Some(origin) => format!("hf-hub/0.1.0; {origin}"),
-                None => "hf-hub/0.1.0".to_string(),
+                Some(origin) => format!("hf-hub/{}; {origin}", env!("CARGO_PKG_VERSION")),
+                None => format!("hf-hub/{}", env!("CARGO_PKG_VERSION")),
             }
         });
         default_headers.insert(
