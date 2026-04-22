@@ -193,6 +193,178 @@ pub(crate) struct XetBatchFile {
     pub filename: String,
 }
 
+/// Shared xet upload flow for both repositories and buckets.
+///
+/// Callers build the xet write-token URL with the appropriate variant
+/// (repo + revision, or bucket id) and pass the corresponding `owner_id`
+/// and `NotFoundContext`. `owner_kind` is used as a structured tracing
+/// field value (`"repo"` or `"bucket"`).
+async fn xet_upload_inner(
+    hf_client: &HFClient,
+    files: &[(String, AddSource)],
+    token_url: String,
+    owner_id: &str,
+    not_found_ctx: crate::error::NotFoundContext,
+    owner_kind: &'static str,
+    progress: &Progress,
+) -> HFResult<Vec<XetFileInfo>> {
+    tracing::info!(owner_kind, owner = owner_id, "fetching xet write token");
+    let conn = fetch_xet_connection_info(hf_client, &token_url, Some(owner_id), not_found_ctx).await?;
+    tracing::info!(endpoint = conn.endpoint.as_str(), "xet write token obtained, building session");
+
+    tracing::info!("building xet upload commit");
+    let (session, generation) = hf_client.xet_session()?;
+    let commit = match session.new_upload_commit() {
+        Ok(b) => b,
+        Err(e) => {
+            hf_client.replace_xet_session(generation, &e);
+            hf_client
+                .xet_session()?
+                .0
+                .new_upload_commit()
+                .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
+        },
+    }
+    .with_endpoint(conn.endpoint.clone())
+    .with_token_info(conn.access_token.clone(), conn.expiration_unix_epoch)
+    .with_token_refresh_url(token_url, hf_client.auth_headers())
+    .build()
+    .await
+    .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?;
+    tracing::info!("xet upload commit built, queuing file uploads");
+
+    let mut task_ids_in_order = Vec::with_capacity(files.len());
+    let mut handles: Vec<XetFileUpload> = Vec::with_capacity(files.len());
+    let mut item_name_to_target_path: HashMap<String, String> = HashMap::with_capacity(files.len());
+
+    for (target_path, source) in files {
+        tracing::info!(path = target_path.as_str(), "queuing xet upload");
+        let handle = match source {
+            AddSource::File(path) => {
+                // Mimic xet-core's `std::path::absolute()` logic to derive the
+                // item_name that will appear in ItemProgressReport.
+                // See: xet-data upload_commit.rs XetUploadCommitInner::upload_from_path
+                if let Ok(abs) = std::path::absolute(path) {
+                    if let Some(s) = abs.to_str() {
+                        item_name_to_target_path.insert(s.to_owned(), target_path.clone());
+                    } else {
+                        tracing::warn!(path = ?abs, "non-UTF-8 path; per-file progress unavailable");
+                    }
+                }
+                commit
+                    .upload_from_path(path.clone(), Sha256Policy::Compute)
+                    .await
+                    .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
+            },
+            AddSource::Bytes(bytes) => {
+                item_name_to_target_path.insert(target_path.clone(), target_path.clone());
+                commit
+                    .upload_bytes(bytes.clone(), Sha256Policy::Compute, Some(target_path.clone()))
+                    .await
+                    .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
+            },
+        };
+        task_ids_in_order.push(handle.task_id());
+        handles.push(handle);
+    }
+
+    tracing::info!(file_count = files.len(), "committing xet uploads");
+    let shared_handles: Arc<Vec<XetFileUpload>> = Arc::new(handles);
+    let shared_name_map: Arc<HashMap<String, String>> = Arc::new(item_name_to_target_path);
+
+    let poll_handle = progress.as_ref().map(|handler| {
+        let handler = handler.clone();
+        let commit = commit.clone();
+        let poll_handles = Arc::clone(&shared_handles);
+        let poll_name_map = Arc::clone(&shared_name_map);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let report = commit.progress();
+                let file_progress: Vec<FileProgress> = poll_handles
+                    .iter()
+                    .filter_map(|h| {
+                        let item = h.progress()?;
+                        let target_path = poll_name_map.get(&item.item_name)?;
+                        let status = if item.bytes_completed >= item.total_bytes && item.total_bytes > 0 {
+                            FileStatus::Complete
+                        } else if item.bytes_completed > 0 {
+                            FileStatus::InProgress
+                        } else {
+                            FileStatus::Started
+                        };
+                        Some(FileProgress {
+                            filename: target_path.clone(),
+                            bytes_completed: item.bytes_completed,
+                            total_bytes: item.total_bytes,
+                            status,
+                        })
+                    })
+                    .collect();
+                handler.on_progress(&ProgressEvent::Upload(UploadEvent::Progress {
+                    phase: UploadPhase::Uploading,
+                    bytes_completed: report.total_bytes_completed,
+                    total_bytes: report.total_bytes,
+                    bytes_per_sec: report.total_bytes_completion_rate,
+                    transfer_bytes_completed: report.total_transfer_bytes_completed,
+                    transfer_bytes: report.total_transfer_bytes,
+                    transfer_bytes_per_sec: report.total_transfer_bytes_completion_rate,
+                    files: file_progress,
+                }));
+            }
+        })
+    });
+    let results = commit
+        .commit()
+        .await
+        .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?;
+    if let Some(h) = poll_handle {
+        h.abort();
+    }
+    tracing::info!("xet upload commit complete");
+
+    let final_files: Vec<FileProgress> = files
+        .iter()
+        .map(|(target_path, source)| {
+            let size = match source {
+                AddSource::Bytes(b) => b.len() as u64,
+                AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+            };
+            FileProgress {
+                filename: target_path.clone(),
+                bytes_completed: size,
+                total_bytes: size,
+                status: FileStatus::Complete,
+            }
+        })
+        .collect();
+
+    progress::emit(
+        progress,
+        ProgressEvent::Upload(UploadEvent::Progress {
+            phase: UploadPhase::Uploading,
+            bytes_completed: results.progress.total_bytes_completed,
+            total_bytes: results.progress.total_bytes,
+            bytes_per_sec: results.progress.total_bytes_completion_rate,
+            transfer_bytes_completed: results.progress.total_transfer_bytes_completed,
+            transfer_bytes: results.progress.total_transfer_bytes,
+            transfer_bytes_per_sec: results.progress.total_transfer_bytes_completion_rate,
+            files: final_files,
+        }),
+    );
+
+    let mut xet_file_infos = Vec::with_capacity(files.len());
+    for task_id in &task_ids_in_order {
+        let metadata: &XetFileMetadata = results
+            .uploads
+            .get(task_id)
+            .ok_or_else(|| HFError::Other("Missing xet upload result for task".to_string()))?;
+        xet_file_infos.push(metadata.xet_info.clone());
+    }
+
+    Ok(xet_file_infos)
+}
+
 impl HFRepository {
     pub(crate) async fn xet_download_to_local_dir(
         &self,
@@ -489,163 +661,17 @@ impl HFRepository {
         progress: &Progress,
     ) -> HFResult<Vec<XetFileInfo>> {
         let repo_path = self.repo_path();
-        let repo_type = Some(self.repo_type);
-        tracing::info!(repo = repo_path.as_str(), "fetching xet write token");
-        let token_url = repo_xet_token_url(&self.hf_client, "write", &repo_path, repo_type, revision);
-        let conn = fetch_xet_connection_info(
+        let token_url = repo_xet_token_url(&self.hf_client, "write", &repo_path, Some(self.repo_type), revision);
+        xet_upload_inner(
             &self.hf_client,
-            &token_url,
-            Some(&repo_path),
+            files,
+            token_url,
+            &repo_path,
             crate::error::NotFoundContext::Repo,
-        )
-        .await?;
-        tracing::info!(endpoint = conn.endpoint.as_str(), "xet write token obtained, building session");
-
-        tracing::info!("building xet upload commit");
-        let (session, generation) = self.hf_client.xet_session()?;
-        let commit = match session.new_upload_commit() {
-            Ok(b) => b,
-            Err(e) => {
-                self.hf_client.replace_xet_session(generation, &e);
-                self.hf_client
-                    .xet_session()?
-                    .0
-                    .new_upload_commit()
-                    .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
-            },
-        }
-        .with_endpoint(conn.endpoint.clone())
-        .with_token_info(conn.access_token.clone(), conn.expiration_unix_epoch)
-        .with_token_refresh_url(token_url, self.hf_client.auth_headers())
-        .build()
-        .await
-        .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?;
-        tracing::info!("xet upload commit built, queuing file uploads");
-
-        let mut task_ids_in_order = Vec::with_capacity(files.len());
-        let mut handles: Vec<XetFileUpload> = Vec::with_capacity(files.len());
-        let mut item_name_to_repo_path: HashMap<String, String> = HashMap::with_capacity(files.len());
-
-        for (path_in_repo, source) in files {
-            tracing::info!(path = path_in_repo.as_str(), "queuing xet upload");
-            let handle = match source {
-                AddSource::File(path) => {
-                    // Mimic xet-core's `std::path::absolute()` logic to derive the
-                    // item_name that will appear in ItemProgressReport.
-                    // See: xet-data upload_commit.rs XetUploadCommitInner::upload_from_path
-                    if let Ok(abs) = std::path::absolute(path) {
-                        if let Some(s) = abs.to_str() {
-                            item_name_to_repo_path.insert(s.to_owned(), path_in_repo.clone());
-                        } else {
-                            tracing::warn!(path = ?abs, "non-UTF-8 path; per-file progress unavailable");
-                        }
-                    }
-                    commit
-                        .upload_from_path(path.clone(), Sha256Policy::Compute)
-                        .await
-                        .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
-                },
-                AddSource::Bytes(bytes) => {
-                    item_name_to_repo_path.insert(path_in_repo.clone(), path_in_repo.clone());
-                    commit
-                        .upload_bytes(bytes.clone(), Sha256Policy::Compute, Some(path_in_repo.clone()))
-                        .await
-                        .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
-                },
-            };
-            task_ids_in_order.push(handle.task_id());
-            handles.push(handle);
-        }
-
-        tracing::info!(file_count = files.len(), "committing xet uploads");
-        let shared_handles: Arc<Vec<XetFileUpload>> = Arc::new(handles);
-        let shared_name_map: Arc<HashMap<String, String>> = Arc::new(item_name_to_repo_path);
-
-        let poll_handle = progress.as_ref().map(|handler| {
-            let handler = handler.clone();
-            let commit = commit.clone();
-            let poll_handles = Arc::clone(&shared_handles);
-            let poll_name_map = Arc::clone(&shared_name_map);
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    let report = commit.progress();
-                    let file_progress: Vec<FileProgress> = poll_handles
-                        .iter()
-                        .filter_map(|h| {
-                            let item = h.progress()?;
-                            let repo_path = poll_name_map.get(&item.item_name)?;
-                            let status = if item.bytes_completed >= item.total_bytes && item.total_bytes > 0 {
-                                FileStatus::Complete
-                            } else if item.bytes_completed > 0 {
-                                FileStatus::InProgress
-                            } else {
-                                FileStatus::Started
-                            };
-                            Some(FileProgress {
-                                filename: repo_path.clone(),
-                                bytes_completed: item.bytes_completed,
-                                total_bytes: item.total_bytes,
-                                status,
-                            })
-                        })
-                        .collect();
-                    handler.on_progress(&ProgressEvent::Upload(UploadEvent::Progress {
-                        phase: UploadPhase::Uploading,
-                        bytes_completed: report.total_bytes_completed,
-                        total_bytes: report.total_bytes,
-                        bytes_per_sec: report.total_bytes_completion_rate,
-                        transfer_bytes_completed: report.total_transfer_bytes_completed,
-                        transfer_bytes: report.total_transfer_bytes,
-                        transfer_bytes_per_sec: report.total_transfer_bytes_completion_rate,
-                        files: file_progress,
-                    }));
-                }
-            })
-        });
-        let results = commit
-            .commit()
-            .await
-            .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
-        tracing::info!("xet upload commit complete");
-
-        let final_files: Vec<FileProgress> = files
-            .iter()
-            .map(|(path_in_repo, _)| FileProgress {
-                filename: path_in_repo.clone(),
-                bytes_completed: 0,
-                total_bytes: 0,
-                status: FileStatus::Complete,
-            })
-            .collect();
-
-        progress::emit(
+            "repo",
             progress,
-            ProgressEvent::Upload(UploadEvent::Progress {
-                phase: UploadPhase::Uploading,
-                bytes_completed: results.progress.total_bytes_completed,
-                total_bytes: results.progress.total_bytes,
-                bytes_per_sec: results.progress.total_bytes_completion_rate,
-                transfer_bytes_completed: results.progress.total_transfer_bytes_completed,
-                transfer_bytes: results.progress.total_transfer_bytes,
-                transfer_bytes_per_sec: results.progress.total_transfer_bytes_completion_rate,
-                files: final_files,
-            }),
-        );
-
-        let mut xet_file_infos = Vec::with_capacity(files.len());
-        for task_id in &task_ids_in_order {
-            let metadata: &XetFileMetadata = results
-                .uploads
-                .get(task_id)
-                .ok_or_else(|| HFError::Other("Missing xet upload result for task".to_string()))?;
-            xet_file_infos.push(metadata.xet_info.clone());
-        }
-
-        Ok(xet_file_infos)
+        )
+        .await
     }
 }
 
@@ -656,157 +682,17 @@ impl crate::bucket::HFBucket {
         progress: &Progress,
     ) -> HFResult<Vec<XetFileInfo>> {
         let bucket_id = self.bucket_id();
-        tracing::info!(bucket = bucket_id.as_str(), "fetching xet write token");
         let token_url = bucket_xet_token_url(&self.hf_client, "write", &bucket_id);
-        let conn = fetch_xet_connection_info(
+        xet_upload_inner(
             &self.hf_client,
-            &token_url,
-            Some(&bucket_id),
+            files,
+            token_url,
+            &bucket_id,
             crate::error::NotFoundContext::Bucket,
-        )
-        .await?;
-        tracing::info!(endpoint = conn.endpoint.as_str(), "xet write token obtained, building session");
-
-        tracing::info!("building xet upload commit");
-        let (session, generation) = self.hf_client.xet_session()?;
-        let commit = match session.new_upload_commit() {
-            Ok(b) => b,
-            Err(e) => {
-                self.hf_client.replace_xet_session(generation, &e);
-                self.hf_client
-                    .xet_session()?
-                    .0
-                    .new_upload_commit()
-                    .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
-            },
-        }
-        .with_endpoint(conn.endpoint.clone())
-        .with_token_info(conn.access_token.clone(), conn.expiration_unix_epoch)
-        .with_token_refresh_url(token_url, self.hf_client.auth_headers())
-        .build()
-        .await
-        .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?;
-        tracing::info!("xet upload commit built, queuing file uploads");
-
-        let mut task_ids_in_order = Vec::with_capacity(files.len());
-        let mut handles: Vec<XetFileUpload> = Vec::with_capacity(files.len());
-        let mut item_name_to_bucket_path: HashMap<String, String> = HashMap::with_capacity(files.len());
-
-        for (path_in_bucket, source) in files {
-            tracing::info!(path = path_in_bucket.as_str(), "queuing xet upload");
-            let handle = match source {
-                AddSource::File(path) => {
-                    if let Ok(abs) = std::path::absolute(path)
-                        && let Some(s) = abs.to_str()
-                    {
-                        item_name_to_bucket_path.insert(s.to_owned(), path_in_bucket.clone());
-                    }
-                    commit
-                        .upload_from_path(path.clone(), Sha256Policy::Compute)
-                        .await
-                        .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
-                },
-                AddSource::Bytes(bytes) => {
-                    item_name_to_bucket_path.insert(path_in_bucket.clone(), path_in_bucket.clone());
-                    commit
-                        .upload_bytes(bytes.clone(), Sha256Policy::Compute, Some(path_in_bucket.clone()))
-                        .await
-                        .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
-                },
-            };
-            task_ids_in_order.push(handle.task_id());
-            handles.push(handle);
-        }
-
-        tracing::info!(file_count = files.len(), "committing xet uploads");
-        let shared_handles: Arc<Vec<XetFileUpload>> = Arc::new(handles);
-        let shared_name_map: Arc<HashMap<String, String>> = Arc::new(item_name_to_bucket_path);
-
-        let poll_handle = progress.as_ref().map(|handler| {
-            let handler = handler.clone();
-            let commit = commit.clone();
-            let poll_handles = Arc::clone(&shared_handles);
-            let poll_name_map = Arc::clone(&shared_name_map);
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    let report = commit.progress();
-                    let file_progress: Vec<FileProgress> = poll_handles
-                        .iter()
-                        .filter_map(|h| {
-                            let item = h.progress()?;
-                            let bucket_path = poll_name_map.get(&item.item_name)?;
-                            let status = if item.bytes_completed >= item.total_bytes && item.total_bytes > 0 {
-                                FileStatus::Complete
-                            } else if item.bytes_completed > 0 {
-                                FileStatus::InProgress
-                            } else {
-                                FileStatus::Started
-                            };
-                            Some(FileProgress {
-                                filename: bucket_path.clone(),
-                                bytes_completed: item.bytes_completed,
-                                total_bytes: item.total_bytes,
-                                status,
-                            })
-                        })
-                        .collect();
-                    handler.on_progress(&ProgressEvent::Upload(UploadEvent::Progress {
-                        phase: UploadPhase::Uploading,
-                        bytes_completed: report.total_bytes_completed,
-                        total_bytes: report.total_bytes,
-                        bytes_per_sec: report.total_bytes_completion_rate,
-                        transfer_bytes_completed: report.total_transfer_bytes_completed,
-                        transfer_bytes: report.total_transfer_bytes,
-                        transfer_bytes_per_sec: report.total_transfer_bytes_completion_rate,
-                        files: file_progress,
-                    }));
-                }
-            })
-        });
-        let results = commit
-            .commit()
-            .await
-            .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
-        tracing::info!("xet upload commit complete");
-
-        let final_files: Vec<FileProgress> = files
-            .iter()
-            .map(|(path_in_bucket, _)| FileProgress {
-                filename: path_in_bucket.clone(),
-                bytes_completed: 0,
-                total_bytes: 0,
-                status: FileStatus::Complete,
-            })
-            .collect();
-
-        progress::emit(
+            "bucket",
             progress,
-            ProgressEvent::Upload(UploadEvent::Progress {
-                phase: UploadPhase::Uploading,
-                bytes_completed: results.progress.total_bytes_completed,
-                total_bytes: results.progress.total_bytes,
-                bytes_per_sec: results.progress.total_bytes_completion_rate,
-                transfer_bytes_completed: results.progress.total_transfer_bytes_completed,
-                transfer_bytes: results.progress.total_transfer_bytes,
-                transfer_bytes_per_sec: results.progress.total_transfer_bytes_completion_rate,
-                files: final_files,
-            }),
-        );
-
-        let mut xet_file_infos = Vec::with_capacity(files.len());
-        for task_id in &task_ids_in_order {
-            let metadata: &XetFileMetadata = results
-                .uploads
-                .get(task_id)
-                .ok_or_else(|| HFError::Other("Missing xet upload result for task".to_string()))?;
-            xet_file_infos.push(metadata.xet_info.clone());
-        }
-
-        Ok(xet_file_infos)
+        )
+        .await
     }
 
     pub(crate) async fn xet_download_batch(&self, files: &[XetBatchFile], progress: &Progress) -> HFResult<()> {
