@@ -3,6 +3,7 @@ use std::time::SystemTime;
 
 use super::repo::RepoType;
 
+/// Information about a single cached file on disk, including its blob and access times.
 pub struct CachedFileInfo {
     pub file_name: String,
     pub file_path: PathBuf,
@@ -12,6 +13,7 @@ pub struct CachedFileInfo {
     pub blob_last_modified: SystemTime,
 }
 
+/// Information about a single cached revision of a repository, including the snapshot path and its files.
 pub struct CachedRevisionInfo {
     pub commit_hash: String,
     pub snapshot_path: PathBuf,
@@ -21,6 +23,7 @@ pub struct CachedRevisionInfo {
     pub last_modified: SystemTime,
 }
 
+/// Information about a single cached repository, aggregating its revisions and disk usage.
 pub struct CachedRepoInfo {
     pub repo_id: String,
     pub repo_type: RepoType,
@@ -32,6 +35,10 @@ pub struct CachedRepoInfo {
     pub last_modified: SystemTime,
 }
 
+/// Snapshot of the local Hugging Face cache directory.
+///
+/// Returned by [`HFClient::scan_cache`](crate::client::HFClient::scan_cache); aggregates every
+/// cached repository along with total disk usage and any warnings encountered during scanning.
 pub struct HFCacheInfo {
     pub cache_dir: PathBuf,
     pub repos: Vec<CachedRepoInfo>,

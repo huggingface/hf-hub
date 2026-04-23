@@ -7,6 +7,9 @@ use super::commit::{AddSource, CommitOperation};
 use super::progress::Progress;
 use super::repo::{GatedApprovalMode, GatedNotificationsMode};
 
+/// Parameters for fetching repository info.
+///
+/// Used with [`HFRepository::info`](crate::repository::HFRepository::info).
 #[derive(Default, TypedBuilder)]
 pub struct RepoInfoParams {
     /// Git revision (branch, tag, or commit SHA) to fetch info for. Defaults to the main branch.
@@ -19,6 +22,9 @@ pub struct RepoInfoParams {
     pub expand: Option<Vec<String>>,
 }
 
+/// Parameters for checking whether a revision exists in a repository.
+///
+/// Used with [`HFRepository::revision_exists`](crate::repository::HFRepository::revision_exists).
 #[derive(TypedBuilder)]
 pub struct RepoRevisionExistsParams {
     /// Git revision (branch, tag, or commit SHA) to check for existence.
@@ -26,6 +32,9 @@ pub struct RepoRevisionExistsParams {
     pub revision: String,
 }
 
+/// Parameters for checking whether a file exists in a repository.
+///
+/// Used with [`HFRepository::file_exists`](crate::repository::HFRepository::file_exists).
 #[derive(TypedBuilder)]
 pub struct RepoFileExistsParams {
     /// Path of the file to check within the repository.
@@ -36,6 +45,9 @@ pub struct RepoFileExistsParams {
     pub revision: Option<String>,
 }
 
+/// Parameters for listing files in a repository.
+///
+/// Used with [`HFRepository::list_files`](crate::repository::HFRepository::list_files).
 #[derive(Default, TypedBuilder)]
 pub struct RepoListFilesParams {
     /// Git revision to list files from. Defaults to the main branch.
@@ -43,6 +55,9 @@ pub struct RepoListFilesParams {
     pub revision: Option<String>,
 }
 
+/// Parameters for listing the tree of entries in a repository.
+///
+/// Used with [`HFRepository::list_tree`](crate::repository::HFRepository::list_tree).
 #[derive(Default, TypedBuilder)]
 pub struct RepoListTreeParams {
     /// Git revision to list the tree from. Defaults to the main branch.
@@ -59,6 +74,9 @@ pub struct RepoListTreeParams {
     pub limit: Option<usize>,
 }
 
+/// Parameters for fetching metadata about a single file in a repository.
+///
+/// Used with [`HFRepository::get_file_metadata`](crate::repository::HFRepository::get_file_metadata).
 #[derive(TypedBuilder)]
 pub struct RepoGetFileMetadataParams {
     /// Path of the file within the repository.
@@ -69,6 +87,9 @@ pub struct RepoGetFileMetadataParams {
     pub revision: Option<String>,
 }
 
+/// Parameters for fetching info about a set of paths in a repository.
+///
+/// Used with [`HFRepository::get_paths_info`](crate::repository::HFRepository::get_paths_info).
 #[derive(TypedBuilder)]
 pub struct RepoGetPathsInfoParams {
     /// List of file paths within the repository to retrieve info for.
@@ -78,6 +99,9 @@ pub struct RepoGetPathsInfoParams {
     pub revision: Option<String>,
 }
 
+/// Parameters for downloading a single file from a repository.
+///
+/// Used with [`HFRepository::download_file`](crate::repository::HFRepository::download_file).
 #[derive(TypedBuilder)]
 pub struct RepoDownloadFileParams {
     /// Path of the file to download within the repository.
@@ -97,9 +121,13 @@ pub struct RepoDownloadFileParams {
     pub local_files_only: Option<bool>,
     /// Optional progress handler for tracking download progress.
     #[builder(default)]
-    pub progress: Progress,
+    pub progress: Option<Progress>,
 }
 
+/// Parameters for streaming a file download from a repository.
+///
+/// Used with [`HFRepository::download_file_stream`](crate::repository::HFRepository::download_file_stream)
+/// and [`HFRepository::download_file_to_bytes`](crate::repository::HFRepository::download_file_to_bytes).
 #[derive(TypedBuilder)]
 pub struct RepoDownloadFileStreamParams {
     /// Path of the file to stream within the repository.
@@ -116,6 +144,9 @@ pub struct RepoDownloadFileStreamParams {
 pub type RepoDownloadFileToBytesParams = RepoDownloadFileStreamParams;
 pub type RepoDownloadFileToBytesParamsBuilder = RepoDownloadFileStreamParamsBuilder;
 
+/// Parameters for downloading a full repository snapshot.
+///
+/// Used with [`HFRepository::snapshot_download`](crate::repository::HFRepository::snapshot_download).
 #[derive(Default, TypedBuilder)]
 pub struct RepoSnapshotDownloadParams {
     /// Git revision to download. Defaults to the main branch.
@@ -141,9 +172,12 @@ pub struct RepoSnapshotDownloadParams {
     pub max_workers: Option<usize>,
     /// Optional progress handler for tracking download progress.
     #[builder(default)]
-    pub progress: Progress,
+    pub progress: Option<Progress>,
 }
 
+/// Parameters for uploading a single file to a repository.
+///
+/// Used with [`HFRepository::upload_file`](crate::repository::HFRepository::upload_file).
 #[derive(TypedBuilder)]
 pub struct RepoUploadFileParams {
     /// Source of the file content to upload (bytes or file path).
@@ -168,9 +202,12 @@ pub struct RepoUploadFileParams {
     pub parent_commit: Option<String>,
     /// Optional progress handler for tracking upload progress.
     #[builder(default)]
-    pub progress: Progress,
+    pub progress: Option<Progress>,
 }
 
+/// Parameters for uploading a local folder to a repository.
+///
+/// Used with [`HFRepository::upload_folder`](crate::repository::HFRepository::upload_folder).
 #[derive(TypedBuilder)]
 pub struct RepoUploadFolderParams {
     /// Local folder path to upload.
@@ -202,9 +239,12 @@ pub struct RepoUploadFolderParams {
     pub delete_patterns: Option<Vec<String>>,
     /// Optional progress handler for tracking upload progress.
     #[builder(default)]
-    pub progress: Progress,
+    pub progress: Option<Progress>,
 }
 
+/// Parameters for deleting a single file from a repository.
+///
+/// Used with [`HFRepository::delete_file`](crate::repository::HFRepository::delete_file).
 #[derive(TypedBuilder)]
 pub struct RepoDeleteFileParams {
     /// Path of the file to delete within the repository.
@@ -221,6 +261,9 @@ pub struct RepoDeleteFileParams {
     pub create_pr: Option<bool>,
 }
 
+/// Parameters for deleting a folder from a repository.
+///
+/// Used with [`HFRepository::delete_folder`](crate::repository::HFRepository::delete_folder).
 #[derive(TypedBuilder)]
 pub struct RepoDeleteFolderParams {
     /// Path of the folder to delete within the repository.
@@ -237,6 +280,9 @@ pub struct RepoDeleteFolderParams {
     pub create_pr: Option<bool>,
 }
 
+/// Parameters for creating a commit composed of multiple file operations.
+///
+/// Used with [`HFRepository::create_commit`](crate::repository::HFRepository::create_commit).
 #[derive(TypedBuilder)]
 pub struct RepoCreateCommitParams {
     /// List of file operations (additions, deletions, copies) to include in the commit.
@@ -258,9 +304,12 @@ pub struct RepoCreateCommitParams {
     pub parent_commit: Option<String>,
     /// Optional progress handler for tracking upload progress.
     #[builder(default)]
-    pub progress: Progress,
+    pub progress: Option<Progress>,
 }
 
+/// Parameters for listing commits on a repository revision.
+///
+/// Used with [`HFRepository::list_commits`](crate::repository::HFRepository::list_commits).
 #[derive(Default, TypedBuilder)]
 pub struct RepoListCommitsParams {
     /// Git revision (branch, tag, or commit SHA) to list commits from. Defaults to the main branch.
@@ -271,6 +320,9 @@ pub struct RepoListCommitsParams {
     pub limit: Option<usize>,
 }
 
+/// Parameters for listing refs (branches, tags, ...) on a repository.
+///
+/// Used with [`HFRepository::list_refs`](crate::repository::HFRepository::list_refs).
 #[derive(Default, TypedBuilder)]
 pub struct RepoListRefsParams {
     /// Whether to include pull request refs in the listing.
@@ -278,6 +330,9 @@ pub struct RepoListRefsParams {
     pub include_pull_requests: bool,
 }
 
+/// Parameters for fetching the parsed diff between a revision and its parent.
+///
+/// Used with [`HFRepository::get_commit_diff`](crate::repository::HFRepository::get_commit_diff).
 #[derive(TypedBuilder)]
 pub struct RepoGetCommitDiffParams {
     /// Revision to compare against the parent (branch, tag, or commit SHA).
@@ -285,6 +340,10 @@ pub struct RepoGetCommitDiffParams {
     pub compare: String,
 }
 
+/// Parameters for fetching the raw git diff between a revision and its parent.
+///
+/// Used with [`HFRepository::get_raw_diff`](crate::repository::HFRepository::get_raw_diff)
+/// and [`HFRepository::get_raw_diff_stream`](crate::repository::HFRepository::get_raw_diff_stream).
 #[derive(TypedBuilder)]
 pub struct RepoGetRawDiffParams {
     /// Revision to compare against the parent (branch, tag, or commit SHA).
@@ -292,6 +351,9 @@ pub struct RepoGetRawDiffParams {
     pub compare: String,
 }
 
+/// Parameters for creating a branch on a repository.
+///
+/// Used with [`HFRepository::create_branch`](crate::repository::HFRepository::create_branch).
 #[derive(TypedBuilder)]
 pub struct RepoCreateBranchParams {
     /// Name of the branch to create.
@@ -302,6 +364,9 @@ pub struct RepoCreateBranchParams {
     pub revision: Option<String>,
 }
 
+/// Parameters for deleting a branch on a repository.
+///
+/// Used with [`HFRepository::delete_branch`](crate::repository::HFRepository::delete_branch).
 #[derive(TypedBuilder)]
 pub struct RepoDeleteBranchParams {
     /// Name of the branch to delete.
@@ -309,6 +374,9 @@ pub struct RepoDeleteBranchParams {
     pub branch: String,
 }
 
+/// Parameters for creating a tag on a repository.
+///
+/// Used with [`HFRepository::create_tag`](crate::repository::HFRepository::create_tag).
 #[derive(TypedBuilder)]
 pub struct RepoCreateTagParams {
     /// Name of the tag to create.
@@ -322,6 +390,9 @@ pub struct RepoCreateTagParams {
     pub message: Option<String>,
 }
 
+/// Parameters for deleting a tag on a repository.
+///
+/// Used with [`HFRepository::delete_tag`](crate::repository::HFRepository::delete_tag).
 #[derive(TypedBuilder)]
 pub struct RepoDeleteTagParams {
     /// Name of the tag to delete.
@@ -329,6 +400,9 @@ pub struct RepoDeleteTagParams {
     pub tag: String,
 }
 
+/// Parameters for updating repository settings (visibility, gating, description, ...).
+///
+/// Used with [`HFRepository::update_settings`](crate::repository::HFRepository::update_settings).
 #[derive(Default, TypedBuilder, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoUpdateSettingsParams {
@@ -358,6 +432,9 @@ pub struct RepoUpdateSettingsParams {
     pub gated_notifications_mode: Option<GatedNotificationsMode>,
 }
 
+/// Parameters for requesting a hardware change on a Space.
+///
+/// Used with [`HFSpace::request_hardware`](crate::repository::HFSpace::request_hardware).
 #[derive(TypedBuilder)]
 pub struct SpaceHardwareRequestParams {
     /// Hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
@@ -368,12 +445,18 @@ pub struct SpaceHardwareRequestParams {
     pub sleep_time: Option<u64>,
 }
 
+/// Parameters for setting the idle sleep time on a Space.
+///
+/// Used with [`HFSpace::set_sleep_time`](crate::repository::HFSpace::set_sleep_time).
 #[derive(TypedBuilder)]
 pub struct SpaceSleepTimeParams {
     /// Number of seconds of inactivity before the Space is put to sleep. `0` means never sleep.
     pub sleep_time: u64,
 }
 
+/// Parameters for adding or updating a secret on a Space.
+///
+/// Used with [`HFSpace::add_secret`](crate::repository::HFSpace::add_secret).
 #[derive(TypedBuilder)]
 pub struct SpaceSecretParams {
     /// Secret key name.
@@ -387,6 +470,9 @@ pub struct SpaceSecretParams {
     pub description: Option<String>,
 }
 
+/// Parameters for deleting a secret from a Space.
+///
+/// Used with [`HFSpace::delete_secret`](crate::repository::HFSpace::delete_secret).
 #[derive(TypedBuilder)]
 pub struct SpaceSecretDeleteParams {
     /// Secret key name to delete.
@@ -394,6 +480,9 @@ pub struct SpaceSecretDeleteParams {
     pub key: String,
 }
 
+/// Parameters for adding or updating a public variable on a Space.
+///
+/// Used with [`HFSpace::add_variable`](crate::repository::HFSpace::add_variable).
 #[derive(TypedBuilder)]
 pub struct SpaceVariableParams {
     /// Variable key name.
@@ -407,6 +496,9 @@ pub struct SpaceVariableParams {
     pub description: Option<String>,
 }
 
+/// Parameters for deleting a public variable from a Space.
+///
+/// Used with [`HFSpace::delete_variable`](crate::repository::HFSpace::delete_variable).
 #[derive(TypedBuilder)]
 pub struct SpaceVariableDeleteParams {
     /// Variable key name to delete.

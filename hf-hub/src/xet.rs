@@ -11,11 +11,11 @@ use xet::error::XetError;
 use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileInfo, XetFileMetadata, XetFileUpload};
 
 use crate::client::HFClient;
-use crate::constants;
 use crate::error::{HFError, HFResult};
 use crate::repository::HFRepository;
-use crate::types::progress::{self, DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, UploadEvent};
+use crate::types::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent};
 use crate::types::{AddSource, GetXetTokenParams, RepoType};
+use crate::{constants, retry};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,9 +44,9 @@ async fn fetch_xet_connection_info(
     not_found_ctx: crate::error::NotFoundContext,
 ) -> HFResult<XetConnectionInfo> {
     let headers = client.auth_headers();
-    let response = client
-        .retry(|| client.http_client().get(token_url).headers(headers.clone()).send())
-        .await?;
+    let response =
+        retry::retry(client.retry_config(), || client.http_client().get(token_url).headers(headers.clone()).send())
+            .await?;
 
     let response = client.check_response(response, not_found_id, not_found_ctx).await?;
 
@@ -105,7 +105,7 @@ fn emit_remaining_completes(progress: &Option<Progress>, tracked: &[TrackedDownl
         })
         .collect();
     if !files.is_empty() {
-        progress::emit(progress, ProgressEvent::Download(DownloadEvent::Progress { files }));
+        progress.emit(DownloadEvent::Progress { files });
     }
 }
 
@@ -121,11 +121,11 @@ fn spawn_download_progress_poller(
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
             let report = group.progress();
-            handler.on_progress(&ProgressEvent::Download(DownloadEvent::AggregateProgress {
+            handler.emit(DownloadEvent::AggregateProgress {
                 bytes_completed: report.total_bytes_completed,
                 total_bytes: report.total_bytes,
                 bytes_per_sec: report.total_bytes_completion_rate,
-            }));
+            });
 
             let mut files = Vec::new();
 
@@ -172,7 +172,7 @@ fn spawn_download_progress_poller(
             }
 
             if !files.is_empty() {
-                handler.on_progress(&ProgressEvent::Download(DownloadEvent::Progress { files }));
+                handler.emit(DownloadEvent::Progress { files });
             }
         }
     }))
@@ -293,7 +293,7 @@ async fn xet_upload_inner(
                         })
                     })
                     .collect();
-                handler.on_progress(&ProgressEvent::Upload(UploadEvent::Progress {
+                handler.emit(UploadEvent::Progress {
                     bytes_completed: report.total_bytes_completed,
                     total_bytes: report.total_bytes,
                     bytes_per_sec: report.total_bytes_completion_rate,
@@ -301,7 +301,7 @@ async fn xet_upload_inner(
                     transfer_bytes: report.total_transfer_bytes,
                     transfer_bytes_per_sec: report.total_transfer_bytes_completion_rate,
                     files: file_progress,
-                }));
+                });
             }
         })
     });
@@ -330,18 +330,15 @@ async fn xet_upload_inner(
         })
         .collect();
 
-    progress::emit(
-        progress,
-        ProgressEvent::Upload(UploadEvent::Progress {
-            bytes_completed: results.progress.total_bytes_completed,
-            total_bytes: results.progress.total_bytes,
-            bytes_per_sec: results.progress.total_bytes_completion_rate,
-            transfer_bytes_completed: results.progress.total_transfer_bytes_completed,
-            transfer_bytes: results.progress.total_transfer_bytes,
-            transfer_bytes_per_sec: results.progress.total_transfer_bytes_completion_rate,
-            files: final_files,
-        }),
-    );
+    progress.emit(UploadEvent::Progress {
+        bytes_completed: results.progress.total_bytes_completed,
+        total_bytes: results.progress.total_bytes,
+        bytes_per_sec: results.progress.total_bytes_completion_rate,
+        transfer_bytes_completed: results.progress.total_transfer_bytes_completed,
+        transfer_bytes: results.progress.total_transfer_bytes,
+        transfer_bytes_per_sec: results.progress.total_transfer_bytes_completion_rate,
+        files: final_files,
+    });
 
     let mut xet_file_infos = Vec::with_capacity(files.len());
     for task_id in &task_ids_in_order {

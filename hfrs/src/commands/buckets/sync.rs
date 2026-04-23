@@ -110,7 +110,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
         (b, PathBuf::from(&args.dest), BucketSyncDirection::Download)
     };
 
-    let handler: Progress = if args.quiet {
+    let handler: Option<Progress> = if args.quiet {
         None
     } else if let Some(multi) = multi {
         Some(Arc::new(CliProgressHandler::new(multi)))

@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize, Serializer};
 
+/// The kind of repository on the Hugging Face Hub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RepoType {
@@ -37,6 +38,7 @@ impl FromStr for RepoType {
     }
 }
 
+/// LFS metadata attached to a repository file, when the file is stored in Git LFS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobLfsInfo {
     pub size: Option<u64>,
@@ -44,6 +46,7 @@ pub struct BlobLfsInfo {
     pub pointer_size: Option<u64>,
 }
 
+/// Summary of the last commit that touched a tree entry, included when expanded metadata is requested.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LastCommitInfo {
@@ -52,6 +55,7 @@ pub struct LastCommitInfo {
     pub date: Option<String>,
 }
 
+/// A single file entry in a repository's flat "siblings" listing, as returned by the repo info endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoSibling {
     pub rfilename: String,
@@ -96,6 +100,11 @@ pub enum RepoTreeEntry {
     },
 }
 
+/// Metadata for a model repository on the Hub.
+///
+/// Returned by [`HFClient::list_models`](crate::client::HFClient::list_models) and by
+/// [`HFRepository::info`](crate::repository::HFRepository::info) when the repo is a model.
+/// Most fields are optional because they depend on the `expand` parameter and the repo's state.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
@@ -128,6 +137,11 @@ pub struct ModelInfo {
     pub widget_data: Option<serde_json::Value>,
 }
 
+/// Metadata for a dataset repository on the Hub.
+///
+/// Returned by [`HFClient::list_datasets`](crate::client::HFClient::list_datasets) and by
+/// [`HFRepository::info`](crate::repository::HFRepository::info) when the repo is a dataset.
+/// Most fields are optional because they depend on the `expand` parameter and the repo's state.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatasetInfo {
@@ -152,6 +166,11 @@ pub struct DatasetInfo {
     pub used_storage: Option<u64>,
 }
 
+/// Metadata for a Space repository on the Hub.
+///
+/// Returned by [`HFClient::list_spaces`](crate::client::HFClient::list_spaces) and by
+/// [`HFRepository::info`](crate::repository::HFRepository::info) when the repo is a Space.
+/// Most fields are optional because they depend on the `expand` parameter and the Space's state.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceInfo {
@@ -177,6 +196,10 @@ pub struct SpaceInfo {
     pub used_storage: Option<u64>,
 }
 
+/// Repo-type-tagged wrapper over [`ModelInfo`], [`DatasetInfo`], and [`SpaceInfo`].
+///
+/// Returned by [`HFRepository::info`](crate::repository::HFRepository::info); the active variant
+/// matches the repository's [`RepoType`].
 #[derive(Debug, Clone)]
 pub enum RepoInfo {
     Model(ModelInfo),
@@ -200,6 +223,10 @@ pub struct RepoUrl {
     pub url: String,
 }
 
+/// Access-gating mode for a repository.
+///
+/// Controls whether users must request access and how requests are approved.
+/// Serializes as `false` when [`GatedApprovalMode::Disabled`], or as the lowercase mode string otherwise.
 #[derive(Debug, Clone)]
 pub enum GatedApprovalMode {
     Disabled,
@@ -235,6 +262,7 @@ impl FromStr for GatedApprovalMode {
     }
 }
 
+/// Notification cadence for gated-access requests on a repository.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GatedNotificationsMode {

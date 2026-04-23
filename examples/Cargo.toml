@@ -48,6 +48,10 @@ name = "progress"
 path = "progress.rs"
 
 [[example]]
+name = "progress_logger"
+path = "progress_logger.rs"
+
+[[example]]
 name = "buckets"
 path = "buckets.rs"
 

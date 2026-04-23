@@ -13,14 +13,14 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{HFError, HFResult};
 use crate::repository::HFRepository;
-use crate::types::progress::{self, DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, UploadEvent};
+use crate::types::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent};
 use crate::types::{
     AddSource, CommitInfo, CommitOperation, FileMetadataInfo, RepoCreateCommitParams, RepoDeleteFileParams,
     RepoDeleteFolderParams, RepoDownloadFileParams, RepoDownloadFileStreamParams, RepoDownloadFileToBytesParams,
     RepoGetFileMetadataParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams,
     RepoSnapshotDownloadParams, RepoTreeEntry, RepoType, RepoUploadFileParams, RepoUploadFolderParams,
 };
-use crate::{cache, constants};
+use crate::{cache, constants, retry};
 
 impl HFRepository {
     /// Return a flat list of all file paths in the repository at the given revision.
@@ -76,17 +76,15 @@ impl HFRepository {
         });
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| {
-                self.hf_client
-                    .http_client()
-                    .post(&url)
-                    .headers(headers.clone())
-                    .json(&body)
-                    .send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .http_client()
+                .post(&url)
+                .headers(headers.clone())
+                .json(&body)
+                .send()
+        })
+        .await?;
 
         let repo_path = self.repo_path();
         let response = self
@@ -117,10 +115,10 @@ impl HFRepository {
             .download_url(Some(self.repo_type), &repo_path, revision, &filename);
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| self.hf_client.http_client().head(&url).headers(headers.clone()).send())
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
+        })
+        .await?;
         let response = self
             .hf_client
             .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Entry { path: filename.clone() })
@@ -147,9 +145,7 @@ impl HFRepository {
             file_size,
         })
     }
-}
 
-impl HFRepository {
     /// Download a single file from a repository.
     ///
     /// When `local_dir` is `Some`, the file is downloaded directly to that directory
@@ -160,7 +156,7 @@ impl HFRepository {
     pub async fn download_file(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
         let result = self.download_file_inner(params).await;
         if result.is_ok() {
-            progress::emit(&params.progress, ProgressEvent::Download(DownloadEvent::Complete));
+            params.progress.emit(DownloadEvent::Complete);
         }
         result
     }
@@ -208,10 +204,10 @@ impl HFRepository {
             .download_url(Some(self.repo_type), &repo_path, revision, &params.filename);
 
         let headers = self.hf_client.auth_headers();
-        let head_response = self
-            .hf_client
-            .retry(|| self.hf_client.http_client().head(&url).headers(headers.clone()).send())
-            .await?;
+        let head_response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
+        })
+        .await?;
         let head_response = self
             .hf_client
             .check_response(
@@ -242,16 +238,14 @@ impl HFRepository {
             .range
             .as_ref()
             .map(|r| format!("bytes={}-{}", r.start, r.end.saturating_sub(1)));
-        let response = self
-            .hf_client
-            .retry(|| {
-                let mut req = self.hf_client.http_client().get(&url).headers(headers.clone());
-                if let Some(ref range) = range_header {
-                    req = req.header(reqwest::header::RANGE, range);
-                }
-                req.send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            let mut req = self.hf_client.http_client().get(&url).headers(headers.clone());
+            if let Some(ref range) = range_header {
+                req = req.header(reqwest::header::RANGE, range);
+            }
+            req.send()
+        })
+        .await?;
         let response = self
             .hf_client
             .check_response(
@@ -293,10 +287,10 @@ impl HFRepository {
             .download_url(Some(self.repo_type), &repo_path, revision, &params.filename);
 
         let headers = self.hf_client.auth_headers();
-        let head_response = self
-            .hf_client
-            .retry(|| self.hf_client.http_client().head(&url).headers(headers.clone()).send())
-            .await?;
+        let head_response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
+        })
+        .await?;
 
         let head_response = self
             .hf_client
@@ -312,13 +306,10 @@ impl HFRepository {
         let file_size = extract_file_size(&head_response).unwrap_or(0);
         let has_xet_hash = head_response.headers().get(constants::HEADER_X_XET_HASH).is_some();
 
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Download(DownloadEvent::Start {
-                total_files: 1,
-                total_bytes: file_size,
-            }),
-        );
+        params.progress.emit(DownloadEvent::Start {
+            total_files: 1,
+            total_bytes: file_size,
+        });
 
         if has_xet_hash {
             let local_dir = params.local_dir.as_ref().unwrap();
@@ -327,10 +318,10 @@ impl HFRepository {
                 .await;
         }
 
-        let response = self
-            .hf_client
-            .retry(|| self.hf_client.http_client().get(&url).headers(headers.clone()).send())
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().get(&url).headers(headers.clone()).send()
+        })
+        .await?;
         let response = self
             .hf_client
             .check_response(
@@ -358,17 +349,14 @@ impl HFRepository {
             file_size,
         )
         .await?;
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Download(DownloadEvent::Progress {
-                files: vec![FileProgress {
-                    filename: params.filename.clone(),
-                    bytes_completed: file_size,
-                    total_bytes: file_size,
-                    status: FileStatus::Complete,
-                }],
-            }),
-        );
+        params.progress.emit(DownloadEvent::Progress {
+            files: vec![FileProgress {
+                filename: params.filename.clone(),
+                bytes_completed: file_size,
+                total_bytes: file_size,
+                status: FileStatus::Complete,
+            }],
+        });
 
         Ok(dest_path)
     }
@@ -478,16 +466,14 @@ impl HFRepository {
             head_headers.insert(IF_NONE_MATCH, hv);
         }
 
-        let head_response = self
-            .hf_client
-            .retry(|| {
-                self.hf_client
-                    .no_redirect_client()
-                    .head(&url)
-                    .headers(head_headers.clone())
-                    .send()
-            })
-            .await?;
+        let head_response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .no_redirect_client()
+                .head(&url)
+                .headers(head_headers.clone())
+                .send()
+        })
+        .await?;
 
         let status = head_response.status();
 
@@ -541,13 +527,10 @@ impl HFRepository {
         let etag = etag?;
         let commit_hash = commit_hash.ok_or_else(|| HFError::Other("Missing X-Repo-Commit header".to_string()))?;
 
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Download(DownloadEvent::Start {
-                total_files: 1,
-                total_bytes: file_size,
-            }),
-        );
+        params.progress.emit(DownloadEvent::Start {
+            total_files: 1,
+            total_bytes: file_size,
+        });
 
         if has_xet_hash {
             let xet_hash = xet_hash.ok_or_else(|| HFError::Other("Missing X-Xet-Hash header".to_string()))?;
@@ -568,17 +551,14 @@ impl HFRepository {
         let blob = cache::blob_path(cache_dir, repo_folder, &etag);
 
         if blob.exists() && !force_download {
-            progress::emit(
-                &params.progress,
-                ProgressEvent::Download(DownloadEvent::Progress {
-                    files: vec![FileProgress {
-                        filename: params.filename.clone(),
-                        bytes_completed: file_size,
-                        total_bytes: file_size,
-                        status: FileStatus::Complete,
-                    }],
-                }),
-            );
+            params.progress.emit(DownloadEvent::Progress {
+                files: vec![FileProgress {
+                    filename: params.filename.clone(),
+                    bytes_completed: file_size,
+                    total_bytes: file_size,
+                    status: FileStatus::Complete,
+                }],
+            });
             return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await;
         }
 
@@ -589,10 +569,10 @@ impl HFRepository {
         }
 
         let dl_headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| self.hf_client.http_client().get(&url).headers(dl_headers.clone()).send())
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().get(&url).headers(dl_headers.clone()).send()
+        })
+        .await?;
         stream_response_to_file_with_progress(
             response,
             &incomplete_path,
@@ -601,24 +581,19 @@ impl HFRepository {
             file_size,
         )
         .await?;
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Download(DownloadEvent::Progress {
-                files: vec![FileProgress {
-                    filename: params.filename.clone(),
-                    bytes_completed: file_size,
-                    total_bytes: file_size,
-                    status: FileStatus::Complete,
-                }],
-            }),
-        );
+        params.progress.emit(DownloadEvent::Progress {
+            files: vec![FileProgress {
+                filename: params.filename.clone(),
+                bytes_completed: file_size,
+                total_bytes: file_size,
+                status: FileStatus::Complete,
+            }],
+        });
         std::fs::rename(&incomplete_path, &blob)?;
 
         finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await
     }
-}
 
-impl HFRepository {
     async fn resolve_commit_hash(&self, revision: &str) -> HFResult<String> {
         if cache::is_commit_hash(revision) {
             return Ok(revision.to_string());
@@ -722,10 +697,10 @@ impl HFRepository {
                 let filename = filename.clone();
                 let repo_folder_ref = &repo_folder;
                 async move {
-                    let resp = self
-                        .hf_client
-                        .retry(|| self.hf_client.no_redirect_client().head(&url).headers(auth.clone()).send())
-                        .await?;
+                    let resp = retry::retry(self.hf_client.retry_config(), || {
+                        self.hf_client.no_redirect_client().head(&url).headers(auth.clone()).send()
+                    })
+                    .await?;
                     // Per-file 404 resilience: write a .no_exist marker and skip
                     // the file rather than aborting the entire snapshot download.
                     // This matches the Python huggingface_hub library behavior.
@@ -775,28 +750,22 @@ impl HFRepository {
             .collect();
 
         let total_bytes: u64 = file_metas.iter().map(|m| m.file_size).sum();
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Download(DownloadEvent::Start {
-                total_files,
-                total_bytes,
-            }),
-        );
+        params.progress.emit(DownloadEvent::Start {
+            total_files,
+            total_bytes,
+        });
         if !cached_filenames.is_empty() {
-            progress::emit(
-                &params.progress,
-                ProgressEvent::Download(DownloadEvent::Progress {
-                    files: cached_filenames
-                        .iter()
-                        .map(|f| FileProgress {
-                            filename: f.clone(),
-                            bytes_completed: 0,
-                            total_bytes: 0,
-                            status: FileStatus::Complete,
-                        })
-                        .collect(),
-                }),
-            );
+            params.progress.emit(DownloadEvent::Progress {
+                files: cached_filenames
+                    .iter()
+                    .map(|f| FileProgress {
+                        filename: f.clone(),
+                        bytes_completed: 0,
+                        total_bytes: 0,
+                        status: FileStatus::Complete,
+                    })
+                    .collect(),
+            });
         }
 
         let mut xet_metas = Vec::new();
@@ -817,20 +786,17 @@ impl HFRepository {
                 }
             }
             if !local_cached.is_empty() {
-                progress::emit(
-                    &params.progress,
-                    ProgressEvent::Download(DownloadEvent::Progress {
-                        files: local_cached
-                            .iter()
-                            .map(|f| FileProgress {
-                                filename: f.clone(),
-                                bytes_completed: 0,
-                                total_bytes: 0,
-                                status: FileStatus::Complete,
-                            })
-                            .collect(),
-                    }),
-                );
+                params.progress.emit(DownloadEvent::Progress {
+                    files: local_cached
+                        .iter()
+                        .map(|f| FileProgress {
+                            filename: f.clone(),
+                            bytes_completed: 0,
+                            total_bytes: 0,
+                            status: FileStatus::Complete,
+                        })
+                        .collect(),
+                });
             }
 
             let xet_batch_fut = async {
@@ -865,7 +831,7 @@ impl HFRepository {
             };
 
             tokio::try_join!(xet_batch_fut, non_xet_fut)?;
-            progress::emit(&params.progress, ProgressEvent::Download(DownloadEvent::Complete));
+            params.progress.emit(DownloadEvent::Complete);
             return Ok(local_dir.clone());
         }
 
@@ -891,10 +857,7 @@ impl HFRepository {
             }
         }
         if !cached_progress.is_empty() {
-            progress::emit(
-                &params.progress,
-                ProgressEvent::Download(DownloadEvent::Progress { files: cached_progress }),
-            );
+            params.progress.emit(DownloadEvent::Progress { files: cached_progress });
         }
 
         let xet_batch_fut = async {
@@ -942,161 +905,10 @@ impl HFRepository {
             cache::write_ref(cache_dir, &repo_folder, revision, &commit_hash).await?;
         }
 
-        progress::emit(&params.progress, ProgressEvent::Download(DownloadEvent::Complete));
+        params.progress.emit(DownloadEvent::Complete);
         Ok(cache_dir.join(&repo_folder).join("snapshots").join(&commit_hash))
     }
-}
 
-fn extract_etag(response: &reqwest::Response) -> Option<String> {
-    let headers = response.headers();
-    let raw = headers
-        .get(constants::HEADER_X_LINKED_ETAG)
-        .or_else(|| headers.get(reqwest::header::ETAG))
-        .and_then(|v| v.to_str().ok())?;
-    let normalized = raw.strip_prefix("W/").unwrap_or(raw);
-    Some(normalized.trim_matches('"').to_string())
-}
-
-fn extract_commit_hash(response: &reqwest::Response) -> Option<String> {
-    response
-        .headers()
-        .get(constants::HEADER_X_REPO_COMMIT)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-}
-
-pub(crate) fn extract_file_size(response: &reqwest::Response) -> Option<u64> {
-    let headers = response.headers();
-    headers
-        .get(constants::HEADER_X_LINKED_SIZE)
-        .or_else(|| headers.get(reqwest::header::CONTENT_LENGTH))
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse().ok())
-}
-
-pub(crate) fn extract_xet_hash(response: &reqwest::Response) -> Option<String> {
-    response
-        .headers()
-        .get(constants::HEADER_X_XET_HASH)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-}
-
-async fn mark_no_exist_and_return_error(
-    cache_dir: &Path,
-    repo_folder: &str,
-    revision: &str,
-    response: &reqwest::Response,
-    repo_id: &str,
-    filename: &str,
-) -> HFError {
-    if let Some(commit_hash) = extract_commit_hash(response) {
-        let no_exist = cache::no_exist_path(cache_dir, repo_folder, &commit_hash, filename);
-        if let Some(parent) = no_exist.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(&no_exist, b"");
-        if !cache::is_commit_hash(revision) {
-            let _ = cache::write_ref(cache_dir, repo_folder, revision, &commit_hash).await;
-        }
-    }
-    HFError::EntryNotFound {
-        path: filename.to_string(),
-        repo_id: repo_id.to_string(),
-    }
-}
-
-async fn finalize_cached_file(
-    cache_dir: &Path,
-    repo_folder: &str,
-    revision: &str,
-    commit_hash: &str,
-    filename: &str,
-    etag: &str,
-) -> HFResult<PathBuf> {
-    if !cache::is_commit_hash(revision) {
-        cache::write_ref(cache_dir, repo_folder, revision, commit_hash).await?;
-    }
-    cache::create_pointer_symlink(cache_dir, repo_folder, commit_hash, filename, etag).await?;
-    Ok(cache::snapshot_path(cache_dir, repo_folder, commit_hash, filename))
-}
-
-fn build_download_params(
-    _repo_id: &str,
-    filenames: &[String],
-    _repo_type: Option<RepoType>,
-    commit_hash: &str,
-    force_download: Option<bool>,
-    local_dir: Option<PathBuf>,
-    progress: &Option<Progress>,
-) -> Vec<RepoDownloadFileParams> {
-    filenames
-        .iter()
-        .map(|filename| RepoDownloadFileParams {
-            filename: filename.clone(),
-            local_dir: local_dir.clone(),
-            revision: Some(commit_hash.to_string()),
-            force_download,
-            local_files_only: None,
-            progress: progress.clone(),
-        })
-        .collect()
-}
-
-async fn download_concurrently(
-    api: &HFRepository,
-    params: &[RepoDownloadFileParams],
-    max_workers: usize,
-) -> HFResult<Vec<PathBuf>> {
-    futures::stream::iter(params.iter().map(|p| api.download_file_inner(p)))
-        .buffer_unordered(max_workers)
-        .try_collect()
-        .await
-}
-
-async fn stream_response_to_file_with_progress(
-    response: reqwest::Response,
-    dest: &Path,
-    handler: &Option<Progress>,
-    filename: Option<&str>,
-    total_bytes: u64,
-) -> HFResult<()> {
-    let mut file = std::fs::File::create(dest)?;
-    let mut stream = response.bytes_stream();
-    let mut bytes_read: u64 = 0;
-
-    if let (Some(h), Some(filename)) = (handler, filename) {
-        h.on_progress(&ProgressEvent::Download(DownloadEvent::Progress {
-            files: vec![FileProgress {
-                filename: filename.to_string(),
-                bytes_completed: 0,
-                total_bytes,
-                status: FileStatus::Started,
-            }],
-        }));
-    }
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        file.write_all(&chunk)?;
-        bytes_read += chunk.len() as u64;
-
-        if let (Some(h), Some(filename)) = (handler, filename) {
-            h.on_progress(&ProgressEvent::Download(DownloadEvent::Progress {
-                files: vec![FileProgress {
-                    filename: filename.to_string(),
-                    bytes_completed: bytes_read,
-                    total_bytes,
-                    status: FileStatus::InProgress,
-                }],
-            }));
-        }
-    }
-    file.flush()?;
-    Ok(())
-}
-
-impl HFRepository {
     /// Create a commit with multiple operations.
     ///
     /// Files are checked against the Hub's preupload endpoint to determine
@@ -1127,13 +939,10 @@ impl HFRepository {
             total
         };
 
-        progress::emit(
-            &params.progress,
-            ProgressEvent::Upload(UploadEvent::Start {
-                total_files: add_ops_count,
-                total_bytes,
-            }),
-        );
+        params.progress.emit(UploadEvent::Start {
+            total_files: add_ops_count,
+            total_bytes,
+        });
 
         // Determine which files should be uploaded via xet (LFS) vs. inline
         // (regular). Files uploaded via xet are referenced by their SHA256 OID
@@ -1195,34 +1004,32 @@ impl HFRepository {
             })
             .collect();
 
-        progress::emit(&params.progress, ProgressEvent::Upload(UploadEvent::Committing));
+        params.progress.emit(UploadEvent::Committing);
 
         let mut headers = self.hf_client.auth_headers();
         headers.insert(reqwest::header::CONTENT_TYPE, "application/x-ndjson".parse().unwrap());
 
         let create_pr = params.create_pr == Some(true);
-        let response = self
-            .hf_client
-            .retry(|| {
-                let mut req = self
-                    .hf_client
-                    .http_client()
-                    .post(&url)
-                    .headers(headers.clone())
-                    .body(body.clone());
-                if create_pr {
-                    req = req.query(&[("create_pr", "1")]);
-                }
-                req.send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            let mut req = self
+                .hf_client
+                .http_client()
+                .post(&url)
+                .headers(headers.clone())
+                .body(body.clone());
+            if create_pr {
+                req = req.query(&[("create_pr", "1")]);
+            }
+            req.send()
+        })
+        .await?;
         let repo_path = self.repo_path();
         let response = self
             .hf_client
             .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Repo)
             .await?;
 
-        progress::emit(&params.progress, ProgressEvent::Upload(UploadEvent::Complete));
+        params.progress.emit(UploadEvent::Complete);
         Ok(response.json().await?)
     }
 
@@ -1378,28 +1185,7 @@ impl HFRepository {
         })
         .await
     }
-}
 
-// --- Preupload and LFS upload integration ---
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PreuploadFileInfo {
-    path: String,
-    upload_mode: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct PreuploadResponse {
-    files: Vec<PreuploadFileInfo>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct LfsBatchResponse {
-    transfer: Option<String>,
-}
-
-impl HFRepository {
     /// Check upload modes for all files and upload LFS files via xet.
     ///
     /// Always calls the preupload endpoint to determine upload mode per file.
@@ -1468,7 +1254,7 @@ impl HFRepository {
     }
 
     /// Call the Hub preupload endpoint to determine upload mode per file.
-    /// Returns a map of path -> upload_mode ("lfs" or "regular").
+    /// Returns a map of path -> upload mode ("lfs" or "regular").
     async fn fetch_upload_modes(
         &self,
         repo_id: &str,
@@ -1492,17 +1278,15 @@ impl HFRepository {
         let body = serde_json::json!({ "files": files_payload });
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| {
-                self.hf_client
-                    .http_client()
-                    .post(&url)
-                    .headers(headers.clone())
-                    .json(&body)
-                    .send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .http_client()
+                .post(&url)
+                .headers(headers.clone())
+                .json(&body)
+                .send()
+        })
+        .await?;
 
         let response = self
             .hf_client
@@ -1513,9 +1297,7 @@ impl HFRepository {
 
         Ok(preupload.files.into_iter().map(|f| (f.path, f.upload_mode)).collect())
     }
-}
 
-impl HFRepository {
     /// Compute SHA256, negotiate LFS batch transfer, and upload via xet.
     async fn upload_lfs_files_via_xet(
         &self,
@@ -1600,17 +1382,15 @@ impl HFRepository {
         headers.insert(reqwest::header::ACCEPT, "application/vnd.git-lfs+json".parse().unwrap());
         headers.insert(reqwest::header::CONTENT_TYPE, "application/vnd.git-lfs+json".parse().unwrap());
 
-        let response = self
-            .hf_client
-            .retry(|| {
-                self.hf_client
-                    .http_client()
-                    .post(&url)
-                    .headers(headers.clone())
-                    .json(&body)
-                    .send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .http_client()
+                .post(&url)
+                .headers(headers.clone())
+                .json(&body)
+                .send()
+        })
+        .await?;
 
         let response = self
             .hf_client
@@ -1620,6 +1400,174 @@ impl HFRepository {
         let batch: LfsBatchResponse = response.json().await?;
         Ok(batch.transfer)
     }
+}
+
+fn extract_etag(response: &reqwest::Response) -> Option<String> {
+    let headers = response.headers();
+    let raw = headers
+        .get(constants::HEADER_X_LINKED_ETAG)
+        .or_else(|| headers.get(reqwest::header::ETAG))
+        .and_then(|v| v.to_str().ok())?;
+    let normalized = raw.strip_prefix("W/").unwrap_or(raw);
+    Some(normalized.trim_matches('"').to_string())
+}
+
+fn extract_commit_hash(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get(constants::HEADER_X_REPO_COMMIT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
+pub(crate) fn extract_file_size(response: &reqwest::Response) -> Option<u64> {
+    let headers = response.headers();
+    headers
+        .get(constants::HEADER_X_LINKED_SIZE)
+        .or_else(|| headers.get(reqwest::header::CONTENT_LENGTH))
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+}
+
+pub(crate) fn extract_xet_hash(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get(constants::HEADER_X_XET_HASH)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
+async fn mark_no_exist_and_return_error(
+    cache_dir: &Path,
+    repo_folder: &str,
+    revision: &str,
+    response: &reqwest::Response,
+    repo_id: &str,
+    filename: &str,
+) -> HFError {
+    if let Some(commit_hash) = extract_commit_hash(response) {
+        let no_exist = cache::no_exist_path(cache_dir, repo_folder, &commit_hash, filename);
+        if let Some(parent) = no_exist.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&no_exist, b"");
+        if !cache::is_commit_hash(revision) {
+            let _ = cache::write_ref(cache_dir, repo_folder, revision, &commit_hash).await;
+        }
+    }
+    HFError::EntryNotFound {
+        path: filename.to_string(),
+        repo_id: repo_id.to_string(),
+    }
+}
+
+async fn finalize_cached_file(
+    cache_dir: &Path,
+    repo_folder: &str,
+    revision: &str,
+    commit_hash: &str,
+    filename: &str,
+    etag: &str,
+) -> HFResult<PathBuf> {
+    if !cache::is_commit_hash(revision) {
+        cache::write_ref(cache_dir, repo_folder, revision, commit_hash).await?;
+    }
+    cache::create_pointer_symlink(cache_dir, repo_folder, commit_hash, filename, etag).await?;
+    Ok(cache::snapshot_path(cache_dir, repo_folder, commit_hash, filename))
+}
+
+fn build_download_params(
+    _repo_id: &str,
+    filenames: &[String],
+    _repo_type: Option<RepoType>,
+    commit_hash: &str,
+    force_download: Option<bool>,
+    local_dir: Option<PathBuf>,
+    progress: &Option<Progress>,
+) -> Vec<RepoDownloadFileParams> {
+    filenames
+        .iter()
+        .map(|filename| RepoDownloadFileParams {
+            filename: filename.clone(),
+            local_dir: local_dir.clone(),
+            revision: Some(commit_hash.to_string()),
+            force_download,
+            local_files_only: None,
+            progress: progress.clone(),
+        })
+        .collect()
+}
+
+async fn download_concurrently(
+    api: &HFRepository,
+    params: &[RepoDownloadFileParams],
+    max_workers: usize,
+) -> HFResult<Vec<PathBuf>> {
+    futures::stream::iter(params.iter().map(|p| api.download_file_inner(p)))
+        .buffer_unordered(max_workers)
+        .try_collect()
+        .await
+}
+
+async fn stream_response_to_file_with_progress(
+    response: reqwest::Response,
+    dest: &Path,
+    handler: &Option<Progress>,
+    filename: Option<&str>,
+    total_bytes: u64,
+) -> HFResult<()> {
+    let mut file = std::fs::File::create(dest)?;
+    let mut stream = response.bytes_stream();
+    let mut bytes_read: u64 = 0;
+
+    if let (Some(h), Some(filename)) = (handler, filename) {
+        h.emit(DownloadEvent::Progress {
+            files: vec![FileProgress {
+                filename: filename.to_string(),
+                bytes_completed: 0,
+                total_bytes,
+                status: FileStatus::Started,
+            }],
+        });
+    }
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        file.write_all(&chunk)?;
+        bytes_read += chunk.len() as u64;
+
+        if let (Some(h), Some(filename)) = (handler, filename) {
+            h.emit(DownloadEvent::Progress {
+                files: vec![FileProgress {
+                    filename: filename.to_string(),
+                    bytes_completed: bytes_read,
+                    total_bytes,
+                    status: FileStatus::InProgress,
+                }],
+            });
+        }
+    }
+    file.flush()?;
+    Ok(())
+}
+
+// --- Preupload and LFS upload integration ---
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreuploadFileInfo {
+    path: String,
+    upload_mode: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PreuploadResponse {
+    files: Vec<PreuploadFileInfo>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LfsBatchResponse {
+    transfer: Option<String>,
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

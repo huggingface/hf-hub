@@ -3,6 +3,7 @@ use url::Url;
 
 use crate::client::HFClient;
 use crate::error::HFResult;
+use crate::retry;
 use crate::types::{Organization, User};
 
 impl HFClient {
@@ -11,9 +12,8 @@ impl HFClient {
     pub async fn whoami(&self) -> HFResult<User> {
         let url = format!("{}/api/whoami-v2", self.endpoint());
         let headers = self.auth_headers();
-        let response = self
-            .retry(|| self.http_client().get(&url).headers(headers.clone()).send())
-            .await?;
+        let response =
+            retry::retry(self.retry_config(), || self.http_client().get(&url).headers(headers.clone()).send()).await?;
         let response = self
             .check_response(response, None, crate::error::NotFoundContext::Generic)
             .await?;
@@ -33,9 +33,8 @@ impl HFClient {
     pub async fn get_user_overview(&self, username: &str) -> HFResult<User> {
         let url = format!("{}/api/users/{}/overview", self.endpoint(), username);
         let headers = self.auth_headers();
-        let response = self
-            .retry(|| self.http_client().get(&url).headers(headers.clone()).send())
-            .await?;
+        let response =
+            retry::retry(self.retry_config(), || self.http_client().get(&url).headers(headers.clone()).send()).await?;
         let response = self
             .check_response(response, None, crate::error::NotFoundContext::Generic)
             .await?;
@@ -47,9 +46,8 @@ impl HFClient {
     pub async fn get_organization_overview(&self, organization: &str) -> HFResult<Organization> {
         let url = format!("{}/api/organizations/{}/overview", self.endpoint(), organization);
         let headers = self.auth_headers();
-        let response = self
-            .retry(|| self.http_client().get(&url).headers(headers.clone()).send())
-            .await?;
+        let response =
+            retry::retry(self.retry_config(), || self.http_client().get(&url).headers(headers.clone()).send()).await?;
         let response = self
             .check_response(response, None, crate::error::NotFoundContext::Generic)
             .await?;

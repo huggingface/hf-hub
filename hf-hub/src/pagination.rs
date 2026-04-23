@@ -8,6 +8,7 @@ use url::Url;
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
+use crate::retry;
 
 struct PaginationState {
     buffer: VecDeque<serde_json::Value>,
@@ -66,15 +67,14 @@ impl HFClient {
 
                 let headers = self.auth_headers();
                 let is_first_page = state.is_first_page;
-                let response = self
-                    .retry(|| {
-                        let mut req = self.http_client().get(url.clone()).headers(headers.clone());
-                        if is_first_page {
-                            req = req.query(&params);
-                        }
-                        req.send()
-                    })
-                    .await?;
+                let response = retry::retry(self.retry_config(), || {
+                    let mut req = self.http_client().get(url.clone()).headers(headers.clone());
+                    if is_first_page {
+                        req = req.query(&params);
+                    }
+                    req.send()
+                })
+                .await?;
                 if state.is_first_page {
                     state.is_first_page = false;
                 }

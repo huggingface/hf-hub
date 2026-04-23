@@ -2,6 +2,10 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+/// Author entry attached to a commit, as returned by the commit history endpoint.
+///
+/// All fields are optional because the Hub only surfaces the identifying fields it has
+/// (a linked Hub user, or the raw git name/email).
 #[derive(Debug, Clone, Deserialize)]
 pub struct CommitAuthor {
     pub user: Option<String>,
@@ -9,6 +13,9 @@ pub struct CommitAuthor {
     pub email: Option<String>,
 }
 
+/// A single commit entry returned by the commit history endpoint.
+///
+/// Returned by [`HFRepository::list_commits`](crate::repository::HFRepository::list_commits).
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitCommitInfo {
     pub id: String,
@@ -20,6 +27,7 @@ pub struct GitCommitInfo {
     pub parents: Vec<String>,
 }
 
+/// A single git ref (branch, tag, convert, or pull-request ref) and the commit it points to.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRefInfo {
@@ -29,6 +37,9 @@ pub struct GitRefInfo {
     pub target_commit: String,
 }
 
+/// All git refs on a repository — branches, tags, converts, and pull-request refs.
+///
+/// Returned by [`HFRepository::list_refs`](crate::repository::HFRepository::list_refs).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRefs {
@@ -40,6 +51,11 @@ pub struct GitRefs {
     pub pull_requests: Vec<GitRefInfo>,
 }
 
+/// Response body returned after creating a commit.
+///
+/// Includes URLs for the commit and any PR that was opened, along with the commit OID
+/// when present. Returned by [`HFRepository::create_commit`](crate::repository::HFRepository::create_commit)
+/// and related upload/delete helpers.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitInfo {

@@ -1,5 +1,10 @@
 use serde::Deserialize;
 
+/// A Hugging Face Hub user account.
+///
+/// Returned by [`HFClient::whoami`](crate::client::HFClient::whoami) and user-lookup methods.
+/// Fields beyond `username` are only populated for authenticated `whoami` calls or when the
+/// caller has permission to see them.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct User {
@@ -17,6 +22,9 @@ pub struct User {
     pub orgs: Option<Vec<OrgMembership>>,
 }
 
+/// Summary entry for an organization the authenticated user belongs to.
+///
+/// Attached to [`User::orgs`] — a lighter-weight shape than [`Organization`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrgMembership {
@@ -25,6 +33,7 @@ pub struct OrgMembership {
     pub avatar_url: Option<String>,
 }
 
+/// A Hugging Face Hub organization.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Organization {

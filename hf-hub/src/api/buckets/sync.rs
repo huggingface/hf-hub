@@ -7,7 +7,7 @@ use globset::{Glob, GlobMatcher};
 
 use crate::bucket::HFBucket;
 use crate::error::{HFError, HFResult};
-use crate::types::progress::{self, DownloadEvent, ProgressEvent};
+use crate::types::progress::{DownloadEvent, EmitEvent};
 use crate::types::{
     BucketSyncAction, BucketSyncDirection, BucketSyncOperation, BucketSyncParams, BucketSyncPlan, BucketTreeEntry,
     ListBucketTreeParams,
@@ -554,15 +554,12 @@ impl HFBucket {
         }
 
         if !xet_batch_files.is_empty() {
-            progress::emit(
-                &params.progress,
-                ProgressEvent::Download(DownloadEvent::Start {
-                    total_files: xet_batch_files.len(),
-                    total_bytes,
-                }),
-            );
+            params.progress.emit(DownloadEvent::Start {
+                total_files: xet_batch_files.len(),
+                total_bytes,
+            });
             self.xet_download_batch(&xet_batch_files, &params.progress).await?;
-            progress::emit(&params.progress, ProgressEvent::Download(DownloadEvent::Complete));
+            params.progress.emit(DownloadEvent::Complete);
         }
 
         let delete_paths: Vec<&str> = plan

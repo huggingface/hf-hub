@@ -2,6 +2,9 @@ use typed_builder::TypedBuilder;
 
 use super::repo::RepoType;
 
+/// Parameters for listing models on the Hub.
+///
+/// Used with [`HFClient::list_models`](crate::client::HFClient::list_models).
 #[derive(TypedBuilder)]
 pub struct ListModelsParams {
     /// Filter models by a text query (matches model IDs and descriptions).
@@ -35,6 +38,9 @@ pub struct ListModelsParams {
     pub limit: Option<usize>,
 }
 
+/// Parameters for listing datasets on the Hub.
+///
+/// Used with [`HFClient::list_datasets`](crate::client::HFClient::list_datasets).
 #[derive(TypedBuilder)]
 pub struct ListDatasetsParams {
     /// Filter datasets by a text query (matches dataset IDs and descriptions).
@@ -59,6 +65,9 @@ pub struct ListDatasetsParams {
     pub limit: Option<usize>,
 }
 
+/// Parameters for listing Spaces on the Hub.
+///
+/// Used with [`HFClient::list_spaces`](crate::client::HFClient::list_spaces).
 #[derive(TypedBuilder)]
 pub struct ListSpacesParams {
     /// Filter spaces by a text query (matches space IDs and descriptions).
@@ -83,6 +92,9 @@ pub struct ListSpacesParams {
     pub limit: Option<usize>,
 }
 
+/// Parameters for creating a new repository on the Hub.
+///
+/// Used with [`HFClient::create_repo`](crate::client::HFClient::create_repo).
 #[derive(TypedBuilder)]
 pub struct CreateRepoParams {
     /// Repository ID in `"owner/name"` or `"name"` format.
@@ -102,6 +114,9 @@ pub struct CreateRepoParams {
     pub space_sdk: Option<String>,
 }
 
+/// Parameters for deleting a repository on the Hub.
+///
+/// Used with [`HFClient::delete_repo`](crate::client::HFClient::delete_repo).
 #[derive(TypedBuilder)]
 pub struct DeleteRepoParams {
     /// Repository ID in `"owner/name"` or `"name"` format.
@@ -115,6 +130,9 @@ pub struct DeleteRepoParams {
     pub missing_ok: bool,
 }
 
+/// Parameters for renaming/moving a repository on the Hub.
+///
+/// Used with [`HFClient::move_repo`](crate::client::HFClient::move_repo).
 #[derive(TypedBuilder)]
 pub struct MoveRepoParams {
     /// Current repository ID in `"owner/name"` format.
@@ -128,6 +146,7 @@ pub struct MoveRepoParams {
     pub repo_type: Option<RepoType>,
 }
 
+/// Access level requested when fetching a Xet connection token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XetTokenType {
     Read,
@@ -143,6 +162,9 @@ impl XetTokenType {
     }
 }
 
+/// Parameters for fetching a Xet connection token for a repository.
+///
+/// Used with [`HFClient::get_xet_token`](crate::client::HFClient::get_xet_token).
 #[derive(TypedBuilder)]
 pub struct GetXetTokenParams {
     /// Repository ID in `"owner/name"` or `"name"` format.
@@ -158,6 +180,9 @@ pub struct GetXetTokenParams {
     pub revision: Option<String>,
 }
 
+/// Parameters for duplicating a Space.
+///
+/// Used with [`HFSpace::duplicate`](crate::repository::HFSpace::duplicate).
 #[derive(TypedBuilder)]
 pub struct DuplicateSpaceParams {
     /// Destination repository ID in `"owner/name"` format. Defaults to the authenticated user's namespace with the

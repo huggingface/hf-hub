@@ -47,7 +47,7 @@ fn filename_from_path(path: &str) -> &str {
 }
 
 pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
-    let handler: Progress = if args.quiet {
+    let handler: Option<Progress> = if args.quiet {
         None
     } else if let Some(multi) = multi {
         Some(Arc::new(CliProgressHandler::new(multi)))
@@ -93,7 +93,7 @@ async fn upload_local(
     src: &str,
     dst: &str,
     quiet: bool,
-    progress: &Progress,
+    progress: &Option<Progress>,
 ) -> Result<CommandResult> {
     let dst = parse_bucket_path(dst).ok_or_else(|| anyhow::anyhow!("Invalid bucket destination: {dst}"))?;
     let local_path = PathBuf::from(src);
@@ -111,7 +111,7 @@ async fn upload_local(
     Ok(CommandResult::Silent)
 }
 
-async fn upload_stdin(client: &HFClient, dst: &str, quiet: bool, progress: &Progress) -> Result<CommandResult> {
+async fn upload_stdin(client: &HFClient, dst: &str, quiet: bool, progress: &Option<Progress>) -> Result<CommandResult> {
     let dst = parse_bucket_path(dst).ok_or_else(|| anyhow::anyhow!("Invalid bucket destination: {dst}"))?;
     let mut data = Vec::new();
     io::stdin().read_to_end(&mut data)?;
@@ -135,7 +135,7 @@ async fn download_to_local(
     src: &str,
     dst: &str,
     quiet: bool,
-    progress: &Progress,
+    progress: &Option<Progress>,
 ) -> Result<CommandResult> {
     let src = parse_bucket_path(src).ok_or_else(|| anyhow::anyhow!("Invalid bucket source: {src}"))?;
     let mut local_path = PathBuf::from(dst);
@@ -169,7 +169,7 @@ async fn download_to_stdout(client: &HFClient, src: &str) -> Result<CommandResul
     let params = BucketDownloadFilesParams::builder()
         .files(vec![(src.path.clone(), tmp.path().to_path_buf())])
         .build();
-    let no_progress: Progress = None;
+    let no_progress: Option<Progress> = None;
     bucket.download_files(&params, &no_progress).await?;
     let data = std::fs::read(tmp.path())?;
     io::stdout().write_all(&data)?;

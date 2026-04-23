@@ -520,6 +520,57 @@ async fn test_get_raw_diff() {
     assert!(!raw.is_empty());
 }
 
+#[tokio::test]
+async fn test_diff_against_empty_tree_all_additions() {
+    let Some(client) = prod_api() else { return };
+
+    const GIT_EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+    const ZERO_BLOB_ID: &str = "0000000000000000000000000000000000000000";
+
+    let test_cases: Vec<(&str, &str)> = vec![
+        ("espnet/yodas_owsmv4", "3bc62fd77f22f5bc2f116c6c21bcb12d5b85ab07"),
+        ("ppbrown/pexels-photos-janpf", "e2629eb62efab2bf1e0fa7c9ebf2a5e75acf91f4"),
+        ("tropos-labs/eigen-face-dataset-256", "341f2d0097d3a26ba4bd9e82dc8dac03b9a75f3d"),
+    ];
+
+    for (repo_id, revision) in &test_cases {
+        let dataset = repo_typed(&client, repo_id, RepoType::Dataset);
+        let stream = dataset
+            .get_raw_diff_stream(
+                &RepoGetRawDiffParams::builder()
+                    .compare(format!("{GIT_EMPTY_TREE_HASH}..{revision}"))
+                    .build(),
+            )
+            .await
+            .expect("get_raw_diff_stream failed");
+
+        let diffs: Vec<_> = stream.map(|r| r.expect("stream item error")).collect().await;
+
+        assert!(!diffs.is_empty(), "[{repo_id}] diff should not be empty");
+
+        for diff in &diffs {
+            assert_eq!(
+                diff.status,
+                hf_hub::diff::GitStatus::Addition,
+                "[{repo_id}] file '{}' should be an Addition, got {:?}",
+                diff.file_path,
+                diff.status,
+            );
+            assert!(!diff.file_path.is_empty(), "[{repo_id}] file_path should not be empty");
+            assert!(
+                !diff.new_blob_id.is_empty(),
+                "[{repo_id}] new_blob_id should not be empty for '{}'",
+                diff.file_path,
+            );
+            assert_eq!(
+                diff.old_blob_id, ZERO_BLOB_ID,
+                "[{repo_id}] old_blob_id for '{}' should be all zeros, got '{}'",
+                diff.file_path, diff.old_blob_id,
+            );
+        }
+    }
+}
+
 // --- Write operation tests (require HF_TEST_WRITE=1) ---
 
 #[tokio::test]

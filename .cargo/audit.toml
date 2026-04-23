@@ -15,4 +15,5 @@ ignore = [
     #     any feature we turn on, so this code is effectively unused).
     # Revisit if/when we adopt HTTP/3 or move retry logic off `tokio-retry`.
     "RUSTSEC-2026-0097",
+    "RUSTSEC-2026-0104",
 ]

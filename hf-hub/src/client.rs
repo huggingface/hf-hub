@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -246,19 +245,8 @@ impl HFClient {
         &self.inner.no_redirect_client
     }
 
-    /// Run `f` with retries. On each attempt the closure is invoked to
-    /// build a fresh `send()` future (so headers/body are reconstructed
-    /// per attempt — consumed bodies can't be replayed otherwise).
-    ///
-    /// Returns the final `Response` — including responses with non-retryable
-    /// error statuses (e.g., 404, 401). Call `check_response` on the result
-    /// to map those to typed [`HFError`] variants.
-    pub(crate) async fn retry<F, Fut>(&self, f: F) -> Result<reqwest::Response, reqwest::Error>
-    where
-        F: FnMut() -> Fut,
-        Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
-    {
-        retry::retry(&self.inner.retry_config, f).await
+    pub(crate) fn retry_config(&self) -> &retry::RetryConfig {
+        &self.inner.retry_config
     }
 
     pub(crate) fn endpoint(&self) -> &str {
@@ -356,9 +344,7 @@ impl HFClient {
             _ => Err(HFError::Http { status, url, body }),
         }
     }
-}
 
-impl HFClient {
     /// Get or lazily create the cached XetSession.
     ///
     /// Returns `(session, generation)`. The generation is an opaque counter

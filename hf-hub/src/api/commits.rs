@@ -2,7 +2,6 @@ use futures::TryStreamExt;
 use futures::stream::{Stream, StreamExt};
 use url::Url;
 
-use crate::constants;
 use crate::diff::HFFileDiff;
 use crate::error::HFResult;
 use crate::repository::HFRepository;
@@ -10,6 +9,7 @@ use crate::types::{
     GitCommitInfo, GitRefs, RepoCreateBranchParams, RepoCreateTagParams, RepoDeleteBranchParams, RepoDeleteTagParams,
     RepoGetCommitDiffParams, RepoGetRawDiffParams, RepoListCommitsParams, RepoListRefsParams,
 };
+use crate::{constants, retry};
 
 impl HFRepository {
     /// Stream commit history for the repository at a given revision.
@@ -37,17 +37,15 @@ impl HFRepository {
         }
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| {
-                self.hf_client
-                    .http_client()
-                    .get(&url)
-                    .headers(headers.clone())
-                    .query(&query)
-                    .send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .http_client()
+                .get(&url)
+                .headers(headers.clone())
+                .query(&query)
+                .send()
+        })
+        .await?;
 
         let repo_path = self.repo_path();
         let response = self
@@ -64,10 +62,10 @@ impl HFRepository {
             format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| self.hf_client.http_client().get(&url).headers(headers.clone()).send())
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().get(&url).headers(headers.clone()).send()
+        })
+        .await?;
 
         let repo_path = self.repo_path();
         let response = self
@@ -84,17 +82,15 @@ impl HFRepository {
             format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| {
-                self.hf_client
-                    .http_client()
-                    .get(&url)
-                    .headers(headers.clone())
-                    .query(&[("raw", "true")])
-                    .send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .http_client()
+                .get(&url)
+                .headers(headers.clone())
+                .query(&[("raw", "true")])
+                .send()
+        })
+        .await?;
 
         let repo_path = self.repo_path();
         let response = self
@@ -118,17 +114,15 @@ impl HFRepository {
             format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| {
-                self.hf_client
-                    .http_client()
-                    .get(&url)
-                    .headers(headers.clone())
-                    .query(&[("raw", "true")])
-                    .send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .http_client()
+                .get(&url)
+                .headers(headers.clone())
+                .query(&[("raw", "true")])
+                .send()
+        })
+        .await?;
 
         let repo_path = self.repo_path();
         let response = self
@@ -151,17 +145,15 @@ impl HFRepository {
         }
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| {
-                self.hf_client
-                    .http_client()
-                    .post(&url)
-                    .headers(headers.clone())
-                    .json(&body)
-                    .send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .http_client()
+                .post(&url)
+                .headers(headers.clone())
+                .json(&body)
+                .send()
+        })
+        .await?;
 
         let repo_path = self.repo_path();
         self.hf_client
@@ -177,10 +169,10 @@ impl HFRepository {
             format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.branch);
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| self.hf_client.http_client().delete(&url).headers(headers.clone()).send())
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().delete(&url).headers(headers.clone()).send()
+        })
+        .await?;
 
         let repo_path = self.repo_path();
         self.hf_client
@@ -201,17 +193,15 @@ impl HFRepository {
         }
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| {
-                self.hf_client
-                    .http_client()
-                    .post(&url)
-                    .headers(headers.clone())
-                    .json(&body)
-                    .send()
-            })
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .http_client()
+                .post(&url)
+                .headers(headers.clone())
+                .json(&body)
+                .send()
+        })
+        .await?;
 
         let repo_path = self.repo_path();
         self.hf_client
@@ -226,10 +216,10 @@ impl HFRepository {
         let url = format!("{}/tag/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.tag);
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| self.hf_client.http_client().delete(&url).headers(headers.clone()).send())
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().delete(&url).headers(headers.clone()).send()
+        })
+        .await?;
 
         let repo_path = self.repo_path();
         self.hf_client

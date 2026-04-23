@@ -148,7 +148,7 @@ pub struct BucketSyncParams {
     pub verbose: bool,
     /// Progress handler for upload/download tracking.
     #[builder(default)]
-    pub progress: Progress,
+    pub progress: Option<Progress>,
 }
 
 /// Metadata about a bucket on the Hugging Face Hub.

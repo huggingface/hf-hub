@@ -196,6 +196,8 @@
 //! `download_upload`, `commits`, `diff`, `buckets`, `spaces`, `users`, and the
 //! `blocking_*` variants.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 #[macro_use]
 mod macros;
 mod api;

@@ -330,6 +330,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_mixed_statuses() {
+        let input = b"T 37861440\t:000000 100644 0000000000000000000000000000000000000000... 30a03d21620ebc6167e350aef9e2ac2774cf372d... A\tAI_popai/\xe3\x82\xa8\xe3\x82\xa4\xe3\x83\x9f Eimi (230270)/259889/eimi.safetensors\nT 228455604\t:100644 000000 77367f06242f620081e0103c599818bfde8d4c75... 0000000000000000000000000000000000000000... D\tFaeia/\xf0\x9f\x98\xa1SDXL Rage Style\xf0\x9f\x98\xa1 (234815)/264786/SDXLRageStyle.safetensors\nT 2305\t:100644 100644 97e7432a448baa9e97ec5e4f03c57b09b8e116ed... 0000000000000000000000000000000000000000... M\tapps/scan_orchestrator/src/dispatcher.rs\nB 421211\t:100644 100644 97e7432a448baa9e97ec5e4f03c57b09b8e116ed... 0000000000000000000000000000000000000000... C68\tapps/scan_orchestrator/src/dispatcher.rs apps/scan_orchestrator/src/blob\nT 1679\t:100644 100644 f7b95e09e0573a829c338fe46e451b5609424a70... 0000000000000000000000000000000000000000... R\tapps/shared/src/scanner/file.rs apps/shared/src/scanner/file3.rs\n";
+
+        let byte_stream = futures::stream::once(async { Ok::<_, std::io::Error>(bytes::Bytes::from(&input[..])) });
+
+        let diffs: Vec<HFFileDiff> = stream_raw_diff(byte_stream).map(|r| r.unwrap()).collect().await;
+
+        assert_eq!(diffs.len(), 5);
+        assert_eq!(diffs[0].status, GitStatus::Addition);
+        assert!(diffs[0].file_path.contains("Eimi"));
+        assert_eq!(diffs[1].status, GitStatus::Deletion);
+        assert!(diffs[1].file_path.contains("😡"));
+        assert_eq!(diffs[2].status, GitStatus::Modification);
+        assert_eq!(diffs[3].status, GitStatus::Copy);
+        assert_eq!(diffs[3].new_file_path.as_deref(), Some("apps/scan_orchestrator/src/blob"));
+        assert!(diffs[3].is_binary);
+        assert_eq!(diffs[4].status, GitStatus::Rename);
+        assert_eq!(diffs[4].new_file_path.as_deref(), Some("apps/shared/src/scanner/file3.rs"));
+    }
+
+    #[tokio::test]
     async fn stream_across_chunk_boundaries() {
         let chunk1 = b"T 2305\t:100644 100644 97e7432a448baa9e97ec5e4f03c57b09b8e116ed... 0000000000000000000000000000000000000000... M\tapps/scan_orchestrator/src/dispatcher.rs\nT 44";
         let chunk2 = b"22\t:100644 100644 c417bf5a3fbec60b22aeab13cfa4d9439155303b... 0000000000000000000000000000000000000000... M\tapps/scan_orchestrator/src/git.rs\n";

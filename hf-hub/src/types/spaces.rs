@@ -1,5 +1,12 @@
 use serde::Deserialize;
 
+/// Runtime state of a Space: stage, hardware, storage, and replica info.
+///
+/// Returned by Space lifecycle methods such as
+/// [`HFSpace::runtime`](crate::repository::HFSpace::runtime),
+/// [`HFSpace::pause`](crate::repository::HFSpace::pause), and
+/// [`HFSpace::restart`](crate::repository::HFSpace::restart). The `raw` field preserves the
+/// full JSON payload for fields not modeled explicitly.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceRuntime {
@@ -12,6 +19,9 @@ pub struct SpaceRuntime {
     pub raw: serde_json::Value,
 }
 
+/// A public environment variable set on a Space (non-secret).
+///
+/// Secrets are not returned — only variables declared via the Space's variables API.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceVariable {

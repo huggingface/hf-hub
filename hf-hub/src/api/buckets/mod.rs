@@ -6,7 +6,8 @@ use url::Url;
 use crate::bucket::HFBucket;
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, NotFoundContext};
-use crate::types::progress::{self, DownloadEvent, Progress, ProgressEvent, UploadEvent};
+use crate::retry;
+use crate::types::progress::{DownloadEvent, EmitEvent, Progress, UploadEvent};
 use crate::types::{
     BatchBucketFilesParams, BucketFileMetadata, BucketInfo, BucketTreeEntry, BucketUrl, CreateBucketParams,
     ListBucketTreeParams,
@@ -31,9 +32,10 @@ impl HFClient {
         }
 
         let headers = self.auth_headers();
-        let response = self
-            .retry(|| self.http_client().post(&url).headers(headers.clone()).json(&body).send())
-            .await?;
+        let response = retry::retry(self.retry_config(), || {
+            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
+        })
+        .await?;
 
         let bucket_id = format!("{}/{}", params.namespace, params.name);
 
@@ -56,9 +58,9 @@ impl HFClient {
         let url = self.bucket_api_url(bucket_id);
 
         let headers = self.auth_headers();
-        let response = self
-            .retry(|| self.http_client().delete(&url).headers(headers.clone()).send())
-            .await?;
+        let response =
+            retry::retry(self.retry_config(), || self.http_client().delete(&url).headers(headers.clone()).send())
+                .await?;
 
         if response.status().as_u16() == 404 && missing_ok {
             return Ok(());
@@ -88,9 +90,10 @@ impl HFClient {
         });
 
         let headers = self.auth_headers();
-        let response = self
-            .retry(|| self.http_client().post(&url).headers(headers.clone()).json(&body).send())
-            .await?;
+        let response = retry::retry(self.retry_config(), || {
+            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
+        })
+        .await?;
 
         self.check_response(response, None, NotFoundContext::Generic).await?;
         Ok(())
@@ -106,10 +109,10 @@ impl HFBucket {
         let url = self.hf_client.bucket_api_url(&bucket_id);
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| self.hf_client.http_client().get(&url).headers(headers.clone()).send())
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().get(&url).headers(headers.clone()).send()
+        })
+        .await?;
 
         let response = self
             .hf_client
@@ -153,17 +156,15 @@ impl HFBucket {
         for chunk in paths.chunks(BUCKET_PATHS_INFO_BATCH_SIZE) {
             let body = serde_json::json!({ "paths": chunk });
 
-            let response = self
-                .hf_client
-                .retry(|| {
-                    self.hf_client
-                        .http_client()
-                        .post(&url)
-                        .headers(headers.clone())
-                        .json(&body)
-                        .send()
-                })
-                .await?;
+            let response = retry::retry(self.hf_client.retry_config(), || {
+                self.hf_client
+                    .http_client()
+                    .post(&url)
+                    .headers(headers.clone())
+                    .json(&body)
+                    .send()
+            })
+            .await?;
 
             let response = self
                 .hf_client
@@ -184,10 +185,10 @@ impl HFBucket {
         let url = format!("{}/buckets/{}/resolve/{}", self.hf_client.endpoint(), bucket_id, remote_path);
 
         let headers = self.hf_client.auth_headers();
-        let response = self
-            .hf_client
-            .retry(|| self.hf_client.no_redirect_client().head(&url).headers(headers.clone()).send())
-            .await?;
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.no_redirect_client().head(&url).headers(headers.clone()).send()
+        })
+        .await?;
 
         let response = self
             .hf_client
@@ -265,18 +266,16 @@ impl HFBucket {
         for chunk in lines.chunks(BUCKET_BATCH_CHUNK_SIZE) {
             let body = chunk.join("\n") + "\n";
 
-            let response = self
-                .hf_client
-                .retry(|| {
-                    self.hf_client
-                        .http_client()
-                        .post(&url)
-                        .headers(headers.clone())
-                        .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
-                        .body(body.clone())
-                        .send()
-                })
-                .await?;
+            let response = retry::retry(self.hf_client.retry_config(), || {
+                self.hf_client
+                    .http_client()
+                    .post(&url)
+                    .headers(headers.clone())
+                    .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson")
+                    .body(body.clone())
+                    .send()
+            })
+            .await?;
 
             self.hf_client
                 .check_response(response, Some(&bucket_id), NotFoundContext::Bucket)
@@ -299,7 +298,11 @@ impl HFBucket {
     /// Upload local files to the bucket.
     ///
     /// Uploads file contents to xet, then registers them via the batch endpoint.
-    pub async fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Progress) -> HFResult<()> {
+    pub async fn upload_files(
+        &self,
+        files: &[(std::path::PathBuf, String)],
+        progress: &Option<Progress>,
+    ) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
         }
@@ -309,13 +312,10 @@ impl HFBucket {
             .filter_map(|(p, _)| std::fs::metadata(p).ok())
             .map(|m| m.len())
             .sum();
-        progress::emit(
-            progress,
-            ProgressEvent::Upload(UploadEvent::Start {
-                total_files: files.len(),
-                total_bytes,
-            }),
-        );
+        progress.emit(UploadEvent::Start {
+            total_files: files.len(),
+            total_bytes,
+        });
 
         let xet_files: Vec<(String, crate::types::AddSource)> = files
             .iter()
@@ -352,7 +352,7 @@ impl HFBucket {
         };
         self.batch(&batch_params).await?;
 
-        progress::emit(progress, ProgressEvent::Upload(UploadEvent::Complete));
+        progress.emit(UploadEvent::Complete);
         Ok(())
     }
 
@@ -362,7 +362,7 @@ impl HFBucket {
     pub async fn download_files(
         &self,
         params: &crate::types::BucketDownloadFilesParams,
-        progress: &Progress,
+        progress: &Option<Progress>,
     ) -> HFResult<()> {
         if params.files.is_empty() {
             return Ok(());
@@ -408,17 +408,14 @@ impl HFBucket {
             }
         }
 
-        progress::emit(
-            progress,
-            ProgressEvent::Download(DownloadEvent::Start {
-                total_files: xet_batch_files.len(),
-                total_bytes,
-            }),
-        );
+        progress.emit(DownloadEvent::Start {
+            total_files: xet_batch_files.len(),
+            total_bytes,
+        });
 
         self.xet_download_batch(&xet_batch_files, progress).await?;
 
-        progress::emit(progress, ProgressEvent::Download(DownloadEvent::Complete));
+        progress.emit(DownloadEvent::Complete);
         Ok(())
     }
 }
@@ -443,8 +440,8 @@ sync_api! {
         fn get_file_metadata(&self, remote_path: &str) -> HFResult<BucketFileMetadata>;
         fn get_paths_info(&self, paths: &[String]) -> HFResult<Vec<BucketTreeEntry>>;
         fn batch(&self, params: &BatchBucketFilesParams) -> HFResult<()>;
-        fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Progress) -> HFResult<()>;
-        fn download_files(&self, params: &crate::types::BucketDownloadFilesParams, progress: &Progress) -> HFResult<()>;
+        fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Option<Progress>) -> HFResult<()>;
+        fn download_files(&self, params: &crate::types::BucketDownloadFilesParams, progress: &Option<Progress>) -> HFResult<()>;
         fn delete_files(&self, paths: &[String]) -> HFResult<()>;
     }
 }

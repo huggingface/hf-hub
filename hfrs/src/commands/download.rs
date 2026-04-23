@@ -56,7 +56,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
     let repo_type: hf_hub::types::RepoType = args.r#type.into();
     let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
 
-    let handler: Progress = if args.quiet {
+    let handler: Option<Progress> = if args.quiet {
         None
     } else if let Some(multi) = multi {
         Some(Arc::new(CliProgressHandler::new(multi)))
