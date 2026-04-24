@@ -10,10 +10,11 @@ use super::{
     RepoListTreeParams, RepoSnapshotDownloadParams, RepoTreeEntry, extract_commit_hash, extract_etag,
     extract_file_size, extract_xet_hash, matches_any_glob,
 };
+use crate::cache::storage as cache;
 use crate::error::{HFError, HFResult};
 use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress};
 use crate::repo::{HFRepository, RepoType};
-use crate::{cache, constants, retry};
+use crate::{constants, retry};
 
 impl HFRepository {
     /// Download a single file from a repository.

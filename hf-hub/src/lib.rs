@@ -12,7 +12,7 @@
 //!
 //! ```rust,no_run
 //! use hf_hub::HFClient;
-//! use hf_hub::types::RepoInfoParams;
+//! use hf_hub::repo::RepoInfoParams;
 //!
 //! #[tokio::main]
 //! async fn main() -> hf_hub::HFResult<()> {
@@ -75,8 +75,7 @@
 //! with a typed handle:
 //!
 //! ```rust,no_run
-//! use hf_hub::HFClient;
-//! use hf_hub::types::RepoType;
+//! use hf_hub::{HFClient, RepoType};
 //!
 //! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 //! let client = HFClient::new()?;
@@ -104,7 +103,7 @@
 //!
 //! ```rust,no_run
 //! use hf_hub::HFClient;
-//! use hf_hub::types::RepoDownloadFileParams;
+//! use hf_hub::files::RepoDownloadFileParams;
 //!
 //! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 //! let client = HFClient::new()?;
@@ -117,7 +116,7 @@
 //! ```
 //!
 //! Uploads accept bytes, files, or entire folders, and can be batched into a single
-//! commit via [`HFRepository::create_commit`] with [`types::CommitOperation`]s.
+//! commit via [`HFRepository::create_commit`] with [`files::CommitOperation`]s.
 //!
 //! ## Pagination
 //!
@@ -128,7 +127,7 @@
 //! ```rust,no_run
 //! use futures::StreamExt;
 //! use hf_hub::HFClient;
-//! use hf_hub::types::RepoListTreeParams;
+//! use hf_hub::files::RepoListTreeParams;
 //!
 //! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 //! let client = HFClient::new()?;
@@ -153,7 +152,7 @@
 //!
 //! ```rust,ignore
 //! use hf_hub::HFClientSync;
-//! use hf_hub::types::RepoInfoParams;
+//! use hf_hub::repo::RepoInfoParams;
 //!
 //! let client = HFClientSync::new()?;
 //! let info = client.model("openai-community", "gpt2").info(&RepoInfoParams::default())?;
@@ -200,28 +199,35 @@
 
 #[macro_use]
 mod macros;
-mod api;
-#[cfg(feature = "blocking")]
-mod blocking;
-mod bucket;
-mod cache;
+
 mod client;
 pub(crate) mod constants;
-pub mod diff;
 mod error;
 mod pagination;
-mod repository;
 mod retry;
-pub mod types;
-mod xet;
+
+#[cfg(feature = "blocking")]
+mod blocking;
+
+pub mod buckets;
+pub mod cache;
+pub mod commits;
+pub mod files;
+pub mod progress;
+pub mod repo;
+pub mod spaces;
+pub mod users;
+pub mod xet;
 
 pub mod test_utils;
 
 #[cfg(feature = "blocking")]
 pub use blocking::{HFBucketSync, HFClientSync, HFRepoSync, HFRepositorySync, HFSpaceSync};
-pub use bucket::HFBucket;
+pub use buckets::HFBucket;
 pub use client::{HFClient, HFClientBuilder};
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult};
-pub use repository::{HFRepo, HFRepository, HFSpace};
+pub use progress::ProgressHandler;
+pub use repo::{HFRepo, HFRepository, RepoType};
+pub use spaces::HFSpace;

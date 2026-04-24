@@ -26,8 +26,8 @@ pub enum HFError {
 
     #[error("Invalid repository type: expected {expected}, got {actual}")]
     InvalidRepoType {
-        expected: crate::types::RepoType,
-        actual: crate::types::RepoType,
+        expected: crate::repo::RepoType,
+        actual: crate::repo::RepoType,
     },
 
     #[error("Forbidden")]
@@ -66,7 +66,7 @@ pub enum HFError {
     InvalidParameter(String),
 
     #[error(transparent)]
-    DiffParse(#[from] crate::diff::HFDiffParseError),
+    DiffParse(#[from] crate::commits::diff::HFDiffParseError),
 
     #[error("{0}")]
     Other(String),

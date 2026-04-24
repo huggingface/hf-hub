@@ -1,4 +1,8 @@
-//! Xet high-performance transfer support.
+//! Xet component: the [`HFClient::get_xet_token`] public API, the
+//! [`XetTokenType`]/[`GetXetTokenParams`] params, the [`XetConnectionInfo`]
+//! response type, and all internal transfer plumbing (session management,
+//! upload/download groups, progress pollers) used by repositories and
+//! buckets for high-performance Xet transfers.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -6,16 +10,51 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Deserialize;
+use typed_builder::TypedBuilder;
 #[cfg(test)]
 use xet::error::XetError;
 use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileInfo, XetFileMetadata, XetFileUpload};
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
-use crate::repository::HFRepository;
-use crate::types::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent};
-use crate::types::{AddSource, GetXetTokenParams, RepoType};
+use crate::files::AddSource;
+use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent};
+use crate::repo::{HFRepository, RepoType};
 use crate::{constants, retry};
+
+/// Access level requested when fetching a Xet connection token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XetTokenType {
+    Read,
+    Write,
+}
+
+impl XetTokenType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            XetTokenType::Read => "read",
+            XetTokenType::Write => "write",
+        }
+    }
+}
+
+/// Parameters for fetching a Xet connection token for a repository.
+///
+/// Used with [`HFClient::get_xet_token`](crate::client::HFClient::get_xet_token).
+#[derive(TypedBuilder)]
+pub struct GetXetTokenParams {
+    /// Repository ID in `"owner/name"` or `"name"` format.
+    #[builder(setter(into))]
+    pub repo_id: String,
+    /// Whether to request a read or write token.
+    pub token_type: XetTokenType,
+    /// Type of repository (model, dataset, or space).
+    #[builder(default, setter(into, strip_option))]
+    pub repo_type: Option<RepoType>,
+    /// Git revision to scope the token to.
+    #[builder(default, setter(into, strip_option))]
+    pub revision: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -363,10 +402,10 @@ impl HFRepository {
     ) -> HFResult<PathBuf> {
         let repo_path = self.repo_path();
         let repo_type = Some(self.repo_type);
-        let file_hash = crate::api::files::extract_xet_hash(head_response)
+        let file_hash = crate::files::extract_xet_hash(head_response)
             .ok_or_else(|| HFError::Other("Missing X-Xet-Hash header".to_string()))?;
 
-        let file_size: u64 = crate::api::files::extract_file_size(head_response).unwrap_or(0);
+        let file_size: u64 = crate::files::extract_file_size(head_response).unwrap_or(0);
 
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, repo_type, revision);
         let conn = fetch_xet_connection_info(
@@ -662,7 +701,18 @@ impl HFRepository {
     }
 }
 
-impl crate::bucket::HFBucket {
+impl HFClient {
+    /// Fetch a Xet connection token (read or write) for a repository.
+    /// Endpoint: GET /api/{repo_type}s/{repo_id}/xet-{read|write}-token/{revision}
+    pub async fn get_xet_token(&self, params: &GetXetTokenParams) -> HFResult<XetConnectionInfo> {
+        let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
+        let token_url =
+            repo_xet_token_url(self, params.token_type.as_str(), &params.repo_id, params.repo_type, revision);
+        fetch_xet_connection_info(self, &token_url, Some(&params.repo_id), crate::error::NotFoundContext::Repo).await
+    }
+}
+
+impl crate::buckets::HFBucket {
     pub(crate) async fn xet_upload(
         &self,
         files: &[(String, AddSource)],
@@ -758,17 +808,6 @@ impl crate::bucket::HFBucket {
         }
 
         Ok(())
-    }
-}
-
-impl HFClient {
-    /// Fetch a Xet connection token (read or write) for a repository.
-    /// Endpoint: GET /api/{repo_type}s/{repo_id}/xet-{read|write}-token/{revision}
-    pub async fn get_xet_token(&self, params: &GetXetTokenParams) -> HFResult<XetConnectionInfo> {
-        let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let token_url =
-            repo_xet_token_url(self, params.token_type.as_str(), &params.repo_id, params.repo_type, revision);
-        fetch_xet_connection_info(self, &token_url, Some(&params.repo_id), crate::error::NotFoundContext::Repo).await
     }
 }
 

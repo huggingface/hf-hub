@@ -273,7 +273,7 @@ impl HFClient {
     }
 
     /// Build a URL for the API: {endpoint}/api/{segment}/{repo_id}
-    pub(crate) fn api_url(&self, repo_type: Option<crate::types::RepoType>, repo_id: &str) -> String {
+    pub(crate) fn api_url(&self, repo_type: Option<crate::repo::RepoType>, repo_id: &str) -> String {
         let segment = constants::repo_type_api_segment(repo_type);
         format!("{}/api/{}/{}", self.endpoint(), segment, repo_id)
     }
@@ -281,18 +281,13 @@ impl HFClient {
     /// Build a download URL: {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}
     pub(crate) fn download_url(
         &self,
-        repo_type: Option<crate::types::RepoType>,
+        repo_type: Option<crate::repo::RepoType>,
         repo_id: &str,
         revision: &str,
         filename: &str,
     ) -> String {
         let prefix = constants::repo_type_url_prefix(repo_type);
         format!("{}/{}{}/resolve/{}/{}", self.endpoint(), prefix, repo_id, revision, filename)
-    }
-
-    /// Create an [`HFBucket`](crate::bucket::HFBucket) handle for a bucket.
-    pub fn bucket(&self, owner: impl Into<String>, name: impl Into<String>) -> crate::bucket::HFBucket {
-        crate::bucket::HFBucket::new(self.clone(), owner, name)
     }
 
     /// Build a bucket API URL: `{endpoint}/api/buckets/{bucket_id}`

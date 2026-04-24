@@ -26,22 +26,22 @@ pub(crate) const HEADER_X_LINKED_SIZE: &str = "x-linked-size";
 
 /// URL prefixes for different repo types
 /// Models have no prefix, datasets use "datasets/", spaces use "spaces/", kernels use "kernels/"
-pub fn repo_type_url_prefix(repo_type: Option<crate::types::repo::RepoType>) -> &'static str {
+pub fn repo_type_url_prefix(repo_type: Option<crate::repo::RepoType>) -> &'static str {
     match repo_type {
-        None | Some(crate::types::repo::RepoType::Model) => "",
-        Some(crate::types::repo::RepoType::Dataset) => "datasets/",
-        Some(crate::types::repo::RepoType::Space) => "spaces/",
-        Some(crate::types::repo::RepoType::Kernel) => "kernels/",
+        None | Some(crate::repo::RepoType::Model) => "",
+        Some(crate::repo::RepoType::Dataset) => "datasets/",
+        Some(crate::repo::RepoType::Space) => "spaces/",
+        Some(crate::repo::RepoType::Kernel) => "kernels/",
     }
 }
 
 /// API path segment for repo types: "models", "datasets", "spaces", "kernels"
-pub fn repo_type_api_segment(repo_type: Option<crate::types::repo::RepoType>) -> &'static str {
+pub fn repo_type_api_segment(repo_type: Option<crate::repo::RepoType>) -> &'static str {
     match repo_type {
-        None | Some(crate::types::repo::RepoType::Model) => "models",
-        Some(crate::types::repo::RepoType::Dataset) => "datasets",
-        Some(crate::types::repo::RepoType::Space) => "spaces",
-        Some(crate::types::repo::RepoType::Kernel) => "kernels",
+        None | Some(crate::repo::RepoType::Model) => "models",
+        Some(crate::repo::RepoType::Dataset) => "datasets",
+        Some(crate::repo::RepoType::Space) => "spaces",
+        Some(crate::repo::RepoType::Kernel) => "kernels",
     }
 }
 
@@ -73,7 +73,7 @@ pub fn resolve_cache_dir() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{repo_type_api_segment, repo_type_url_prefix};
-    use crate::types::repo::RepoType;
+    use crate::repo::RepoType;
 
     #[test]
     fn test_repo_type_url_prefix() {

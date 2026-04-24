@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
-use crate::{repository as repo, types};
+use crate::repo::{HFRepository, RepoType};
+use crate::spaces::HFSpace;
 
 fn build_runtime() -> HFResult<Arc<tokio::runtime::Runtime>> {
     tokio::runtime::Builder::new_current_thread()
@@ -25,19 +26,19 @@ pub struct HFClientSync {
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
 }
 
-/// Synchronous/blocking counterpart to [`repo::HFRepository`].
+/// Synchronous/blocking counterpart to [`HFRepository`].
 ///
 /// Holds a reference to the underlying async handle and the shared tokio runtime.
-/// Derefs to [`repo::HFRepository`], so all accessor methods (owner, name, repo_path,
+/// Derefs to [`HFRepository`], so all accessor methods (owner, name, repo_path,
 /// etc.) are available directly. Blocking API methods are defined via the `sync_api!`
-/// macro in the corresponding `api/` modules.
+/// macro in the corresponding component modules.
 #[derive(Clone)]
 pub struct HFRepositorySync {
-    pub(crate) inner: Arc<repo::HFRepository>,
+    pub(crate) inner: Arc<HFRepository>,
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
 }
 
-/// Synchronous/blocking counterpart to [`repo::HFSpace`].
+/// Synchronous/blocking counterpart to [`HFSpace`].
 ///
 /// Derefs to [`HFRepositorySync`] so all blocking repository methods and accessors
 /// are available directly. Space-specific blocking methods are defined via the
@@ -45,16 +46,16 @@ pub struct HFRepositorySync {
 #[derive(Clone)]
 pub struct HFSpaceSync {
     repo_sync: Arc<HFRepositorySync>,
-    pub(crate) inner: Arc<repo::HFSpace>,
+    pub(crate) inner: Arc<HFSpace>,
 }
 
-/// Synchronous/blocking counterpart to [`crate::bucket::HFBucket`].
+/// Synchronous/blocking counterpart to [`crate::buckets::HFBucket`].
 ///
 /// Holds a reference to the underlying async handle and the shared tokio runtime.
-/// Blocking API methods are defined via the `sync_api!` macro in `api/buckets.rs`.
+/// Blocking API methods are defined via the `sync_api!` macro in `buckets/mod.rs`.
 #[derive(Clone)]
 pub struct HFBucketSync {
-    pub(crate) inner: Arc<crate::bucket::HFBucket>,
+    pub(crate) inner: Arc<crate::buckets::HFBucket>,
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -113,23 +114,18 @@ impl HFClientSync {
     }
 
     /// Creates a blocking repository handle for the given repo type, owner, and name.
-    pub fn repo(
-        &self,
-        repo_type: types::RepoType,
-        owner: impl Into<String>,
-        name: impl Into<String>,
-    ) -> HFRepositorySync {
+    pub fn repo(&self, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync {
         HFRepositorySync::new(self.clone(), repo_type, owner, name)
     }
 
     /// Creates a blocking handle for a model repository.
     pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync {
-        self.repo(types::RepoType::Model, owner, name)
+        self.repo(RepoType::Model, owner, name)
     }
 
     /// Creates a blocking handle for a dataset repository.
     pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync {
-        self.repo(types::RepoType::Dataset, owner, name)
+        self.repo(RepoType::Dataset, owner, name)
     }
 
     /// Creates a blocking handle for a space repository.
@@ -153,21 +149,16 @@ impl Deref for HFClientSync {
 
 impl HFRepositorySync {
     /// Creates a blocking repository handle from a client, repo type, owner, and name.
-    pub fn new(
-        client: HFClientSync,
-        repo_type: types::RepoType,
-        owner: impl Into<String>,
-        name: impl Into<String>,
-    ) -> Self {
+    pub fn new(client: HFClientSync, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            inner: Arc::new(repo::HFRepository::new(client.inner.clone(), repo_type, owner, name)),
+            inner: Arc::new(HFRepository::new(client.inner.clone(), repo_type, owner, name)),
             runtime: client.runtime.clone(),
         }
     }
 }
 
 impl Deref for HFRepositorySync {
-    type Target = repo::HFRepository;
+    type Target = HFRepository;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -177,8 +168,8 @@ impl Deref for HFRepositorySync {
 impl HFSpaceSync {
     /// Creates a blocking space handle for the given owner and name.
     pub fn new(client: HFClientSync, owner: impl Into<String>, name: impl Into<String>) -> Self {
-        let repo_sync = Arc::new(HFRepositorySync::new(client, types::RepoType::Space, owner, name));
-        let inner = Arc::new(repo::HFSpace {
+        let repo_sync = Arc::new(HFRepositorySync::new(client, RepoType::Space, owner, name));
+        let inner = Arc::new(HFSpace {
             repo: repo_sync.inner.clone(),
         });
         Self { repo_sync, inner }
@@ -202,14 +193,14 @@ impl HFBucketSync {
     /// Creates a blocking bucket handle from a client, owner, and name.
     pub fn new(client: HFClientSync, owner: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            inner: Arc::new(crate::bucket::HFBucket::new(client.inner.clone(), owner, name)),
+            inner: Arc::new(crate::buckets::HFBucket::new(client.inner.clone(), owner, name)),
             runtime: client.runtime.clone(),
         }
     }
 }
 
 impl Deref for HFBucketSync {
-    type Target = crate::bucket::HFBucket;
+    type Target = crate::buckets::HFBucket;
 
     fn deref(&self) -> &Self::Target {
         &self.inner
@@ -220,13 +211,13 @@ impl TryFrom<HFRepositorySync> for HFSpaceSync {
     type Error = HFError;
 
     fn try_from(repo: HFRepositorySync) -> HFResult<Self> {
-        if repo.inner.repo_type() != types::RepoType::Space {
+        if repo.inner.repo_type() != RepoType::Space {
             return Err(HFError::InvalidRepoType {
-                expected: types::RepoType::Space,
+                expected: RepoType::Space,
                 actual: repo.inner.repo_type(),
             });
         }
-        let inner = Arc::new(repo::HFSpace {
+        let inner = Arc::new(HFSpace {
             repo: repo.inner.clone(),
         });
         Ok(Self {
@@ -270,22 +261,22 @@ mod tests {
 
         assert_eq!(repo.owner(), "openai-community");
         assert_eq!(repo.name(), "gpt2");
-        assert_eq!(repo.repo_type(), types::RepoType::Model);
-        assert_eq!(space.repo_type(), types::RepoType::Space);
+        assert_eq!(repo.repo_type(), RepoType::Model);
+        assert_eq!(space.repo_type(), RepoType::Space);
     }
 
     #[test]
     fn test_sync_space_try_from_repo() {
         let client = HFClientSync::from_inner(HFClient::builder().build().unwrap()).unwrap();
-        let space_repo = client.repo(types::RepoType::Space, "owner", "space");
+        let space_repo = client.repo(RepoType::Space, "owner", "space");
         assert!(HFSpaceSync::try_from(space_repo).is_ok());
 
-        let model_repo = client.repo(types::RepoType::Model, "owner", "model");
+        let model_repo = client.repo(RepoType::Model, "owner", "model");
         let error = HFSpaceSync::try_from(model_repo).unwrap_err();
         match error {
             HFError::InvalidRepoType { expected, actual } => {
-                assert_eq!(expected, types::RepoType::Space);
-                assert_eq!(actual, types::RepoType::Model);
+                assert_eq!(expected, RepoType::Space);
+                assert_eq!(actual, RepoType::Model);
             },
             _ => panic!("expected invalid repo type error"),
         }
