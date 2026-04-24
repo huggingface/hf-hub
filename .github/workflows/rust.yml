@@ -82,7 +82,7 @@ jobs:
           HF_CI_TOKEN: ${{ secrets.HF_CI_TOKEN }}
           HF_PROD_TOKEN: ${{ secrets.HF_PROD_TOKEN }}
           HF_TEST_WRITE: "1"
-        run: cargo test --workspace --all-features --verbose
+        run: cargo test --workspace --all-features --all-targets --verbose
 
   docs:
     name: Docs
