@@ -102,10 +102,10 @@ use std::sync::Arc;
 ///
 /// Register a handler by wrapping it in [`Progress`] (i.e. `Arc<dyn ProgressHandler>`)
 /// and passing `Some(handler)` to the `.progress(...)` method of a params
-/// builder, e.g. [`RepoUploadFileParams`](crate::types::RepoUploadFileParams),
-/// [`RepoSnapshotDownloadParams`](crate::types::RepoSnapshotDownloadParams),
-/// [`RepoCreateCommitParams`](crate::types::RepoCreateCommitParams), or
-/// [`BucketSyncParams`](crate::types::BucketSyncParams).
+/// builder, e.g. [`RepoUploadFileParams`](crate::files::RepoUploadFileParams),
+/// [`RepoSnapshotDownloadParams`](crate::files::RepoSnapshotDownloadParams),
+/// [`RepoCreateCommitParams`](crate::files::RepoCreateCommitParams), or
+/// [`BucketSyncParams`](crate::buckets::sync::BucketSyncParams).
 ///
 /// The library calls [`on_progress`](Self::on_progress) by reference to avoid
 /// cloning large per-file vectors; clone the event (or its fields) only if you
