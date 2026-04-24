@@ -12,15 +12,12 @@
 //!
 //! ```rust,no_run
 //! use hf_hub::HFClient;
-//! use hf_hub::repo::RepoInfoParams;
+//! use hf_hub::repository::RepoInfoParams;
 //!
 //! #[tokio::main]
 //! async fn main() -> hf_hub::HFResult<()> {
 //!     let client = HFClient::new()?;
-//!     let info = client
-//!         .model("openai-community", "gpt2")
-//!         .info(&RepoInfoParams::default())
-//!         .await?;
+//!     let info = client.model("openai-community", "gpt2").info(RepoInfoParams::default()).await?;
 //!     println!("Repo: {:?}", info);
 //!     Ok(())
 //! }
@@ -103,20 +100,20 @@
 //!
 //! ```rust,no_run
 //! use hf_hub::HFClient;
-//! use hf_hub::files::RepoDownloadFileParams;
+//! use hf_hub::repository::RepoDownloadFileParams;
 //!
 //! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 //! let client = HFClient::new()?;
 //! let path = client
 //!     .model("openai-community", "gpt2")
-//!     .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+//!     .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
 //!     .await?;
 //! println!("cached at {}", path.display());
 //! # Ok(()) }
 //! ```
 //!
 //! Uploads accept bytes, files, or entire folders, and can be batched into a single
-//! commit via [`HFRepository::create_commit`] with [`files::CommitOperation`]s.
+//! commit via [`HFRepository::create_commit`] with [`repository::CommitOperation`]s.
 //!
 //! ## Pagination
 //!
@@ -127,12 +124,12 @@
 //! ```rust,no_run
 //! use futures::StreamExt;
 //! use hf_hub::HFClient;
-//! use hf_hub::files::RepoListTreeParams;
+//! use hf_hub::repository::RepoListTreeParams;
 //!
 //! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 //! let client = HFClient::new()?;
 //! let model = client.model("openai-community", "gpt2");
-//! let stream = model.list_tree(&RepoListTreeParams::builder().recursive(true).build())?;
+//! let stream = model.list_tree(RepoListTreeParams::builder().recursive(true).build())?;
 //! futures::pin_mut!(stream);
 //! while let Some(entry) = stream.next().await {
 //!     println!("{:?}", entry?);
@@ -152,10 +149,10 @@
 //!
 //! ```rust,ignore
 //! use hf_hub::HFClientSync;
-//! use hf_hub::repo::RepoInfoParams;
+//! use hf_hub::repository::RepoInfoParams;
 //!
 //! let client = HFClientSync::new()?;
-//! let info = client.model("openai-community", "gpt2").info(&RepoInfoParams::default())?;
+//! let info = client.model("openai-community", "gpt2").info(RepoInfoParams::default())?;
 //! # Ok::<(), hf_hub::HFError>(())
 //! ```
 //!
@@ -184,6 +181,10 @@
 //! bypass it for a single request by passing a `local_dir` on the download
 //! parameters.
 //!
+//! To inspect the cache — list cached repos, revisions, and disk usage — use
+//! [`HFClient::scan_cache`][crate::HFClient::scan_cache], which returns an
+//! [`HFCacheInfo`][crate::cache::HFCacheInfo] tree.
+//!
 //! ## Cargo features
 //!
 //! - `blocking` — enables the synchronous `*Sync` handles.
@@ -211,23 +212,19 @@ mod blocking;
 
 pub mod buckets;
 pub mod cache;
-pub mod commits;
-pub mod files;
 pub mod progress;
-pub mod repo;
+pub mod repository;
 pub mod spaces;
 pub mod users;
-pub mod xet;
-
-pub mod test_utils;
+pub(crate) mod xet;
 
 #[cfg(feature = "blocking")]
-pub use blocking::{HFBucketSync, HFClientSync, HFRepoSync, HFRepositorySync, HFSpaceSync};
+pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync, HFSpaceSync};
 pub use buckets::HFBucket;
 pub use client::{HFClient, HFClientBuilder};
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult};
 pub use progress::ProgressHandler;
-pub use repo::{HFRepo, HFRepository, RepoType};
+pub use repository::{HFRepository, RepoType};
 pub use spaces::HFSpace;

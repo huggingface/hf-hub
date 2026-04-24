@@ -8,8 +8,8 @@
 use std::sync::Arc;
 
 use hf_hub::HFClient;
-use hf_hub::files::RepoDownloadFileParams;
 use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
+use hf_hub::repository::RepoDownloadFileParams;
 
 struct PrintProgressHandler;
 
@@ -98,7 +98,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let path = model
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(tmp_dir.path().to_path_buf())
                 .progress(Some(Arc::new(PrintProgressHandler)))

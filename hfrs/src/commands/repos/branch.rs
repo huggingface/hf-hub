@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args as ClapArgs, Subcommand};
 use hf_hub::HFClient;
-use hf_hub::commits::{RepoCreateBranchParams, RepoDeleteBranchParams};
+use hf_hub::repository::{RepoCreateBranchParams, RepoDeleteBranchParams};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -68,7 +68,7 @@ async fn create(client: &HFClient, args: BranchCreateArgs) -> Result<CommandResu
         branch: args.branch,
         revision: args.revision,
     };
-    repo.create_branch(&params).await?;
+    repo.create_branch(params).await?;
     Ok(CommandResult::Raw("Branch created.".to_string()))
 }
 
@@ -76,6 +76,6 @@ async fn delete(client: &HFClient, args: BranchDeleteArgs) -> Result<CommandResu
     let repo_type: hf_hub::RepoType = args.r#type.into();
     let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
     let params = RepoDeleteBranchParams { branch: args.branch };
-    repo.delete_branch(&params).await?;
+    repo.delete_branch(params).await?;
     Ok(CommandResult::Silent)
 }

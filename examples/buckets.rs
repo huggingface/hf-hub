@@ -18,7 +18,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let created = client
         .create_bucket(
-            &CreateBucketParams::builder()
+            CreateBucketParams::builder()
                 .namespace(namespace)
                 .name(bucket_name)
                 .private(true)
@@ -37,7 +37,7 @@ async fn main() -> hf_hub::HFResult<()> {
         info.id, info.private, info.total_files, info.size
     );
 
-    let entries: Vec<_> = bucket.list_tree(&ListBucketTreeParams::default())?.try_collect().await?;
+    let entries: Vec<_> = bucket.list_tree(ListBucketTreeParams::default())?.try_collect().await?;
     println!("Files in bucket: {}", entries.len());
 
     let buckets: Vec<BucketInfo> = client.list_buckets(namespace)?.try_collect().await?;

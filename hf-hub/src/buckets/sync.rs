@@ -1,3 +1,21 @@
+//! One-way directory synchronization between a local folder and a Hub bucket.
+//!
+//! [`HFBucket::sync`] compares a local directory with a bucket prefix, computes
+//! the required uploads, downloads, deletions, and skips, executes those
+//! operations, and returns the resulting [`BucketSyncPlan`].
+//!
+//! A few behaviors are worth knowing up front:
+//!
+//! - Sync is directional. Use [`BucketSyncDirection::Upload`] to push a local directory into a bucket, or
+//!   [`BucketSyncDirection::Download`] to mirror a bucket prefix into a local directory.
+//! - `prefix` scopes the remote side of the comparison. Returned operation paths are always relative to that prefix and
+//!   to `local_path`.
+//! - `include` and `exclude` glob patterns are evaluated against those relative paths. Excludes win over includes.
+//! - The returned plan reflects the operations that were executed. Set [`BucketSyncParams::verbose`] to keep explicit
+//!   skip entries in the plan.
+//! - By default, file comparisons consider both size and modification time, with a small timestamp tolerance to avoid
+//!   unnecessary transfers.
+
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -21,7 +39,9 @@ pub enum BucketSyncDirection {
 
 /// Parameters for syncing files between a local directory and a bucket.
 ///
-/// Used with [`HFBucket::sync`].
+/// Used with [`HFBucket::sync`]. `local_path` is always the local root of the
+/// sync, while `prefix` optionally scopes the remote side to a bucket
+/// subdirectory.
 #[derive(Clone, TypedBuilder)]
 pub struct BucketSyncParams {
     /// Local directory path.
@@ -32,6 +52,9 @@ pub struct BucketSyncParams {
     #[builder(default, setter(into, strip_option))]
     pub prefix: Option<String>,
     /// Delete destination files not present in source.
+    ///
+    /// For uploads, this removes bucket files missing from the local directory.
+    /// For downloads, this removes local files missing from the bucket.
     #[builder(default = false)]
     pub delete: bool,
     /// Only compare sizes, ignore modification times.
@@ -41,18 +64,30 @@ pub struct BucketSyncParams {
     #[builder(default = false)]
     pub ignore_sizes: bool,
     /// Only sync files that already exist at destination.
+    ///
+    /// New files that are missing on the receiving side are skipped.
     #[builder(default = false)]
     pub existing: bool,
     /// Skip files that already exist at destination.
+    ///
+    /// Existing receiver-side files are left untouched even if contents differ.
     #[builder(default = false)]
     pub ignore_existing: bool,
     /// Include patterns (fnmatch/glob-style).
+    ///
+    /// Patterns are matched against relative paths beneath `local_path` and
+    /// beneath `prefix` on the bucket side.
     #[builder(default)]
     pub include: Vec<String>,
     /// Exclude patterns (fnmatch/glob-style).
+    ///
+    /// Exclusions take precedence over inclusions.
     #[builder(default)]
     pub exclude: Vec<String>,
     /// Include skip operations in the returned plan.
+    ///
+    /// This is useful when you want a full accounting of why files were not
+    /// transferred.
     #[builder(default = false)]
     pub verbose: bool,
     /// Progress handler for upload/download tracking.
@@ -63,9 +98,13 @@ pub struct BucketSyncParams {
 /// Action to perform for a single file during sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BucketSyncAction {
+    /// Upload a local file into the bucket.
     Upload,
+    /// Download a bucket file into the local directory.
     Download,
+    /// Remove a file from the receiving side because `delete` is enabled.
     Delete,
+    /// Leave the file untouched.
     Skip,
 }
 
@@ -97,6 +136,7 @@ pub struct BucketSyncPlan {
 }
 
 impl BucketSyncPlan {
+    /// Count upload operations in the plan.
     pub fn uploads(&self) -> usize {
         self.operations
             .iter()
@@ -104,6 +144,7 @@ impl BucketSyncPlan {
             .count()
     }
 
+    /// Count download operations in the plan.
     pub fn downloads(&self) -> usize {
         self.operations
             .iter()
@@ -111,6 +152,7 @@ impl BucketSyncPlan {
             .count()
     }
 
+    /// Count delete operations in the plan.
     pub fn deletes(&self) -> usize {
         self.operations
             .iter()
@@ -118,6 +160,10 @@ impl BucketSyncPlan {
             .count()
     }
 
+    /// Count skip operations in the plan.
+    ///
+    /// Skip entries are only included when [`BucketSyncParams::verbose`] is
+    /// enabled.
     pub fn skips(&self) -> usize {
         self.operations.iter().filter(|op| op.action == BucketSyncAction::Skip).count()
     }
@@ -428,7 +474,7 @@ impl HFBucket {
             recursive: Some(true),
         };
 
-        let stream = self.list_tree(&tree_params)?;
+        let stream = self.list_tree(tree_params)?;
         futures::pin_mut!(stream);
 
         let mut files: HashMap<String, (u64, f64)> = HashMap::new();
@@ -645,6 +691,7 @@ impl HFBucket {
             let entry = plan.download_entries.get(&op.path).ok_or_else(|| HFError::EntryNotFound {
                 path: op.path.clone(),
                 repo_id: self.bucket_id(),
+                context: None,
             })?;
 
             let local_path = params.local_path.join(&op.path);
@@ -723,8 +770,34 @@ impl HFBucket {
         Ok(())
     }
 
-    pub async fn sync(&self, params: &BucketSyncParams) -> HFResult<BucketSyncPlan> {
-        validate_params(params)?;
+    /// Synchronize a local directory with this bucket.
+    ///
+    /// The sync is one-way and controlled by [`BucketSyncParams::direction`]:
+    ///
+    /// - [`BucketSyncDirection::Upload`] compares `local_path` against the bucket (optionally scoped by `prefix`) and
+    ///   uploads changed or missing files.
+    /// - [`BucketSyncDirection::Download`] compares the bucket against `local_path` and downloads changed or missing
+    ///   files.
+    ///
+    /// When [`BucketSyncParams::delete`] is enabled, files that only exist on
+    /// the receiving side are removed as part of the sync.
+    ///
+    /// The returned [`BucketSyncPlan`] describes the operations that were
+    /// executed. Use [`BucketSyncParams::verbose`] if you also want explicit
+    /// `Skip` entries explaining why untouched files were not transferred.
+    ///
+    /// # Comparison behavior
+    ///
+    /// By default, files are considered different when their sizes differ or
+    /// when the source file is newer than the destination file. Modification
+    /// times are compared with a small tolerance to avoid unnecessary transfers
+    /// caused by filesystem timestamp precision.
+    ///
+    /// `ignore_times` changes the comparison to size-only, while `ignore_sizes`
+    /// changes it to mtime-only. `existing` and `ignore_existing` further limit
+    /// which files are eligible to transfer.
+    pub async fn sync(&self, params: BucketSyncParams) -> HFResult<BucketSyncPlan> {
+        validate_params(&params)?;
 
         let include = compile_patterns(&params.include)?;
         let exclude = compile_patterns(&params.exclude)?;
@@ -739,8 +812,8 @@ impl HFBucket {
                     .filter(|(k, _)| matches_filters(k, &include, &exclude))
                     .collect();
 
-                let plan = self.compute_upload_plan(&local_files, &remote_files, params);
-                self.execute_upload_plan(&plan, params).await?;
+                let plan = self.compute_upload_plan(&local_files, &remote_files, &params);
+                self.execute_upload_plan(&plan, &params).await?;
                 Ok(plan)
             },
             BucketSyncDirection::Download => {
@@ -752,8 +825,8 @@ impl HFBucket {
                     .filter(|(k, _)| matches_filters(k, &include, &exclude))
                     .collect();
 
-                let plan = self.compute_download_plan(&local_files, &remote_files, &remote_entries, params);
-                self.execute_download_plan(&plan, params).await?;
+                let plan = self.compute_download_plan(&local_files, &remote_files, &remote_entries, &params);
+                self.execute_download_plan(&plan, &params).await?;
                 Ok(plan)
             },
         }
@@ -762,7 +835,7 @@ impl HFBucket {
 
 sync_api! {
     impl HFBucket -> HFBucketSync {
-        fn sync(&self, params: &BucketSyncParams) -> HFResult<BucketSyncPlan>;
+        fn sync(&self, params: BucketSyncParams) -> HFResult<BucketSyncPlan>;
     }
 }
 

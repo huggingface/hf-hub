@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::repo::MoveRepoParams;
+use hf_hub::repository::MoveRepoParams;
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -27,6 +27,6 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         to_id: args.to_id,
         repo_type: Some(repo_type),
     };
-    let result = client.move_repo(&params).await?;
+    let result = client.move_repo(params).await?;
     Ok(CommandResult::Raw(result.url))
 }

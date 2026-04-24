@@ -102,9 +102,9 @@ use std::sync::Arc;
 ///
 /// Register a handler by wrapping it in [`Progress`] (i.e. `Arc<dyn ProgressHandler>`)
 /// and passing `Some(handler)` to the `.progress(...)` method of a params
-/// builder, e.g. [`RepoUploadFileParams`](crate::files::RepoUploadFileParams),
-/// [`RepoSnapshotDownloadParams`](crate::files::RepoSnapshotDownloadParams),
-/// [`RepoCreateCommitParams`](crate::files::RepoCreateCommitParams), or
+/// builder, e.g. [`RepoUploadFileParams`](crate::repository::RepoUploadFileParams),
+/// [`RepoSnapshotDownloadParams`](crate::repository::RepoSnapshotDownloadParams),
+/// [`RepoCreateCommitParams`](crate::repository::RepoCreateCommitParams), or
 /// [`BucketSyncParams`](crate::buckets::sync::BucketSyncParams).
 ///
 /// The library calls [`on_progress`](Self::on_progress) by reference to avoid

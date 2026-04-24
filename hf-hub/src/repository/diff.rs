@@ -1,45 +1,115 @@
+//! Parsed representations of the Hub's raw diff format.
+//!
+//! [`crate::repository::HFRepository::get_raw_diff`] returns the raw compare payload as a
+//! string, while [`crate::repository::HFRepository::get_raw_diff_stream`] uses the parser
+//! in this module to yield one [`HFFileDiff`] per diff entry.
+//!
+//! The format is a line-oriented variant of git's raw diff output: each line
+//! encodes the old/new blob ids, the file status, whether the payload is text
+//! or binary, the destination-side file size, and the relevant paths. This
+//! module does not parse patch hunks; it focuses on the metadata needed to
+//! inspect revision-to-revision file changes efficiently.
+//!
+//! Format reference: <https://git-scm.com/docs/diff-format#_raw_output_format>
+
 use bytes::Bytes;
 use futures::stream::{self, Stream, StreamExt};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_util::io::StreamReader;
 
+/// Errors produced while parsing raw diff lines into [`HFFileDiff`] values.
+///
+/// These errors surface on the stream returned by
+/// [`crate::repository::HFRepository::get_raw_diff_stream`] when the Hub returns a
+/// line that does not match the expected raw-diff shape, or when the response
+/// stream itself fails while being read.
 #[derive(Debug, Error)]
 pub enum HFDiffParseError {
+    /// The parser encountered an empty line, but every diff entry is expected
+    /// to occupy exactly one non-empty line.
     #[error("diff line is empty")]
     EmptyLine,
+    /// The size prefix in the raw diff line could not be parsed as a `u64`.
     #[error("failed to parse file size from {value:?} in line {line:?}: {source}")]
     InvalidFileSize {
+        /// The substring that was expected to contain the file size.
         value: String,
+        /// The full raw diff line being parsed.
         line: String,
+        /// The underlying integer parse failure.
         source: std::num::ParseIntError,
     },
+    /// The line was structurally different from the raw diff format this
+    /// parser expects.
     #[error("incorrect diff line format: {line:?}")]
-    InvalidFormat { line: String },
+    InvalidFormat {
+        /// The full raw diff line that could not be parsed.
+        line: String,
+    },
+    /// Reading the response stream failed before the next diff line could be
+    /// parsed.
     #[error("I/O error while reading diff stream: {0}")]
     Io(#[from] std::io::Error),
 }
 
+/// Parsed metadata for a single file entry in the Hub's raw diff output.
+///
+/// One `HFFileDiff` corresponds to one line in the payload returned by
+/// [`crate::repository::HFRepository::get_raw_diff`] or one item yielded by
+/// [`crate::repository::HFRepository::get_raw_diff_stream`]. For rename and copy
+/// entries, [`new_file_path`](Self::new_file_path) contains the destination
+/// path while [`file_path`](Self::file_path) remains the source path.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct HFFileDiff {
+    /// Blob id for the file before the change.
+    ///
+    /// For additions this is typically all zeroes because there is no previous
+    /// blob.
     pub old_blob_id: String,
+    /// Blob id for the file after the change.
+    ///
+    /// For deletions this is typically all zeroes because there is no new
+    /// blob.
     pub new_blob_id: String,
+    /// High-level git status for the change.
     pub status: GitStatus,
+    /// Repository-relative path of the original/source file.
     pub file_path: String,
+    /// Repository-relative destination path for rename/copy entries.
+    ///
+    /// This is `None` for additions, deletions, and in-place modifications.
     pub new_file_path: Option<String>,
+    /// Whether the Hub marked this entry as binary.
+    ///
+    /// `true` corresponds to a `B` prefix in the raw diff line; `false`
+    /// corresponds to `T` (text).
     pub is_binary: bool,
+    /// Destination-side file size in bytes, as reported by the raw diff line.
     pub new_file_size: u64,
 }
 
+/// File-level status code parsed from a raw diff entry.
+///
+/// The variants correspond to the single-letter status code in git raw diff
+/// output (`A`, `C`, `D`, `M`, `R`, `T`, `U`, `X`).
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum GitStatus {
+    /// A new file was added.
     Addition,
+    /// The file was copied to a new path.
     Copy,
+    /// The file was deleted.
     Deletion,
+    /// The file contents changed in place.
     Modification,
+    /// The file's mode/type changed without necessarily changing its path.
     FileTypeChange,
+    /// The file was renamed.
     Rename,
+    /// Git reported an unrecognized status code.
     Unknown,
+    /// The entry is in an unmerged/conflicted state.
     Unmerged,
 }
 

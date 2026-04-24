@@ -1,19 +1,22 @@
 use futures::stream::{Stream, StreamExt};
 use reqwest::Url;
 
+use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash};
 use super::{
-    FileMetadataInfo, RepoGetFileMetadataParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams,
-    RepoTreeEntry, extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash,
+    FileMetadataInfo, HFRepository, RepoGetFileMetadataParams, RepoGetPathsInfoParams, RepoListFilesParams,
+    RepoListTreeParams, RepoTreeEntry,
 };
 use crate::error::{HFError, HFResult};
-use crate::repo::HFRepository;
 use crate::{constants, retry};
 
 impl HFRepository {
-    /// Return a flat list of all file paths in the repository at the given revision.
-    pub async fn list_files(&self, params: &RepoListFilesParams) -> HFResult<Vec<String>> {
+    /// Return a flat list of file paths in the repository at the given revision.
+    ///
+    /// This is a convenience wrapper around a recursive [`HFRepository::list_tree`]
+    /// call that drops directory entries and returns only file paths.
+    pub async fn list_files(&self, params: RepoListFilesParams) -> HFResult<Vec<String>> {
         let revision = params.revision.clone();
-        let stream = self.list_tree(&RepoListTreeParams {
+        let stream = self.list_tree(RepoListTreeParams {
             revision,
             recursive: true,
             expand: false,
@@ -33,9 +36,14 @@ impl HFRepository {
 
     /// Stream file and directory entries in the repository tree.
     ///
-    /// Returns `HFResult<impl Stream<Item = HFResult<RepoTreeEntry>>>`. Set `recursive` to traverse
-    /// subdirectories. Use `limit` to cap the total number of entries yielded.
-    pub fn list_tree(&self, params: &RepoListTreeParams) -> HFResult<impl Stream<Item = HFResult<RepoTreeEntry>> + '_> {
+    /// Returns `HFResult<impl Stream<Item = HFResult<RepoTreeEntry>>>`. Set
+    /// `recursive` to traverse subdirectories, and `expand` to include
+    /// per-file metadata such as size, LFS info, and last-commit summaries.
+    ///
+    /// Use [`HFRepository::list_files`] when you only need paths, or
+    /// [`HFRepository::get_paths_info`] when you already know the exact paths
+    /// you want to inspect.
+    pub fn list_tree(&self, params: RepoListTreeParams) -> HFResult<impl Stream<Item = HFResult<RepoTreeEntry>> + '_> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url_str = format!("{}/tree/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
         let url = Url::parse(&url_str)?;
@@ -52,8 +60,12 @@ impl HFRepository {
     }
 
     /// Get info about specific paths in a repository.
+    ///
+    /// Prefer this over [`HFRepository::list_tree`] when you already know the
+    /// small set of paths you want to inspect.
+    ///
     /// Endpoint: POST /api/{repo_type}s/{repo_id}/paths-info/{revision}
-    pub async fn get_paths_info(&self, params: &RepoGetPathsInfoParams) -> HFResult<Vec<RepoTreeEntry>> {
+    pub async fn get_paths_info(&self, params: RepoGetPathsInfoParams) -> HFResult<Vec<RepoTreeEntry>> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url =
             format!("{}/paths-info/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
@@ -93,7 +105,7 @@ impl HFRepository {
     /// the Xet content hash — without downloading the file contents.
     ///
     /// Endpoint: HEAD {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filepath}
-    pub async fn get_file_metadata(&self, params: &RepoGetFileMetadataParams) -> HFResult<FileMetadataInfo> {
+    pub async fn get_file_metadata(&self, params: RepoGetFileMetadataParams) -> HFResult<FileMetadataInfo> {
         let filename = params.filepath.clone();
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let repo_path = self.repo_path();
@@ -136,14 +148,14 @@ impl HFRepository {
 
 sync_api! {
     impl HFRepository -> HFRepositorySync {
-        fn list_files(&self, params: &RepoListFilesParams) -> HFResult<Vec<String>>;
-        fn get_paths_info(&self, params: &RepoGetPathsInfoParams) -> HFResult<Vec<RepoTreeEntry>>;
-        fn get_file_metadata(&self, params: &RepoGetFileMetadataParams) -> HFResult<FileMetadataInfo>;
+        fn list_files(&self, params: RepoListFilesParams) -> HFResult<Vec<String>>;
+        fn get_paths_info(&self, params: RepoGetPathsInfoParams) -> HFResult<Vec<RepoTreeEntry>>;
+        fn get_file_metadata(&self, params: RepoGetFileMetadataParams) -> HFResult<FileMetadataInfo>;
     }
 }
 
 sync_api_stream! {
     impl HFRepository -> HFRepositorySync {
-        fn list_tree(&self, params: &RepoListTreeParams) -> RepoTreeEntry;
+        fn list_tree(&self, params: RepoListTreeParams) -> RepoTreeEntry;
     }
 }

@@ -80,14 +80,8 @@ impl HFClient {
                 }
 
                 if !response.status().is_success() {
-                    let status = response.status();
-                    let resp_url = response.url().to_string();
-                    let body = response.text().await.unwrap_or_default();
-                    return Err(HFError::Http {
-                        status,
-                        url: resp_url,
-                        body,
-                    });
+                    let context = Box::new(crate::error::HttpErrorContext::from_response(response).await);
+                    return Err(HFError::Http { context });
                 }
 
                 state.next_url = parse_link_header_next(response.headers());

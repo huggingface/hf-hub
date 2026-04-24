@@ -141,7 +141,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
         }
     };
 
-    let plan = bucket.sync(&params).await?;
+    let plan = bucket.sync(params).await?;
 
     if args.quiet {
         return Ok(CommandResult::Silent);

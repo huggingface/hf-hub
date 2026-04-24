@@ -75,7 +75,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
             prefix: path_prefix.clone(),
             recursive: Some(true),
         };
-        let stream = bucket.list_tree(&params)?;
+        let stream = bucket.list_tree(params)?;
         futures::pin_mut!(stream);
 
         let mut paths = Vec::new();

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
-use crate::repo::{HFRepository, RepoType};
+use crate::repository::{HFRepository, RepoType};
 use crate::spaces::HFSpace;
 
 fn build_runtime() -> HFResult<Arc<tokio::runtime::Runtime>> {
@@ -182,7 +182,7 @@ impl HFSpaceSync {
 }
 
 impl Deref for HFSpaceSync {
-    type Target = HFRepoSync;
+    type Target = HFRepositorySync;
 
     fn deref(&self) -> &Self::Target {
         &self.repo_sync
@@ -232,9 +232,6 @@ impl From<HFSpaceSync> for Arc<HFRepositorySync> {
         space.repo_sync
     }
 }
-
-/// Alias for [`HFRepositorySync`].
-pub type HFRepoSync = HFRepositorySync;
 
 #[cfg(test)]
 mod tests {

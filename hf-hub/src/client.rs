@@ -5,7 +5,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use tracing::debug;
 
 use crate::constants;
-use crate::error::{HFError, HFResult, NotFoundContext};
+use crate::error::{HFError, HFResult, HttpErrorContext, NotFoundContext};
 use crate::retry::{self, RetryConfig};
 
 /// Async client for the Hugging Face Hub API.
@@ -273,7 +273,7 @@ impl HFClient {
     }
 
     /// Build a URL for the API: {endpoint}/api/{segment}/{repo_id}
-    pub(crate) fn api_url(&self, repo_type: Option<crate::repo::RepoType>, repo_id: &str) -> String {
+    pub(crate) fn api_url(&self, repo_type: Option<crate::repository::RepoType>, repo_id: &str) -> String {
         let segment = constants::repo_type_api_segment(repo_type);
         format!("{}/api/{}/{}", self.endpoint(), segment, repo_id)
     }
@@ -281,7 +281,7 @@ impl HFClient {
     /// Build a download URL: {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}
     pub(crate) fn download_url(
         &self,
-        repo_type: Option<crate::repo::RepoType>,
+        repo_type: Option<crate::repository::RepoType>,
         repo_id: &str,
         revision: &str,
         filename: &str,
@@ -314,29 +314,41 @@ impl HFClient {
             return Ok(response);
         }
 
-        let url = response.url().to_string();
-        let body = response.text().await.unwrap_or_default();
+        let retry_after = if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            crate::error::parse_retry_after(response.headers())
+        } else {
+            None
+        };
+        let context = Box::new(HttpErrorContext::from_response(response).await);
         let repo_id_str = repo_id.unwrap_or("").to_string();
 
         match status.as_u16() {
-            401 => Err(HFError::AuthRequired),
-            403 => Err(HFError::Forbidden),
+            401 => Err(HFError::AuthRequired { context }),
+            403 => Err(HFError::Forbidden { context }),
             404 => match not_found_ctx {
-                NotFoundContext::Repo => Err(HFError::RepoNotFound { repo_id: repo_id_str }),
-                NotFoundContext::Bucket => Err(HFError::BucketNotFound { bucket_id: repo_id_str }),
+                NotFoundContext::Repo => Err(HFError::RepoNotFound {
+                    repo_id: repo_id_str,
+                    context: Some(context),
+                }),
+                NotFoundContext::Bucket => Err(HFError::BucketNotFound {
+                    bucket_id: repo_id_str,
+                    context: Some(context),
+                }),
                 NotFoundContext::Entry { path } => Err(HFError::EntryNotFound {
                     path,
                     repo_id: repo_id_str,
+                    context: Some(context),
                 }),
                 NotFoundContext::Revision { revision } => Err(HFError::RevisionNotFound {
                     revision,
                     repo_id: repo_id_str,
+                    context: Some(context),
                 }),
-                NotFoundContext::Generic => Err(HFError::Http { status, url, body }),
+                NotFoundContext::Generic => Err(HFError::Http { context }),
             },
-            409 => Err(HFError::Conflict(body)),
-            429 => Err(HFError::RateLimited),
-            _ => Err(HFError::Http { status, url, body }),
+            409 => Err(HFError::Conflict { context }),
+            429 => Err(HFError::RateLimited { retry_after, context }),
+            _ => Err(HFError::Http { context }),
         }
     }
 

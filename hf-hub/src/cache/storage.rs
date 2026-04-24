@@ -3,10 +3,8 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use fs4::fs_std::FileExt;
-
 use super::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
-use crate::repo::RepoType;
+use crate::repository::RepoType;
 
 pub(crate) struct CacheLock {
     _file: File,
@@ -22,7 +20,7 @@ pub(crate) async fn acquire_lock(cache_dir: &Path, repo_folder: &str, etag: &str
         std::time::Duration::from_secs(crate::constants::CACHE_LOCK_TIMEOUT_SECS),
         tokio::task::spawn_blocking(move || {
             let file = File::create(&lock_path_clone)?;
-            file.lock_exclusive()?;
+            file.lock()?;
             Ok::<_, std::io::Error>(file)
         }),
     )
@@ -337,7 +335,7 @@ mod tests {
         parse_repo_folder_name, read_commit_refs, read_ref, ref_path, repo_folder_name, scan_cache_dir, snapshot_path,
         write_ref,
     };
-    use crate::repo::RepoType;
+    use crate::repository::RepoType;
 
     #[test]
     fn test_repo_folder_name_model_with_org() {

@@ -16,9 +16,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use hf_hub::HFClient;
-use hf_hub::files::{AddSource, RepoDownloadFileParams, RepoSnapshotDownloadParams, RepoUploadFileParams};
 use hf_hub::progress::{ProgressEvent, ProgressHandler};
-use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
+use hf_hub::repository::{
+    AddSource, CreateRepoParams, DeleteRepoParams, RepoDownloadFileParams, RepoSnapshotDownloadParams,
+    RepoUploadFileParams,
+};
 
 /// Logs each `ProgressEvent` to stderr with a millisecond offset from when
 /// the handler was constructed, plus an event counter. Thread-safe — uses
@@ -58,7 +60,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let model = client.model("openai-community", "gpt2");
     let path = model
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(tmp_dir.path().to_path_buf())
                 .progress(Some(handler))
@@ -75,7 +77,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let snapshot_dir = tmp_dir.path().join("snapshot");
     model
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .local_dir(snapshot_dir.clone())
                 .allow_patterns(vec!["*.json".to_string()])
                 .progress(Some(handler))
@@ -97,7 +99,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo = client.model(&user.username, format!("example-progress-logger-{}", std::process::id()));
     client
         .create_repo(
-            &CreateRepoParams::builder()
+            CreateRepoParams::builder()
                 .repo_id(repo.repo_path())
                 .private(true)
                 .exist_ok(true)
@@ -108,7 +110,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let handler: Arc<LoggingProgressHandler> = Arc::new(LoggingProgressHandler::new());
     let commit = repo
         .upload_file(
-            &RepoUploadFileParams::builder()
+            RepoUploadFileParams::builder()
                 .source(AddSource::Bytes(b"hello from progress_logger".to_vec()))
                 .path_in_repo("hello.txt")
                 .commit_message("example: progress_logger")
@@ -119,7 +121,7 @@ async fn main() -> hf_hub::HFResult<()> {
     println!("Committed: {:?}", commit.commit_url);
 
     client
-        .delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
+        .delete_repo(DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
         .await?;
 
     Ok(())

@@ -160,7 +160,7 @@ async fn list_files(
         recursive: if args.recursive { Some(true) } else { None },
     };
 
-    let stream = bucket.list_tree(&params)?;
+    let stream = bucket.list_tree(params)?;
     futures::pin_mut!(stream);
 
     let mut entries = Vec::new();

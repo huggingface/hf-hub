@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::files::{RepoDownloadFileParams, RepoSnapshotDownloadParams};
 use hf_hub::progress::Progress;
+use hf_hub::repository::{RepoDownloadFileParams, RepoSnapshotDownloadParams};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -74,7 +74,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
             local_files_only: None,
             progress: handler.clone(),
         };
-        repo.download_file(&params).await?
+        repo.download_file(params).await?
     } else {
         let allow_patterns = if !args.filenames.is_empty() {
             Some(args.filenames)
@@ -98,7 +98,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
             max_workers: None,
             progress: handler.clone(),
         };
-        repo.snapshot_download(&params).await?
+        repo.snapshot_download(params).await?
     };
 
     Ok(CommandResult::Raw(path.display().to_string()))

@@ -34,7 +34,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         .exist_ok(args.exist_ok)
         .build();
 
-    let result = client.create_bucket(&params).await?;
+    let result = client.create_bucket(params).await?;
     let handle = format!("hf://buckets/{}/{}", namespace, name);
 
     if args.quiet {

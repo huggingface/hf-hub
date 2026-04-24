@@ -1,7 +1,7 @@
 use std::process::Command;
 use std::time::Duration;
 
-use hf_hub::test_utils;
+use integration_tests::test_utils;
 
 pub struct CliRunner {
     bin: String,

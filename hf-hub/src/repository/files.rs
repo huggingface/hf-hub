@@ -1,27 +1,37 @@
-//! Files component: file listing, download, and upload — plus their
-//! associated response/parameter types and shared helpers. Methods are
-//! defined on [`HFRepository`] across the listing, download, and upload
-//! sub-modules.
+//! Repository file listing, metadata, download, and upload APIs.
+//!
+//! Common entry points:
+//!
+//! - Use [`HFRepository::list_files`] when you only need file paths.
+//! - Use [`HFRepository::list_tree`] when you need file and directory entries, or [`HFRepository::get_paths_info`] /
+//!   [`HFRepository::get_file_metadata`] for targeted lookups.
+//! - Use [`HFRepository::download_file`] to write one file to disk, [`HFRepository::download_file_stream`] to stream
+//!   bytes, [`HFRepository::download_file_to_bytes`] to collect a file into memory, and
+//!   [`HFRepository::snapshot_download`] to fetch a whole revision.
+//! - Use [`HFRepository::upload_file`] and [`HFRepository::upload_folder`] for convenience, or
+//!   [`HFRepository::create_commit`] when you need an explicit set of add/delete operations in one commit.
+//!
+//! The public types in this module are shared across the listing, download, and
+//! upload helpers implemented on [`HFRepository`].
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
+#[allow(unused_imports)] // used by intra-doc links
+use super::HFRepository;
 use crate::constants;
 use crate::progress::Progress;
-#[allow(unused_imports)] // used by intra-doc links
-use crate::repo::HFRepository;
-
-mod download;
-mod listing;
-mod upload;
 
 /// LFS metadata attached to a repository file, when the file is stored in Git LFS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobLfsInfo {
+    /// Original file size in bytes, when reported by the Hub.
     pub size: Option<u64>,
+    /// SHA-256 object id of the LFS payload.
     pub sha256: Option<String>,
+    /// Size in bytes of the LFS pointer file stored in git.
     pub pointer_size: Option<u64>,
 }
 
@@ -29,8 +39,11 @@ pub struct BlobLfsInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LastCommitInfo {
+    /// Commit SHA, when available.
     pub id: Option<String>,
+    /// Commit title/summary line.
     pub title: Option<String>,
+    /// Commit timestamp in ISO 8601 format, when available.
     pub date: Option<String>,
 }
 
@@ -53,20 +66,29 @@ pub struct FileMetadataInfo {
     pub file_size: u64,
 }
 
-/// Tagged union for tree entries returned by list_repo_tree
+/// File or directory entry returned by repository tree/listing APIs.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum RepoTreeEntry {
+    /// A file entry in the repository tree.
     File {
+        /// Object id reported by the Hub for this entry.
         oid: String,
+        /// File size in bytes.
         size: u64,
+        /// Repository-relative path.
         path: String,
+        /// LFS metadata, when the file is LFS-backed.
         lfs: Option<BlobLfsInfo>,
+        /// Last-commit summary, only when expanded metadata is requested.
         #[serde(default, rename = "lastCommit")]
         last_commit: Option<LastCommitInfo>,
     },
+    /// A directory entry in the repository tree.
     Directory {
+        /// Object id reported by the Hub for this entry.
         oid: String,
+        /// Repository-relative path.
         path: String,
     },
 }
@@ -79,27 +101,68 @@ pub enum RepoTreeEntry {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitInfo {
+    /// URL of the created commit on the Hub, when available.
     pub commit_url: Option<String>,
+    /// Commit message recorded for the operation.
     pub commit_message: Option<String>,
+    /// Commit description/body, when provided.
     pub commit_description: Option<String>,
+    /// Commit SHA, when returned by the API.
     pub commit_oid: Option<String>,
+    /// Pull-request URL, when `create_pr` was enabled and a PR was opened.
     pub pr_url: Option<String>,
+    /// Pull-request number, when `create_pr` was enabled and a PR was opened.
     pub pr_num: Option<u64>,
 }
 
-/// Describes a file mutation in a commit
+/// File mutation included in [`HFRepository::create_commit`].
 #[derive(Debug, Clone)]
 pub enum CommitOperation {
-    /// Upload a file (from path or bytes)
-    Add { path_in_repo: String, source: AddSource },
-    /// Delete a file or folder
-    Delete { path_in_repo: String },
+    /// Add or replace a file in the repository.
+    Add {
+        /// Destination path within the repository.
+        path_in_repo: String,
+        /// Source of the uploaded contents.
+        source: AddSource,
+    },
+    /// Delete a file from the repository.
+    Delete {
+        /// Repository-relative path to remove.
+        path_in_repo: String,
+    },
 }
 
-/// Source of content for an add operation
+impl CommitOperation {
+    /// Create an add operation backed by a local file path.
+    pub fn add_file(path_in_repo: impl Into<String>, source: impl Into<PathBuf>) -> Self {
+        CommitOperation::Add {
+            path_in_repo: path_in_repo.into(),
+            source: AddSource::File(source.into()),
+        }
+    }
+
+    /// Create an add operation backed by in-memory bytes.
+    pub fn add_bytes(path_in_repo: impl Into<String>, source: impl Into<Vec<u8>>) -> Self {
+        CommitOperation::Add {
+            path_in_repo: path_in_repo.into(),
+            source: AddSource::Bytes(source.into()),
+        }
+    }
+
+    /// Create a delete operation for a repository path.
+    pub fn delete(path_in_repo: impl Into<String>) -> Self {
+        CommitOperation::Delete {
+            path_in_repo: path_in_repo.into(),
+        }
+    }
+}
+
+/// Source of content for a [`CommitOperation::Add`] operation.
 #[derive(Debug, Clone)]
 pub enum AddSource {
+    /// Read file contents from this local path when creating the commit.
     File(PathBuf),
+    /// Use these bytes as the file contents.
     Bytes(Vec<u8>),
 }
 
@@ -199,7 +262,10 @@ pub struct RepoDownloadFileStreamParams {
     pub range: Option<std::ops::Range<u64>>,
 }
 
+/// Alias of [`RepoDownloadFileStreamParams`] for
+/// [`HFRepository::download_file_to_bytes`].
 pub type RepoDownloadFileToBytesParams = RepoDownloadFileStreamParams;
+/// Builder alias for [`RepoDownloadFileToBytesParams`].
 pub type RepoDownloadFileToBytesParamsBuilder = RepoDownloadFileStreamParamsBuilder;
 
 /// Parameters for downloading a full repository snapshot.
@@ -292,7 +358,7 @@ pub struct RepoUploadFolderParams {
     /// Glob patterns for files to exclude from the local folder.
     #[builder(default, setter(strip_option))]
     pub ignore_patterns: Option<Vec<String>>,
-    /// Glob patterns for remote files to delete that are not present locally.
+    /// Glob patterns for remote files to delete as part of the upload commit.
     #[builder(default, setter(strip_option))]
     pub delete_patterns: Option<Vec<String>>,
     /// Optional progress handler for tracking upload progress.
@@ -340,10 +406,11 @@ pub struct RepoDeleteFolderParams {
 
 /// Parameters for creating a commit composed of multiple file operations.
 ///
-/// Used with [`HFRepository::create_commit`].
+/// Used with [`HFRepository::create_commit`]. Prefer the upload/delete
+/// convenience helpers when you only need a single common operation.
 #[derive(TypedBuilder)]
 pub struct RepoCreateCommitParams {
-    /// List of file operations (additions, deletions, copies) to include in the commit.
+    /// List of file operations to include in the commit.
     pub operations: Vec<CommitOperation>,
     /// Commit message.
     #[builder(setter(into))]

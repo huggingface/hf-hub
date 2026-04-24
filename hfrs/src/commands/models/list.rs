@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::repo::ListModelsParams;
+use hf_hub::repository::ListModelsParams;
 use serde_json::json;
 
 use crate::cli::OutputFormat;
@@ -59,7 +59,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         limit: Some(args.limit),
     };
 
-    let stream = client.list_models(&params)?;
+    let stream = client.list_models(params)?;
     futures::pin_mut!(stream);
 
     let mut models = Vec::new();

@@ -12,14 +12,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
-use hf_hub::files::{
-    AddSource, CommitOperation, RepoCreateCommitParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
-    RepoSnapshotDownloadParams, RepoUploadFileParams,
-};
 use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
-use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
-use hf_hub::test_utils::*;
+use hf_hub::repository::{
+    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, RepoCreateCommitParams, RepoDownloadFileParams,
+    RepoDownloadFileStreamParams, RepoSnapshotDownloadParams, RepoUploadFileParams,
+};
 use hf_hub::{HFClient, HFClientBuilder, HFRepository};
+use integration_tests::test_utils::*;
 use sha2::{Digest, Sha256};
 
 fn prod_api() -> Option<HFClient> {
@@ -70,13 +69,13 @@ async fn create_test_repo(client: &HFClient) -> String {
         .private(true)
         .exist_ok(false)
         .build();
-    client.create_repo(&params).await.expect("create_repo failed");
+    client.create_repo(params).await.expect("create_repo failed");
     repo_id
 }
 
 async fn delete_test_repo(client: &HFClient, repo_id: &str) {
     let params = DeleteRepoParams::builder().repo_id(repo_id).build();
-    let _ = client.delete_repo(&params).await;
+    let _ = client.delete_repo(params).await;
 }
 
 const TEST_MODEL_PARTS: (&str, &str) = ("hf-internal-testing", "tiny-gemma3");
@@ -98,7 +97,7 @@ async fn test_download_small_json_file() {
 
     let path = model(&client, owner, name)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(dir.path().to_path_buf())
                 .build(),
@@ -120,7 +119,7 @@ async fn test_download_preserves_subdirectory_structure() {
 
     let path = model(&client, owner, name)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(dir.path().to_path_buf())
                 .build(),
@@ -140,7 +139,7 @@ async fn test_download_with_specific_revision() {
 
     let path = model(&client, owner, name)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(dir.path().to_path_buf())
                 .revision("main")
@@ -163,7 +162,7 @@ async fn test_download_dataset_file() {
 
     let path = dataset(&client, owner, name)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("README.md")
                 .local_dir(dir.path().to_path_buf())
                 .build(),
@@ -184,7 +183,7 @@ async fn test_download_nonexistent_file_returns_error() {
 
     let result = model(&client, owner, name)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("this_file_does_not_exist_at_all.bin")
                 .local_dir(dir.path().to_path_buf())
                 .build(),
@@ -201,7 +200,7 @@ async fn test_download_from_nonexistent_repo_returns_error() {
 
     let result = model(&client, "this-user-does-not-exist-99999", "this-repo-does-not-exist")
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("anything.txt")
                 .local_dir(dir.path().to_path_buf())
                 .build(),
@@ -221,7 +220,7 @@ async fn test_download_multiple_files_to_same_dir() {
     for filename in &["config.json", "README.md"] {
         let path = repo
             .download_file(
-                &RepoDownloadFileParams::builder()
+                RepoDownloadFileParams::builder()
                     .filename(*filename)
                     .local_dir(dir.path().to_path_buf())
                     .build(),
@@ -245,7 +244,7 @@ async fn test_download_file_content_is_deterministic() {
 
     for dir in [&dir1, &dir2] {
         repo.download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(dir.path().to_path_buf())
                 .build(),
@@ -273,7 +272,7 @@ async fn test_download_overwrites_existing_file() {
 
     model(&client, owner, name)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(dir.path().to_path_buf())
                 .build(),
@@ -295,7 +294,7 @@ async fn test_download_stream_full_file() {
     let repo = model(&client, owner, name);
 
     let (content_length, stream) = repo
-        .download_file_stream(&RepoDownloadFileStreamParams::builder().filename("config.json").build())
+        .download_file_stream(RepoDownloadFileStreamParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -320,7 +319,7 @@ async fn test_download_stream_range_first_bytes() {
     // Download just the first 20 bytes
     let (content_length, stream) = repo
         .download_file_stream(
-            &RepoDownloadFileStreamParams::builder()
+            RepoDownloadFileStreamParams::builder()
                 .filename("config.json")
                 .range(0..20u64)
                 .build(),
@@ -346,7 +345,7 @@ async fn test_download_stream_range_middle_bytes() {
 
     // First download the full file for comparison
     let (_len, full_stream) = repo
-        .download_file_stream(&RepoDownloadFileStreamParams::builder().filename("config.json").build())
+        .download_file_stream(RepoDownloadFileStreamParams::builder().filename("config.json").build())
         .await
         .unwrap();
     futures::pin_mut!(full_stream);
@@ -360,7 +359,7 @@ async fn test_download_stream_range_middle_bytes() {
     let end = 50u64;
     let (_len, range_stream) = repo
         .download_file_stream(
-            &RepoDownloadFileStreamParams::builder()
+            RepoDownloadFileStreamParams::builder()
                 .filename("config.json")
                 .range(start..end)
                 .build(),
@@ -388,7 +387,7 @@ async fn test_download_stream_range_content_matches_full_download() {
     // Download full file to disk for reference
     let path = repo
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(dir.path().to_path_buf())
                 .build(),
@@ -401,7 +400,7 @@ async fn test_download_stream_range_content_matches_full_download() {
     let range_end = 100u64.min(full_bytes.len() as u64);
     let (_len, stream) = repo
         .download_file_stream(
-            &RepoDownloadFileStreamParams::builder()
+            RepoDownloadFileStreamParams::builder()
                 .filename("config.json")
                 .range(0..range_end)
                 .build(),
@@ -457,7 +456,7 @@ async fn test_download_file_with_progress_to_local_dir() {
         .progress(Some(handler.clone()))
         .build();
 
-    let path = repo.download_file(&params).await.unwrap();
+    let path = repo.download_file(params).await.unwrap();
     assert!(path.exists());
 
     let events = handler.events();
@@ -507,7 +506,7 @@ async fn test_download_file_with_progress_to_cache() {
         .progress(Some(handler.clone()))
         .build();
 
-    let path = repo.download_file(&params).await.unwrap();
+    let path = repo.download_file(params).await.unwrap();
     assert!(path.exists());
 
     let events = handler.events();
@@ -535,7 +534,7 @@ async fn test_download_with_no_progress_handler() {
         .local_dir(dir.path().to_path_buf())
         .build();
 
-    let path = repo.download_file(&params).await.unwrap();
+    let path = repo.download_file(params).await.unwrap();
     assert!(path.exists());
 }
 
@@ -559,7 +558,7 @@ async fn test_upload_file_with_progress() {
 
     let result = repo
         .upload_file(
-            &RepoUploadFileParams::builder()
+            RepoUploadFileParams::builder()
                 .source(AddSource::Bytes(b"hello from progress test".to_vec()))
                 .path_in_repo("progress_test.txt")
                 .commit_message("upload with progress tracking")
@@ -605,16 +604,10 @@ async fn test_create_commit_with_progress_multiple_files() {
 
     let result = repo
         .create_commit(
-            &RepoCreateCommitParams::builder()
+            RepoCreateCommitParams::builder()
                 .operations(vec![
-                    CommitOperation::Add {
-                        path_in_repo: "file_a.txt".to_string(),
-                        source: AddSource::Bytes(b"content a".to_vec()),
-                    },
-                    CommitOperation::Add {
-                        path_in_repo: "file_b.txt".to_string(),
-                        source: AddSource::Bytes(b"content b".to_vec()),
-                    },
+                    CommitOperation::add_bytes("file_a.txt", b"content a".to_vec()),
+                    CommitOperation::add_bytes("file_b.txt", b"content b".to_vec()),
                 ])
                 .commit_message("multi-file commit with progress")
                 .progress(Some(handler.clone()))
@@ -657,7 +650,7 @@ async fn test_upload_with_no_progress_handler() {
 
     let result = repo
         .upload_file(
-            &RepoUploadFileParams::builder()
+            RepoUploadFileParams::builder()
                 .source(AddSource::Bytes(b"no handler test".to_vec()))
                 .path_in_repo("no_handler.txt")
                 .commit_message("upload without progress handler")
@@ -685,7 +678,7 @@ async fn test_snapshot_download_exactly_one_complete_per_file() {
         .progress(Some(handler.clone()))
         .build();
 
-    repo.snapshot_download(&params).await.unwrap();
+    repo.snapshot_download(params).await.unwrap();
 
     let events = handler.events();
 

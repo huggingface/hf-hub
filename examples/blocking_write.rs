@@ -6,14 +6,11 @@
 //! Run: cargo run -p examples --features blocking --example blocking_write
 
 use hf_hub::HFClientSync;
-use hf_hub::commits::{
-    RepoCreateBranchParams, RepoCreateTagParams, RepoDeleteBranchParams, RepoDeleteTagParams, RepoListRefsParams,
+use hf_hub::repository::{
+    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, RepoCreateBranchParams, RepoCreateCommitParams,
+    RepoCreateTagParams, RepoDeleteBranchParams, RepoDeleteFileParams, RepoDeleteTagParams, RepoDownloadFileParams,
+    RepoFileExistsParams, RepoListFilesParams, RepoListRefsParams, RepoUploadFileParams, RepoUploadFolderParams,
 };
-use hf_hub::files::{
-    AddSource, CommitOperation, RepoCreateCommitParams, RepoDeleteFileParams, RepoDownloadFileParams,
-    RepoListFilesParams, RepoUploadFileParams, RepoUploadFolderParams,
-};
-use hf_hub::repo::{CreateRepoParams, DeleteRepoParams, RepoFileExistsParams};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
@@ -24,7 +21,7 @@ fn main() -> hf_hub::HFResult<()> {
     // --- Create repo ---
 
     let repo_url = client.create_repo(
-        &CreateRepoParams::builder()
+        CreateRepoParams::builder()
             .repo_id(repo.repo_path())
             .private(true)
             .exist_ok(true)
@@ -35,7 +32,7 @@ fn main() -> hf_hub::HFResult<()> {
     // --- Upload a single file ---
 
     let commit = repo.upload_file(
-        &RepoUploadFileParams::builder()
+        RepoUploadFileParams::builder()
             .source(AddSource::Bytes(b"Hello from HFClientSync!".to_vec()))
             .path_in_repo("hello.txt")
             .commit_message("Add hello.txt")
@@ -46,16 +43,10 @@ fn main() -> hf_hub::HFResult<()> {
     // --- Create a multi-file commit ---
 
     let commit = repo.create_commit(
-        &RepoCreateCommitParams::builder()
+        RepoCreateCommitParams::builder()
             .operations(vec![
-                CommitOperation::Add {
-                    path_in_repo: "data/file1.txt".to_string(),
-                    source: AddSource::Bytes(b"File 1 content".to_vec()),
-                },
-                CommitOperation::Add {
-                    path_in_repo: "data/file2.txt".to_string(),
-                    source: AddSource::Bytes(b"File 2 content".to_vec()),
-                },
+                CommitOperation::add_bytes("data/file1.txt", b"File 1 content".to_vec()),
+                CommitOperation::add_bytes("data/file2.txt", b"File 2 content".to_vec()),
             ])
             .commit_message("Add data files")
             .build(),
@@ -70,7 +61,7 @@ fn main() -> hf_hub::HFResult<()> {
     std::fs::write(tmp_dir.path().join("subdir/nested.txt"), "nested file").unwrap();
 
     let commit = repo.upload_folder(
-        &RepoUploadFolderParams::builder()
+        RepoUploadFolderParams::builder()
             .folder_path(tmp_dir.path().to_path_buf())
             .path_in_repo("uploaded")
             .commit_message("Upload folder")
@@ -80,7 +71,7 @@ fn main() -> hf_hub::HFResult<()> {
 
     // --- List files ---
 
-    let files = repo.list_files(&RepoListFilesParams::default())?;
+    let files = repo.list_files(RepoListFilesParams::default())?;
     println!("\nAll files in repo:");
     for f in &files {
         println!("  - {f}");
@@ -90,7 +81,7 @@ fn main() -> hf_hub::HFResult<()> {
 
     let download_dir = tempfile::tempdir().expect("failed to create tempdir");
     let path = repo.download_file(
-        &RepoDownloadFileParams::builder()
+        RepoDownloadFileParams::builder()
             .filename("hello.txt")
             .local_dir(download_dir.path().to_path_buf())
             .build(),
@@ -100,29 +91,29 @@ fn main() -> hf_hub::HFResult<()> {
 
     // --- Branch and tag management ---
 
-    repo.create_branch(&RepoCreateBranchParams::builder().branch("dev").build())?;
+    repo.create_branch(RepoCreateBranchParams::builder().branch("dev").build())?;
     println!("\nCreated branch 'dev'");
 
-    repo.create_tag(&RepoCreateTagParams::builder().tag("v1.0").message("First release").build())?;
+    repo.create_tag(RepoCreateTagParams::builder().tag("v1.0").message("First release").build())?;
     println!("Created tag 'v1.0'");
 
-    let refs = repo.list_refs(&RepoListRefsParams::default())?;
+    let refs = repo.list_refs(RepoListRefsParams::default())?;
     println!("Branches: {:?}", refs.branches.iter().map(|b| &b.name).collect::<Vec<_>>());
     println!("Tags: {:?}", refs.tags.iter().map(|t| &t.name).collect::<Vec<_>>());
 
-    repo.delete_tag(&RepoDeleteTagParams::builder().tag("v1.0").build())?;
-    repo.delete_branch(&RepoDeleteBranchParams::builder().branch("dev").build())?;
+    repo.delete_tag(RepoDeleteTagParams::builder().tag("v1.0").build())?;
+    repo.delete_branch(RepoDeleteBranchParams::builder().branch("dev").build())?;
     println!("Cleaned up branch and tag");
 
     // --- Delete a file ---
 
-    repo.delete_file(&RepoDeleteFileParams::builder().path_in_repo("hello.txt").build())?;
-    let gone = !repo.file_exists(&RepoFileExistsParams::builder().filename("hello.txt").build())?;
+    repo.delete_file(RepoDeleteFileParams::builder().path_in_repo("hello.txt").build())?;
+    let gone = !repo.file_exists(RepoFileExistsParams::builder().filename("hello.txt").build())?;
     println!("\nhello.txt deleted: {gone}");
 
     // --- Clean up ---
 
-    client.delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())?;
+    client.delete_repo(DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())?;
     println!("Deleted repo");
 
     Ok(())

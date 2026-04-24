@@ -1,19 +1,25 @@
-//! Commits component: commit history, git refs (branches/tags/converts/PRs),
-//! and diff types plus the raw-diff line parser. Hosts the repo-scoped
-//! list/create/delete methods for commits, branches, tags, and revision
-//! comparison.
+//! Commit history, refs, and revision comparison helpers for repositories.
+//!
+//! This module groups three related workflows:
+//!
+//! - Use [`HFRepository::list_commits`] to walk commit history and [`HFRepository::list_refs`] to inspect branches,
+//!   tags, convert refs, and optional pull-request refs.
+//! - Use [`HFRepository::get_commit_diff`] for the Hub's non-raw compare payload as text.
+//! - Use [`HFRepository::get_raw_diff`] for the full raw diff text, or [`HFRepository::get_raw_diff_stream`] to parse
+//!   that raw diff incrementally into [`HFFileDiff`] entries.
+//!
+//! The same module also hosts branch and tag creation/deletion helpers because
+//! they operate on the same repository revision namespace.
 
-pub mod diff;
-
-pub use diff::{GitStatus, HFDiffParseError, HFFileDiff};
 use futures::TryStreamExt;
 use futures::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use typed_builder::TypedBuilder;
 use url::Url;
 
+use super::HFRepository;
+use super::diff::{self, HFFileDiff};
 use crate::error::HFResult;
-use crate::repo::HFRepository;
 use crate::{constants, retry};
 
 /// Author entry attached to a commit, as returned by the commit history endpoint.
@@ -22,8 +28,11 @@ use crate::{constants, retry};
 /// (a linked Hub user, or the raw git name/email).
 #[derive(Debug, Clone, Deserialize)]
 pub struct CommitAuthor {
+    /// Hub username, when the commit author is linked to a Hub account.
     pub user: Option<String>,
+    /// Git author name as recorded on the commit.
     pub name: Option<String>,
+    /// Git author email as recorded on the commit.
     pub email: Option<String>,
 }
 
@@ -32,11 +41,17 @@ pub struct CommitAuthor {
 /// Returned by [`HFRepository::list_commits`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitCommitInfo {
+    /// Full commit SHA.
     pub id: String,
+    /// Commit authors as returned by the Hub.
     pub authors: Vec<CommitAuthor>,
+    /// Commit timestamp in ISO 8601 format, when available.
     pub date: Option<String>,
+    /// Commit title/summary line.
     pub title: String,
+    /// Full commit message.
     pub message: String,
+    /// Parent commit SHAs.
     #[serde(default)]
     pub parents: Vec<String>,
 }
@@ -45,9 +60,12 @@ pub struct GitCommitInfo {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRefInfo {
+    /// Short ref name such as `"main"` or `"v1.0.0"`.
     pub name: String,
+    /// Full git ref name such as `"refs/heads/main"`.
     #[serde(rename = "ref")]
     pub git_ref: String,
+    /// Commit SHA the ref currently points to.
     pub target_commit: String,
 }
 
@@ -57,20 +75,30 @@ pub struct GitRefInfo {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRefs {
+    /// Branch refs on the repository.
     pub branches: Vec<GitRefInfo>,
+    /// Tag refs on the repository.
     pub tags: Vec<GitRefInfo>,
+    /// Convert refs exposed by the Hub, when present.
     #[serde(default)]
     pub converts: Vec<GitRefInfo>,
+    /// Pull-request refs, only populated when requested.
     #[serde(default, rename = "pullRequests")]
     pub pull_requests: Vec<GitRefInfo>,
 }
 
-/// A single entry in a commit diff
+/// A single file entry in the Hub's non-raw compare payload.
+///
+/// This type is useful if you want to deserialize the response body returned by
+/// [`HFRepository::get_commit_diff`] yourself.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffEntry {
+    /// Destination path for the changed file, when present.
     pub path: Option<String>,
+    /// Previous path for renames or moves, when present.
     pub old_path: Option<String>,
+    /// Hub-provided status string for the change.
     pub status: Option<String>,
 }
 
@@ -97,7 +125,8 @@ pub struct RepoListRefsParams {
     pub include_pull_requests: bool,
 }
 
-/// Parameters for fetching the parsed diff between a revision and its parent.
+/// Parameters for fetching the Hub's non-raw compare payload between a revision
+/// and its parent.
 ///
 /// Used with [`HFRepository::get_commit_diff`].
 #[derive(TypedBuilder)]
@@ -174,7 +203,7 @@ impl HFRepository {
     /// the total number of commits yielded.
     pub fn list_commits(
         &self,
-        params: &RepoListCommitsParams,
+        params: RepoListCommitsParams,
     ) -> HFResult<impl Stream<Item = HFResult<GitCommitInfo>> + '_> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url_str =
@@ -183,9 +212,14 @@ impl HFRepository {
         Ok(self.hf_client.paginate(url, vec![], params.limit))
     }
 
-    /// Fetch all branches, tags, and optionally pull request refs for the repository.
+    /// Fetch all branches, tags, and optionally pull request refs for the
+    /// repository.
+    ///
+    /// Pull-request refs are omitted unless
+    /// [`RepoListRefsParams::include_pull_requests`] is enabled.
+    ///
     /// Endpoint: GET /api/{repo_type}s/{repo_id}/refs
-    pub async fn list_refs(&self, params: &RepoListRefsParams) -> HFResult<GitRefs> {
+    pub async fn list_refs(&self, params: RepoListRefsParams) -> HFResult<GitRefs> {
         let url = format!("{}/refs", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()));
         let mut query: Vec<(&str, String)> = Vec::new();
         if params.include_pull_requests {
@@ -211,9 +245,15 @@ impl HFRepository {
         Ok(response.json().await?)
     }
 
-    /// Fetch a structured diff between two revisions (HEAD..compare or a commit SHA).
+    /// Fetch the Hub's non-raw compare payload as text.
+    ///
+    /// This returns the response body from the standard `/compare/{compare}`
+    /// endpoint. Use [`HFRepository::get_raw_diff`] if you need raw git-style
+    /// diff text, or [`HFRepository::get_raw_diff_stream`] if you want parsed
+    /// [`HFFileDiff`] entries.
+    ///
     /// Endpoint: GET /api/{repo_type}s/{repo_id}/compare/{compare}
-    pub async fn get_commit_diff(&self, params: &RepoGetCommitDiffParams) -> HFResult<String> {
+    pub async fn get_commit_diff(&self, params: RepoGetCommitDiffParams) -> HFResult<String> {
         let url =
             format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
 
@@ -231,9 +271,13 @@ impl HFRepository {
         Ok(response.text().await?)
     }
 
-    /// Fetch the raw unified diff between two revisions as a string.
+    /// Fetch the raw diff payload between two revisions as a string.
+    ///
+    /// Prefer [`HFRepository::get_raw_diff_stream`] when you want file-level
+    /// metadata without buffering the entire diff response in memory.
+    ///
     /// Endpoint: GET /api/{repo_type}s/{repo_id}/compare/{compare}?raw=true
-    pub async fn get_raw_diff(&self, params: &RepoGetRawDiffParams) -> HFResult<String> {
+    pub async fn get_raw_diff(&self, params: RepoGetRawDiffParams) -> HFResult<String> {
         let url =
             format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
 
@@ -264,7 +308,7 @@ impl HFRepository {
     /// Endpoint: GET /api/{repo_type}s/{repo_id}/compare/{compare}?raw=true
     pub async fn get_raw_diff_stream(
         &self,
-        params: &RepoGetRawDiffParams,
+        params: RepoGetRawDiffParams,
     ) -> HFResult<impl Stream<Item = HFResult<HFFileDiff>> + '_> {
         let url =
             format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
@@ -291,7 +335,7 @@ impl HFRepository {
 
     /// Create a new branch, optionally starting from a specific revision.
     /// Endpoint: POST /api/{repo_type}s/{repo_id}/branch/{branch}
-    pub async fn create_branch(&self, params: &RepoCreateBranchParams) -> HFResult<()> {
+    pub async fn create_branch(&self, params: RepoCreateBranchParams) -> HFResult<()> {
         let url =
             format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.branch);
 
@@ -320,7 +364,7 @@ impl HFRepository {
 
     /// Delete a branch from the repository.
     /// Endpoint: DELETE /api/{repo_type}s/{repo_id}/branch/{branch}
-    pub async fn delete_branch(&self, params: &RepoDeleteBranchParams) -> HFResult<()> {
+    pub async fn delete_branch(&self, params: RepoDeleteBranchParams) -> HFResult<()> {
         let url =
             format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.branch);
 
@@ -339,7 +383,7 @@ impl HFRepository {
 
     /// Create a lightweight or annotated tag, optionally at a specific revision.
     /// Endpoint: POST /api/{repo_type}s/{repo_id}/tag/{revision}
-    pub async fn create_tag(&self, params: &RepoCreateTagParams) -> HFResult<()> {
+    pub async fn create_tag(&self, params: RepoCreateTagParams) -> HFResult<()> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = format!("{}/tag/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
 
@@ -368,7 +412,7 @@ impl HFRepository {
 
     /// Delete a tag from the repository.
     /// Endpoint: DELETE /api/{repo_type}s/{repo_id}/tag/{tag}
-    pub async fn delete_tag(&self, params: &RepoDeleteTagParams) -> HFResult<()> {
+    pub async fn delete_tag(&self, params: RepoDeleteTagParams) -> HFResult<()> {
         let url = format!("{}/tag/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.tag);
 
         let headers = self.hf_client.auth_headers();
@@ -387,24 +431,24 @@ impl HFRepository {
 
 sync_api! {
     impl HFRepository -> HFRepositorySync {
-        fn list_refs(&self, params: &RepoListRefsParams) -> HFResult<GitRefs>;
-        fn get_commit_diff(&self, params: &RepoGetCommitDiffParams) -> HFResult<String>;
-        fn get_raw_diff(&self, params: &RepoGetRawDiffParams) -> HFResult<String>;
-        fn create_branch(&self, params: &RepoCreateBranchParams) -> HFResult<()>;
-        fn delete_branch(&self, params: &RepoDeleteBranchParams) -> HFResult<()>;
-        fn create_tag(&self, params: &RepoCreateTagParams) -> HFResult<()>;
-        fn delete_tag(&self, params: &RepoDeleteTagParams) -> HFResult<()>;
+        fn list_refs(&self, params: RepoListRefsParams) -> HFResult<GitRefs>;
+        fn get_commit_diff(&self, params: RepoGetCommitDiffParams) -> HFResult<String>;
+        fn get_raw_diff(&self, params: RepoGetRawDiffParams) -> HFResult<String>;
+        fn create_branch(&self, params: RepoCreateBranchParams) -> HFResult<()>;
+        fn delete_branch(&self, params: RepoDeleteBranchParams) -> HFResult<()>;
+        fn create_tag(&self, params: RepoCreateTagParams) -> HFResult<()>;
+        fn delete_tag(&self, params: RepoDeleteTagParams) -> HFResult<()>;
     }
 }
 
 sync_api_stream! {
     impl HFRepository -> HFRepositorySync {
-        fn list_commits(&self, params: &RepoListCommitsParams) -> GitCommitInfo;
+        fn list_commits(&self, params: RepoListCommitsParams) -> GitCommitInfo;
     }
 }
 
 sync_api_async_stream! {
     impl HFRepository -> HFRepositorySync {
-        fn get_raw_diff_stream(&self, params: &RepoGetRawDiffParams) -> HFFileDiff;
+        fn get_raw_diff_stream(&self, params: RepoGetRawDiffParams) -> HFFileDiff;
     }
 }

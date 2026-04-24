@@ -1,11 +1,33 @@
 //! Repository component: the [`HFRepository`] handle, repo-scoped parameter
 //! structs, repo metadata types, and the client-level list/create/delete/move
 //! repo APIs. All repo-bound operations (info, existence checks, settings
-//! updates) live as methods on [`HFRepository`].
+//! updates, file listing/download/upload, commits, branches, tags, and diffs)
+//! live as methods on [`HFRepository`].
+
+mod commits;
+mod diff;
+mod download;
+mod files;
+mod listing;
+mod upload;
 
 use std::fmt;
 use std::str::FromStr;
 
+pub use commits::{
+    CommitAuthor, DiffEntry, GitCommitInfo, GitRefInfo, GitRefs, RepoCreateBranchParams, RepoCreateTagParams,
+    RepoDeleteBranchParams, RepoDeleteTagParams, RepoGetCommitDiffParams, RepoGetRawDiffParams, RepoListCommitsParams,
+    RepoListRefsParams,
+};
+pub use diff::{GitStatus, HFDiffParseError, HFFileDiff};
+pub use files::{
+    AddSource, BlobLfsInfo, CommitInfo, CommitOperation, FileMetadataInfo, LastCommitInfo, RepoCreateCommitParams,
+    RepoDeleteFileParams, RepoDeleteFolderParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
+    RepoDownloadFileStreamParamsBuilder, RepoDownloadFileToBytesParams, RepoDownloadFileToBytesParamsBuilder,
+    RepoGetFileMetadataParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams,
+    RepoSnapshotDownloadParams, RepoTreeEntry, RepoUploadFileParams, RepoUploadFolderParams,
+};
+pub(crate) use files::{extract_file_size, extract_xet_hash};
 use futures::Stream;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
@@ -15,9 +37,6 @@ use url::Url;
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
-
-/// Alias for [`HFRepository`].
-pub type HFRepo = HFRepository;
 
 /// The kind of repository on the Hugging Face Hub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,7 +83,7 @@ pub enum RepoInfo {
 pub struct RepoSibling {
     pub rfilename: String,
     pub size: Option<u64>,
-    pub lfs: Option<crate::files::BlobLfsInfo>,
+    pub lfs: Option<files::BlobLfsInfo>,
 }
 
 /// Metadata for a model repository on the Hub.
@@ -184,7 +203,7 @@ pub struct RepoUrl {
 /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 /// let client = HFClient::builder().build()?;
 /// let repo = client.model("openai-community", "gpt2");
-/// let info = repo.info(&Default::default()).await?;
+/// let info = repo.info(Default::default()).await?;
 /// # Ok(()) }
 /// ```
 #[derive(Clone)]
@@ -514,7 +533,7 @@ impl HFClient {
 
     /// List models on the Hub.
     /// Endpoint: GET /api/models
-    pub fn list_models(&self, params: &ListModelsParams) -> HFResult<impl Stream<Item = HFResult<ModelInfo>> + '_> {
+    pub fn list_models(&self, params: ListModelsParams) -> HFResult<impl Stream<Item = HFResult<ModelInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/models", self.endpoint()))?;
         let mut query: Vec<(String, String)> = Vec::new();
         if let Some(ref search) = params.search {
@@ -555,7 +574,7 @@ impl HFClient {
     /// Endpoint: GET /api/datasets
     pub fn list_datasets(
         &self,
-        params: &ListDatasetsParams,
+        params: ListDatasetsParams,
     ) -> HFResult<impl Stream<Item = HFResult<DatasetInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/datasets", self.endpoint()))?;
         let mut query: Vec<(String, String)> = Vec::new();
@@ -586,7 +605,7 @@ impl HFClient {
 
     /// List spaces on the Hub.
     /// Endpoint: GET /api/spaces
-    pub fn list_spaces(&self, params: &ListSpacesParams) -> HFResult<impl Stream<Item = HFResult<SpaceInfo>> + '_> {
+    pub fn list_spaces(&self, params: ListSpacesParams) -> HFResult<impl Stream<Item = HFResult<SpaceInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/spaces", self.endpoint()))?;
         let mut query: Vec<(String, String)> = Vec::new();
         if let Some(ref search) = params.search {
@@ -616,7 +635,7 @@ impl HFClient {
 
     /// Create a new repository.
     /// Endpoint: POST /api/repos/create
-    pub async fn create_repo(&self, params: &CreateRepoParams) -> HFResult<RepoUrl> {
+    pub async fn create_repo(&self, params: CreateRepoParams) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/create", self.endpoint());
 
         let (namespace, name) = split_repo_id(&params.repo_id);
@@ -658,7 +677,7 @@ impl HFClient {
 
     /// Delete a repository.
     /// Endpoint: DELETE /api/repos/delete
-    pub async fn delete_repo(&self, params: &DeleteRepoParams) -> HFResult<()> {
+    pub async fn delete_repo(&self, params: DeleteRepoParams) -> HFResult<()> {
         let url = format!("{}/api/repos/delete", self.endpoint());
 
         let (namespace, name) = split_repo_id(&params.repo_id);
@@ -688,7 +707,7 @@ impl HFClient {
 
     /// Move (rename) a repository.
     /// Endpoint: POST /api/repos/move
-    pub async fn move_repo(&self, params: &MoveRepoParams) -> HFResult<RepoUrl> {
+    pub async fn move_repo(&self, params: MoveRepoParams) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/move", self.endpoint());
         let mut body = serde_json::json!({
             "fromRepo": params.from_id,
@@ -756,7 +775,7 @@ impl HFRepository {
     }
 
     /// Fetch repository metadata, returning the appropriate [`RepoInfo`] variant.
-    pub async fn info(&self, params: &RepoInfoParams) -> HFResult<RepoInfo> {
+    pub async fn info(&self, params: RepoInfoParams) -> HFResult<RepoInfo> {
         match self.repo_type {
             RepoType::Model => self
                 .model_info(params.revision.clone(), params.expand.clone())
@@ -839,24 +858,17 @@ impl HFRepository {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()
         })
         .await?;
-        match response.status().as_u16() {
-            200..=299 => Ok(true),
-            404 => Ok(false),
-            401 => Err(HFError::AuthRequired),
-            status => {
-                let url = response.url().to_string();
-                let body = response.text().await.unwrap_or_default();
-                Err(HFError::Http {
-                    status: reqwest::StatusCode::from_u16(status).unwrap(),
-                    url,
-                    body,
-                })
-            },
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
         }
+        self.hf_client
+            .check_response(response, Some(&self.repo_path()), crate::error::NotFoundContext::Generic)
+            .await?;
+        Ok(true)
     }
 
     /// Return `true` if the given revision (branch, tag, or commit SHA) exists.
-    pub async fn revision_exists(&self, params: &RepoRevisionExistsParams) -> HFResult<bool> {
+    pub async fn revision_exists(&self, params: RepoRevisionExistsParams) -> HFResult<bool> {
         let url =
             format!("{}/revision/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.revision);
         let headers = self.hf_client.auth_headers();
@@ -864,24 +876,17 @@ impl HFRepository {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()
         })
         .await?;
-        match response.status().as_u16() {
-            200..=299 => Ok(true),
-            404 => Ok(false),
-            401 => Err(HFError::AuthRequired),
-            status => {
-                let url_str = response.url().to_string();
-                let body = response.text().await.unwrap_or_default();
-                Err(HFError::Http {
-                    status: reqwest::StatusCode::from_u16(status).unwrap(),
-                    url: url_str,
-                    body,
-                })
-            },
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
         }
+        self.hf_client
+            .check_response(response, Some(&self.repo_path()), crate::error::NotFoundContext::Generic)
+            .await?;
+        Ok(true)
     }
 
     /// Return `true` if the given file exists in the repository at the specified revision.
-    pub async fn file_exists(&self, params: &RepoFileExistsParams) -> HFResult<bool> {
+    pub async fn file_exists(&self, params: RepoFileExistsParams) -> HFResult<bool> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = self
             .hf_client
@@ -891,38 +896,29 @@ impl HFRepository {
             self.hf_client.http_client().head(&url).headers(headers.clone()).send()
         })
         .await?;
-        match response.status().as_u16() {
-            200..=299 => Ok(true),
-            404 => {
-                if self
-                    .revision_exists(&RepoRevisionExistsParams::builder().revision(revision.to_string()).build())
-                    .await?
-                {
-                    Ok(false)
-                } else {
-                    Err(HFError::RevisionNotFound {
-                        repo_id: self.repo_path(),
-                        revision: revision.to_string(),
-                    })
-                }
-            },
-            401 => Err(HFError::AuthRequired),
-            status => {
-                let url_str = response.url().to_string();
-                let body = response.text().await.unwrap_or_default();
-                Err(HFError::Http {
-                    status: reqwest::StatusCode::from_u16(status).unwrap(),
-                    url: url_str,
-                    body,
-                })
-            },
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            if self
+                .revision_exists(RepoRevisionExistsParams::builder().revision(revision.to_string()).build())
+                .await?
+            {
+                return Ok(false);
+            }
+            return Err(HFError::RevisionNotFound {
+                repo_id: self.repo_path(),
+                revision: revision.to_string(),
+                context: None,
+            });
         }
+        self.hf_client
+            .check_response(response, Some(&self.repo_path()), crate::error::NotFoundContext::Generic)
+            .await?;
+        Ok(true)
     }
 
     /// Update repository settings such as visibility, gating policy, description,
     /// discussion settings, and gated notification preferences.
     /// Endpoint: PUT /api/{repo_type}s/{repo_id}/settings
-    pub async fn update_settings(&self, params: &RepoUpdateSettingsParams) -> HFResult<()> {
+    pub async fn update_settings(&self, params: RepoUpdateSettingsParams) -> HFResult<()> {
         let url = format!("{}/settings", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()));
         let headers = self.hf_client.auth_headers();
 
@@ -931,7 +927,7 @@ impl HFRepository {
                 .http_client()
                 .put(&url)
                 .headers(headers.clone())
-                .json(params)
+                .json(&params)
                 .send()
         })
         .await?;
@@ -954,27 +950,27 @@ fn split_repo_id(repo_id: &str) -> (Option<&str>, &str) {
 
 sync_api! {
     impl HFClient -> HFClientSync {
-        fn create_repo(&self, params: &CreateRepoParams) -> HFResult<RepoUrl>;
-        fn delete_repo(&self, params: &DeleteRepoParams) -> HFResult<()>;
-        fn move_repo(&self, params: &MoveRepoParams) -> HFResult<RepoUrl>;
+        fn create_repo(&self, params: CreateRepoParams) -> HFResult<RepoUrl>;
+        fn delete_repo(&self, params: DeleteRepoParams) -> HFResult<()>;
+        fn move_repo(&self, params: MoveRepoParams) -> HFResult<RepoUrl>;
     }
 }
 
 sync_api_stream! {
     impl HFClient -> HFClientSync {
-        fn list_models(&self, params: &ListModelsParams) -> ModelInfo;
-        fn list_datasets(&self, params: &ListDatasetsParams) -> DatasetInfo;
-        fn list_spaces(&self, params: &ListSpacesParams) -> SpaceInfo;
+        fn list_models(&self, params: ListModelsParams) -> ModelInfo;
+        fn list_datasets(&self, params: ListDatasetsParams) -> DatasetInfo;
+        fn list_spaces(&self, params: ListSpacesParams) -> SpaceInfo;
     }
 }
 
 sync_api! {
     impl HFRepository -> HFRepositorySync {
-        fn info(&self, params: &RepoInfoParams) -> HFResult<RepoInfo>;
+        fn info(&self, params: RepoInfoParams) -> HFResult<RepoInfo>;
         fn exists(&self) -> HFResult<bool>;
-        fn revision_exists(&self, params: &RepoRevisionExistsParams) -> HFResult<bool>;
-        fn file_exists(&self, params: &RepoFileExistsParams) -> HFResult<bool>;
-        fn update_settings(&self, params: &RepoUpdateSettingsParams) -> HFResult<()>;
+        fn revision_exists(&self, params: RepoRevisionExistsParams) -> HFResult<bool>;
+        fn file_exists(&self, params: RepoFileExistsParams) -> HFResult<bool>;
+        fn update_settings(&self, params: RepoUpdateSettingsParams) -> HFResult<()>;
     }
 }
 
@@ -1026,7 +1022,7 @@ mod tests {
     async fn test_list_models_limit_zero_returns_empty() {
         let client = HFClient::builder().build().unwrap();
         let params = ListModelsParams::builder().limit(0_usize).build();
-        let stream = client.list_models(&params).unwrap();
+        let stream = client.list_models(params).unwrap();
         futures::pin_mut!(stream);
         assert!(stream.next().await.is_none());
     }
@@ -1035,7 +1031,7 @@ mod tests {
     async fn test_list_datasets_limit_zero_returns_empty() {
         let client = HFClient::builder().build().unwrap();
         let params = ListDatasetsParams::builder().limit(0_usize).build();
-        let stream = client.list_datasets(&params).unwrap();
+        let stream = client.list_datasets(params).unwrap();
         futures::pin_mut!(stream);
         assert!(stream.next().await.is_none());
     }
@@ -1044,7 +1040,7 @@ mod tests {
     async fn test_list_spaces_limit_zero_returns_empty() {
         let client = HFClient::builder().build().unwrap();
         let params = ListSpacesParams::builder().limit(0_usize).build();
-        let stream = client.list_spaces(&params).unwrap();
+        let stream = client.list_spaces(params).unwrap();
         futures::pin_mut!(stream);
         assert!(stream.next().await.is_none());
     }

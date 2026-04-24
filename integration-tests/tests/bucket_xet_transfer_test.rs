@@ -16,8 +16,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::TryStreamExt;
 use hf_hub::buckets::{BucketDownloadFilesParams, BucketTreeEntry, CreateBucketParams, ListBucketTreeParams};
-use hf_hub::test_utils::*;
 use hf_hub::{HFBucket, HFClient, HFClientBuilder};
+use integration_tests::test_utils::*;
 use rand::RngExt;
 use tokio::sync::OnceCell;
 
@@ -58,7 +58,7 @@ async fn create_test_bucket(client: &HFClient, suffix: &str) -> (String, String)
     let name = format!("hfrs-xet-upload-test-{suffix}");
     client
         .create_bucket(
-            &CreateBucketParams::builder()
+            CreateBucketParams::builder()
                 .namespace(&username)
                 .name(&name)
                 .private(true)
@@ -78,9 +78,9 @@ async fn delete_test_bucket(client: &HFClient, namespace: &str, name: &str) {
 /// Poll the bucket tree until `path` is visible — the batch endpoint can
 /// return before the tree index is consistent on the CI backend.
 async fn wait_for_bucket_file(bucket: &HFBucket, path: &str) -> BucketTreeEntry {
-    let params = ListBucketTreeParams::builder().recursive(true).build();
     for _ in 0..40 {
-        let entries: Vec<BucketTreeEntry> = bucket.list_tree(&params).unwrap().try_collect().await.unwrap();
+        let params = ListBucketTreeParams::builder().recursive(true).build();
+        let entries: Vec<BucketTreeEntry> = bucket.list_tree(params).unwrap().try_collect().await.unwrap();
         if let Some(entry) = entries
             .iter()
             .find(|e| matches!(e, BucketTreeEntry::File { path: p, .. } if p == path))
@@ -128,7 +128,7 @@ async fn test_bucket_upload_small_text_file() {
     let dl_dir = tempfile::tempdir().unwrap();
     bucket
         .download_files(
-            &BucketDownloadFilesParams {
+            BucketDownloadFilesParams {
                 files: vec![("greeting.txt".to_string(), dl_dir.path().join("greeting.txt"))],
             },
             &None,
@@ -185,7 +185,7 @@ async fn test_bucket_upload_multiple_files() {
         .map(|(remote, _)| (remote.to_string(), dl_dir.path().join(remote)))
         .collect();
     bucket
-        .download_files(&BucketDownloadFilesParams { files: download_pairs }, &None)
+        .download_files(BucketDownloadFilesParams { files: download_pairs }, &None)
         .await
         .unwrap();
     for (remote, content) in &files {
@@ -229,7 +229,7 @@ async fn test_bucket_upload_large_random_file() {
     let dl_dir = tempfile::tempdir().unwrap();
     bucket
         .download_files(
-            &BucketDownloadFilesParams {
+            BucketDownloadFilesParams {
                 files: vec![("big.bin".to_string(), dl_dir.path().join("big.bin"))],
             },
             &None,
@@ -271,7 +271,7 @@ async fn test_bucket_upload_empty_file() {
     let dl_dir = tempfile::tempdir().unwrap();
     bucket
         .download_files(
-            &BucketDownloadFilesParams {
+            BucketDownloadFilesParams {
                 files: vec![("empty.bin".to_string(), dl_dir.path().join("empty.bin"))],
             },
             &None,

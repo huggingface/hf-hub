@@ -4,9 +4,8 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::files::{AddSource, RepoUploadFileParams, RepoUploadFolderParams};
 use hf_hub::progress::Progress;
-use hf_hub::repo::CreateRepoParams;
+use hf_hub::repository::{AddSource, CreateRepoParams, RepoUploadFileParams, RepoUploadFolderParams};
 use tracing::info;
 
 use crate::cli::RepoTypeArg;
@@ -81,7 +80,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
             exist_ok: true,
             space_sdk: None,
         };
-        client.create_repo(&create_params).await?;
+        client.create_repo(create_params).await?;
     }
 
     let handler: Option<Progress> = if args.quiet {
@@ -109,7 +108,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
             parent_commit: None,
             progress: handler.clone(),
         };
-        repo.upload_file(&params).await?
+        repo.upload_file(params).await?
     } else if local_path.is_dir() {
         let allow_patterns = if !args.include.is_empty() {
             Some(args.include)
@@ -138,7 +137,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
             delete_patterns,
             progress: handler.clone(),
         };
-        repo.upload_folder(&params).await?
+        repo.upload_folder(params).await?
     } else {
         bail!("local path does not exist: {}", local_path.display());
     };

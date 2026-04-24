@@ -51,12 +51,12 @@ These rules apply to ALL code written or modified in this repo:
 
 #### Integration Tests
 
-- Located in `hf-hub/tests/` (`integration_test.rs`, `blocking_test.rs`, `bucket_sync_test.rs`, `bucket_xet_transfer_test.rs`, `cache_test.rs`, `download_test.rs`, `xet_transfer_test.rs`)
+- Located in the `integration-tests` workspace crate, under `integration-tests/tests/` (`integration_test.rs`, `blocking_test.rs`, `bucket_sync_test.rs`, `bucket_xet_transfer_test.rs`, `cache_test.rs`, `download_test.rs`, `xet_transfer_test.rs`). Shared helpers live in `integration-tests/src/test_utils.rs`.
 - Require a valid `HF_TOKEN` environment variable and internet access
 - Tests skip gracefully when `HF_TOKEN` is not set (no failures)
-- Run read-only tests: `HF_TOKEN=HF_xxx cargo test -p hf-hub --tests`
+- Run read-only tests: `HF_TOKEN=HF_xxx cargo test -p integration-tests`
 - Write operation tests (create/delete repos, upload files) require `HF_TEST_WRITE=1`
-- Run all tests including writes: `HF_TOKEN=HF_xxx HF_TEST_WRITE=1 cargo test -p hf-hub --tests`
+- Run all tests including writes: `HF_TOKEN=HF_xxx HF_TEST_WRITE=1 cargo test -p integration-tests`
 
 ### Formatting and Linting
 
@@ -90,32 +90,37 @@ hf-hub/
 │   │   ├── pagination.rs           # Generic paginate<T>() with Link header parsing
 │   │   ├── retry.rs                # Retry logic for transient HTTP failures
 │   │   ├── macros.rs               # sync_api!/sync_api_stream! macros
-│   │   ├── test_utils.rs           # Public test helpers
 │   │   ├── progress.rs             # ProgressEvent, ProgressHandler, Upload/DownloadEvent, FileProgress
-│   │   ├── repo.rs                 # Repo component: HFRepository/HFRepo handles, RepoType, RepoInfo,
-│   │   │                           #   ModelInfo/DatasetInfo/SpaceInfo, list/create/delete/move/update
-│   │   ├── spaces.rs               # Spaces component: HFSpace handle, SpaceRuntime/SpaceVariable,
-│   │   │                           #   Space*Params, runtime/hardware/secrets/variables/duplicate
-│   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
-│   │   │                           #   user+org lookup, followers/following
-│   │   ├── xet.rs                  # Xet component: XetTokenType, GetXetTokenParams, get_xet_token,
-│   │   │                           #   xet transfer plumbing (pub(crate))
-│   │   ├── commits/
-│   │   │   ├── mod.rs              # Git history types/params + list_commits/list_refs/diff/branches/tags
-│   │   │   └── diff.rs             # HFFileDiff, GitStatus, HFDiffParseError, parse_raw_diff, stream_raw_diff
-│   │   ├── files/
-│   │   │   ├── mod.rs              # File types/params: BlobLfsInfo, RepoTreeEntry, FileMetadataInfo,
+│   │   ├── repository/             # Repo component: all HFRepository-bound APIs live here,
+│   │   │   │                       #   flat public surface via `hf_hub::repository::…`
+│   │   │   ├── mod.rs              # HFRepository handle, RepoType, RepoInfo, ModelInfo/DatasetInfo/
+│   │   │   │                       #   SpaceInfo, list/create/delete/move/update + flat re-exports
+│   │   │   ├── commits.rs          # Git history types/params + list_commits/list_refs/diff/branches/tags
+│   │   │   ├── diff.rs             # HFFileDiff, GitStatus, HFDiffParseError, parse_raw_diff, stream_raw_diff
+│   │   │   ├── files.rs            # File types/params: BlobLfsInfo, RepoTreeEntry, FileMetadataInfo,
 │   │   │   │                       #   CommitOperation/AddSource/CommitInfo, all file-op params
 │   │   │   ├── listing.rs          # list_files, list_tree, get_paths_info, get_file_metadata
 │   │   │   ├── download.rs         # download_file, download_file_stream, download_file_to_bytes,
 │   │   │   │                       #   snapshot_download
 │   │   │   └── upload.rs           # upload_file, upload_folder, create_commit, delete_file/folder
+│   │   ├── spaces.rs               # Spaces component: HFSpace handle, SpaceRuntime/SpaceVariable,
+│   │   │                           #   Space*Params, runtime/hardware/secrets/variables/duplicate
+│   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
+│   │   │                           #   user+org lookup, followers/following
+│   │   ├── xet.rs                  # Xet component (pub(crate)): XetConnectionInfo, xet transfer plumbing
+│   │   │                           #   used by repositories and buckets
 │   │   ├── buckets/
 │   │   │   ├── mod.rs              # HFBucket handle, bucket types/params, create/list/tree/batch/download
 │   │   │   └── sync.rs             # BucketSync* types, HFBucket::sync — plan computation and execution
 │   │   └── cache/
 │   │       ├── mod.rs              # CachedFileInfo/CachedRepoInfo/HFCacheInfo + scan_cache API
 │   │       └── storage.rs          # pub(crate) on-disk plumbing: scan, locking, ref read/write, symlinks
+│   └── (unit tests live next to their modules in #[cfg(test)] blocks)
+├── integration-tests/              # Integration tests crate (package: integration-tests)
+│   ├── Cargo.toml                  # Depends on hf-hub with "blocking" feature
+│   ├── src/
+│   │   ├── lib.rs                  # Re-exports test_utils
+│   │   └── test_utils.rs           # Shared helpers: env-var names, token resolution, sha256_hex
 │   └── tests/
 │       ├── integration_test.rs        # Read-only integration tests against live Hub API
 │       ├── blocking_test.rs           # Blocking wrapper parity tests

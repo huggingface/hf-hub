@@ -5,12 +5,11 @@
 
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::files::{
-    AddSource, CommitOperation, RepoCreateCommitParams, RepoDeleteFileParams, RepoDeleteFolderParams,
-    RepoDownloadFileParams, RepoGetFileMetadataParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams,
-    RepoTreeEntry, RepoUploadFileParams, RepoUploadFolderParams,
+use hf_hub::repository::{
+    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, RepoCreateCommitParams, RepoDeleteFileParams,
+    RepoDeleteFolderParams, RepoDownloadFileParams, RepoGetFileMetadataParams, RepoGetPathsInfoParams,
+    RepoListFilesParams, RepoListTreeParams, RepoTreeEntry, RepoUploadFileParams, RepoUploadFolderParams,
 };
-use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
@@ -18,13 +17,13 @@ async fn main() -> hf_hub::HFResult<()> {
 
     // --- Read operations ---
 
-    let files = model.list_files(&RepoListFilesParams::default()).await?;
+    let files = model.list_files(RepoListFilesParams::default()).await?;
     println!("Files in gpt2: {}", files.len());
     for f in files.iter().take(5) {
         println!("  - {f}");
     }
 
-    let tree_stream = model.list_tree(&RepoListTreeParams::builder().recursive(true).build())?;
+    let tree_stream = model.list_tree(RepoListTreeParams::builder().recursive(true).build())?;
     futures::pin_mut!(tree_stream);
     println!("\nTree entries in gpt2:");
     let mut count = 0;
@@ -41,7 +40,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let paths_info = model
         .get_paths_info(
-            &RepoGetPathsInfoParams::builder()
+            RepoGetPathsInfoParams::builder()
                 .paths(vec!["config.json".to_string(), "README.md".to_string()])
                 .build(),
         )
@@ -52,7 +51,7 @@ async fn main() -> hf_hub::HFResult<()> {
     }
 
     let metadata = model
-        .get_file_metadata(&RepoGetFileMetadataParams::builder().filepath("config.json").build())
+        .get_file_metadata(RepoGetFileMetadataParams::builder().filepath("config.json").build())
         .await?;
     println!(
         "\nMetadata for gpt2/config.json: commit={}, size={}, etag={}",
@@ -62,7 +61,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let tmp_dir = tempfile::tempdir().expect("failed to create tempdir");
     let downloaded = model
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(tmp_dir.path().to_path_buf())
                 .build(),
@@ -78,7 +77,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     client
         .create_repo(
-            &CreateRepoParams::builder()
+            CreateRepoParams::builder()
                 .repo_id(repo.repo_path())
                 .private(true)
                 .exist_ok(true)
@@ -89,7 +88,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .upload_file(
-            &RepoUploadFileParams::builder()
+            RepoUploadFileParams::builder()
                 .source(AddSource::Bytes(b"Hello from Rust!".to_vec()))
                 .path_in_repo("hello.txt")
                 .commit_message("Add hello.txt via example")
@@ -100,16 +99,10 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .create_commit(
-            &RepoCreateCommitParams::builder()
+            RepoCreateCommitParams::builder()
                 .operations(vec![
-                    CommitOperation::Add {
-                        path_in_repo: "data/file1.txt".to_string(),
-                        source: AddSource::Bytes(b"File 1 content".to_vec()),
-                    },
-                    CommitOperation::Add {
-                        path_in_repo: "data/file2.txt".to_string(),
-                        source: AddSource::Bytes(b"File 2 content".to_vec()),
-                    },
+                    CommitOperation::add_bytes("data/file1.txt", b"File 1 content".to_vec()),
+                    CommitOperation::add_bytes("data/file2.txt", b"File 2 content".to_vec()),
                 ])
                 .commit_message("Add data files via create_commit")
                 .build(),
@@ -124,7 +117,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .upload_folder(
-            &RepoUploadFolderParams::builder()
+            RepoUploadFolderParams::builder()
                 .folder_path(upload_dir)
                 .path_in_repo("uploaded")
                 .commit_message("Upload folder via example")
@@ -133,16 +126,16 @@ async fn main() -> hf_hub::HFResult<()> {
         .await?;
     println!("Uploaded folder: {:?}", commit.commit_oid);
 
-    repo.delete_file(&RepoDeleteFileParams::builder().path_in_repo("hello.txt").build())
+    repo.delete_file(RepoDeleteFileParams::builder().path_in_repo("hello.txt").build())
         .await?;
     println!("Deleted hello.txt");
 
-    repo.delete_folder(&RepoDeleteFolderParams::builder().path_in_repo("data").build())
+    repo.delete_folder(RepoDeleteFolderParams::builder().path_in_repo("data").build())
         .await?;
     println!("Deleted data/ folder");
 
     client
-        .delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
+        .delete_repo(DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
         .await?;
     println!("Cleaned up test repo");
 

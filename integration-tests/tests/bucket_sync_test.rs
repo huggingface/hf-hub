@@ -13,8 +13,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures::TryStreamExt;
 use hf_hub::buckets::sync::{BucketSyncAction, BucketSyncDirection, BucketSyncParams};
 use hf_hub::buckets::{BucketTreeEntry, CreateBucketParams, ListBucketTreeParams};
-use hf_hub::test_utils::*;
 use hf_hub::{HFBucket, HFClient, HFClientBuilder};
+use integration_tests::test_utils::*;
 use rand::RngExt;
 use tokio::sync::OnceCell;
 
@@ -55,7 +55,7 @@ async fn create_test_bucket(client: &HFClient, suffix: &str) -> (String, String)
     let name = format!("hfrs-sync-test-{suffix}");
     client
         .create_bucket(
-            &CreateBucketParams::builder()
+            CreateBucketParams::builder()
                 .namespace(&username)
                 .name(&name)
                 .private(true)
@@ -76,9 +76,9 @@ async fn delete_test_bucket(client: &HFClient, namespace: &str, name: &str) {
 /// the tree index is consistent on the CI backend, so a tiny upload can race with a
 /// subsequent `list_tree` call that still sees an empty bucket.
 async fn wait_for_bucket_file(bucket: &HFBucket, path: &str) {
-    let params = ListBucketTreeParams::builder().recursive(true).build();
     for _ in 0..20 {
-        let entries: Vec<BucketTreeEntry> = bucket.list_tree(&params).unwrap().try_collect().await.unwrap();
+        let params = ListBucketTreeParams::builder().recursive(true).build();
+        let entries: Vec<BucketTreeEntry> = bucket.list_tree(params).unwrap().try_collect().await.unwrap();
         if entries
             .iter()
             .any(|e| matches!(e, BucketTreeEntry::File { path: p, .. } if p == path))
@@ -127,7 +127,7 @@ async fn test_sync_upload_new_files() {
 
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .verbose(true)
@@ -170,7 +170,7 @@ async fn test_sync_upload_then_download() {
 
     bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(upload_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .build(),
@@ -181,7 +181,7 @@ async fn test_sync_upload_then_download() {
     let download_dir = tempfile::tempdir().unwrap();
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(download_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Download)
                 .verbose(true)
@@ -219,7 +219,7 @@ async fn test_sync_upload_skip_identical() {
 
     bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .build(),
@@ -230,7 +230,7 @@ async fn test_sync_upload_skip_identical() {
     // Second sync: file should be skipped (same size, ignore_times to avoid mtime issues)
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .ignore_times(true)
@@ -264,7 +264,7 @@ async fn test_sync_upload_with_delete() {
 
     bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .build(),
@@ -277,7 +277,7 @@ async fn test_sync_upload_with_delete() {
 
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .delete(true)
@@ -318,7 +318,7 @@ async fn test_sync_with_include_filter() {
 
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .include(vec!["*.txt".to_string()])
@@ -357,7 +357,7 @@ async fn test_sync_with_exclude_filter() {
 
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .exclude(vec!["*.key".to_string()])
@@ -390,7 +390,7 @@ async fn test_sync_with_prefix() {
     // Upload to a prefix
     bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(local_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .prefix("my-prefix")
@@ -403,7 +403,7 @@ async fn test_sync_with_prefix() {
     let download_dir = tempfile::tempdir().unwrap();
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(download_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Download)
                 .prefix("my-prefix")
@@ -436,7 +436,7 @@ async fn test_sync_download_with_delete() {
 
     bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(upload_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .build(),
@@ -451,7 +451,7 @@ async fn test_sync_download_with_delete() {
 
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(download_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Download)
                 .delete(true)
@@ -487,7 +487,7 @@ async fn test_sync_existing_flag() {
 
     bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(upload_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .build(),
@@ -501,7 +501,7 @@ async fn test_sync_existing_flag() {
 
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(upload_dir2.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .existing(true)
@@ -536,7 +536,7 @@ async fn test_sync_ignore_existing_flag() {
 
     bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(upload_dir.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .build(),
@@ -550,7 +550,7 @@ async fn test_sync_ignore_existing_flag() {
 
     let plan = bucket
         .sync(
-            &BucketSyncParams::builder()
+            BucketSyncParams::builder()
                 .local_path(upload_dir2.path().to_path_buf())
                 .direction(BucketSyncDirection::Upload)
                 .ignore_existing(true)

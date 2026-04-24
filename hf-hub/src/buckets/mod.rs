@@ -1,4 +1,17 @@
-//! Bucket handle, types, and API operations.
+//! Bucket handles and file operations for Hugging Face Hub buckets.
+//!
+//! Buckets are flat file stores that live under a namespace such as
+//! `"user/my-bucket"`. Start by creating an [`HFBucket`] handle with
+//! [`HFClient::bucket`], then use the handle to inspect metadata, browse the
+//! tree, upload or download files, or delete entries.
+//!
+//! This module exposes both high-level helpers and the lower-level batch API:
+//!
+//! - Use [`HFBucket::info`], [`HFBucket::list_tree`], and [`HFBucket::get_paths_info`] to inspect bucket contents.
+//! - Use [`HFBucket::upload_files`] and [`HFBucket::download_files`] for common transfer workflows.
+//! - Use [`HFBucket::batch`] when you already have xet hashes and want direct control over add, delete, or copy
+//!   operations.
+//! - Use [`sync`] for one-way directory mirroring between a local folder and a bucket prefix.
 
 pub mod sync;
 
@@ -104,10 +117,17 @@ impl HFBucket {
 
     /// List files and directories in this bucket.
     ///
+    /// This is the main API for browsing bucket contents. Use `prefix` to scope
+    /// the listing to a subdirectory-like path, and `recursive` to choose
+    /// between a shallow listing and a full traversal.
+    ///
+    /// For targeted lookups of a known set of paths, prefer
+    /// [`HFBucket::get_paths_info`].
+    ///
     /// Endpoint: `GET /api/buckets/{bucket_id}/tree[/{prefix}]` (paginated)
     pub fn list_tree(
         &self,
-        params: &ListBucketTreeParams,
+        params: ListBucketTreeParams,
     ) -> HFResult<impl Stream<Item = HFResult<BucketTreeEntry>> + '_> {
         let bucket_id = self.bucket_id();
         let mut url_str = format!("{}/api/buckets/{}/tree", self.hf_client.endpoint(), bucket_id);
@@ -126,6 +146,10 @@ impl HFBucket {
     }
 
     /// Get info about specific paths in this bucket.
+    ///
+    /// This is useful when you already know which paths you care about and do
+    /// not want to stream the full tree. Requests are automatically chunked in
+    /// batches of 1000 paths.
     ///
     /// Endpoint: `POST /api/buckets/{bucket_id}/paths-info`
     pub async fn get_paths_info(&self, paths: &[String]) -> HFResult<Vec<BucketTreeEntry>> {
@@ -201,8 +225,15 @@ impl HFBucket {
 
     /// Execute batch file operations (add, delete, copy) on this bucket.
     ///
+    /// This is the low-level file mutation API. `add` operations only register
+    /// metadata on the bucket side; the file contents must already have been
+    /// uploaded to xet so each entry has a valid [`BucketAddFile::xet_hash`].
+    ///
+    /// For simpler upload and download flows, prefer
+    /// [`HFBucket::upload_files`] and [`HFBucket::download_files`].
+    ///
     /// Endpoint: `POST /api/buckets/{bucket_id}/batch` (NDJSON)
-    pub async fn batch(&self, params: &BatchBucketFilesParams) -> HFResult<()> {
+    pub async fn batch(&self, params: BatchBucketFilesParams) -> HFResult<()> {
         let bucket_id = self.bucket_id();
         let url = format!("{}/api/buckets/{}/batch", self.hf_client.endpoint(), bucket_id);
 
@@ -267,18 +298,24 @@ impl HFBucket {
     }
 
     /// Delete files from this bucket by path.
+    ///
+    /// This is a convenience wrapper around [`HFBucket::batch`] that sends only
+    /// `deleteFile` operations.
     pub async fn delete_files(&self, paths: &[String]) -> HFResult<()> {
         let params = BatchBucketFilesParams {
             add: vec![],
             delete: paths.to_vec(),
             copy: vec![],
         };
-        self.batch(&params).await
+        self.batch(params).await
     }
 
     /// Upload local files to the bucket.
     ///
-    /// Uploads file contents to xet, then registers them via the batch endpoint.
+    /// Each tuple maps `(local_path, remote_path)`. File contents are uploaded
+    /// to xet first, then registered in the bucket via the batch endpoint.
+    ///
+    /// Pass a [`Progress`] handler to receive aggregate upload progress events.
     pub async fn upload_files(
         &self,
         files: &[(std::path::PathBuf, String)],
@@ -298,9 +335,11 @@ impl HFBucket {
             total_bytes,
         });
 
-        let xet_files: Vec<(String, crate::files::AddSource)> = files
+        let xet_files: Vec<(String, crate::repository::AddSource)> = files
             .iter()
-            .map(|(local_path, remote_path)| (remote_path.clone(), crate::files::AddSource::File(local_path.clone())))
+            .map(|(local_path, remote_path)| {
+                (remote_path.clone(), crate::repository::AddSource::File(local_path.clone()))
+            })
             .collect();
 
         let xet_infos = self.xet_upload(&xet_files, progress).await?;
@@ -331,7 +370,7 @@ impl HFBucket {
             add: add_files,
             ..Default::default()
         };
-        self.batch(&batch_params).await?;
+        self.batch(batch_params).await?;
 
         progress.emit(UploadEvent::Complete);
         Ok(())
@@ -339,12 +378,13 @@ impl HFBucket {
 
     /// Download files from the bucket to local paths.
     ///
-    /// Resolves xet hashes via `get_paths_info`, then downloads via xet.
-    pub async fn download_files(
-        &self,
-        params: &BucketDownloadFilesParams,
-        progress: &Option<Progress>,
-    ) -> HFResult<()> {
+    /// Each tuple maps `(remote_path, local_path)`. The method first resolves
+    /// xet metadata with [`HFBucket::get_paths_info`], then downloads the file
+    /// contents through xet. Directory entries are rejected.
+    ///
+    /// Pass a [`Progress`] handler to receive aggregate download progress
+    /// events.
+    pub async fn download_files(&self, params: BucketDownloadFilesParams, progress: &Option<Progress>) -> HFResult<()> {
         if params.files.is_empty() {
             return Ok(());
         }
@@ -384,6 +424,7 @@ impl HFBucket {
                     return Err(HFError::EntryNotFound {
                         path: remote_path.clone(),
                         repo_id: self.bucket_id(),
+                        context: None,
                     });
                 },
             }
@@ -517,6 +558,8 @@ pub struct BucketInfo {
 }
 
 /// URL returned after creating a bucket.
+///
+/// Returned by [`HFClient::create_bucket`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketUrl {
     /// Full URL to the bucket on the Hub.
@@ -566,14 +609,20 @@ pub struct BucketFileMetadata {
 
 impl HFClient {
     /// Create an [`HFBucket`] handle for a bucket.
+    ///
+    /// The returned handle is cheap to clone and can be reused across multiple
+    /// bucket-scoped operations.
     pub fn bucket(&self, owner: impl Into<String>, name: impl Into<String>) -> HFBucket {
         HFBucket::new(self.clone(), owner, name)
     }
 
     /// Create a new bucket on the Hub.
     ///
+    /// When [`CreateBucketParams::exist_ok`] is `true`, an existing bucket is
+    /// treated as success and a [`BucketUrl`] is synthesized locally.
+    ///
     /// Endpoint: `POST /api/buckets/{namespace}/{name}`
-    pub async fn create_bucket(&self, params: &CreateBucketParams) -> HFResult<BucketUrl> {
+    pub async fn create_bucket(&self, params: CreateBucketParams) -> HFResult<BucketUrl> {
         let url = format!("{}/api/buckets/{}/{}", self.endpoint(), params.namespace, params.name);
 
         let mut body = serde_json::json!({});
@@ -625,6 +674,9 @@ impl HFClient {
 
     /// List buckets in a namespace.
     ///
+    /// Streams bucket metadata for all buckets owned by the given user or
+    /// organization.
+    ///
     /// Endpoint: `GET /api/buckets/{namespace}` (paginated)
     pub fn list_buckets(&self, namespace: &str) -> HFResult<impl Stream<Item = HFResult<BucketInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/buckets/{}", self.endpoint(), namespace))?;
@@ -632,6 +684,9 @@ impl HFClient {
     }
 
     /// Move (rename) a bucket.
+    ///
+    /// Both `from_id` and `to_id` use the `"owner/name"` bucket identifier
+    /// format.
     ///
     /// Endpoint: `POST /api/repos/move` with `type: "bucket"`
     pub async fn move_bucket(&self, from_id: &str, to_id: &str) -> HFResult<()> {
@@ -655,7 +710,7 @@ impl HFClient {
 
 sync_api! {
     impl HFClient -> HFClientSync {
-        fn create_bucket(&self, params: &CreateBucketParams) -> HFResult<BucketUrl>;
+        fn create_bucket(&self, params: CreateBucketParams) -> HFResult<BucketUrl>;
         fn delete_bucket(&self, bucket_id: &str, missing_ok: bool) -> HFResult<()>;
         fn move_bucket(&self, from_id: &str, to_id: &str) -> HFResult<()>;
     }
@@ -672,16 +727,16 @@ sync_api! {
         fn info(&self) -> HFResult<BucketInfo>;
         fn get_file_metadata(&self, remote_path: &str) -> HFResult<BucketFileMetadata>;
         fn get_paths_info(&self, paths: &[String]) -> HFResult<Vec<BucketTreeEntry>>;
-        fn batch(&self, params: &BatchBucketFilesParams) -> HFResult<()>;
+        fn batch(&self, params: BatchBucketFilesParams) -> HFResult<()>;
         fn upload_files(&self, files: &[(std::path::PathBuf, String)], progress: &Option<Progress>) -> HFResult<()>;
-        fn download_files(&self, params: &BucketDownloadFilesParams, progress: &Option<Progress>) -> HFResult<()>;
+        fn download_files(&self, params: BucketDownloadFilesParams, progress: &Option<Progress>) -> HFResult<()>;
         fn delete_files(&self, paths: &[String]) -> HFResult<()>;
     }
 }
 
 sync_api_stream! {
     impl HFBucket -> HFBucketSync {
-        fn list_tree(&self, params: &ListBucketTreeParams) -> BucketTreeEntry;
+        fn list_tree(&self, params: ListBucketTreeParams) -> BucketTreeEntry;
     }
 }
 

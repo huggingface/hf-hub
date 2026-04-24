@@ -5,7 +5,7 @@
 //! Requires HF_TOKEN and the "blocking" + "spaces" features.
 //! Run: cargo run -p examples --features blocking --example blocking_spaces
 
-use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
+use hf_hub::repository::{CreateRepoParams, DeleteRepoParams};
 use hf_hub::spaces::{SpaceSecretDeleteParams, SpaceSecretParams, SpaceVariableDeleteParams, SpaceVariableParams};
 use hf_hub::{HFClientSync, RepoType};
 
@@ -25,7 +25,7 @@ fn main() -> hf_hub::HFResult<()> {
     let space = client.space(&user.username, format!("blocking-example-space-{unique}"));
 
     client.create_repo(
-        &CreateRepoParams::builder()
+        CreateRepoParams::builder()
             .repo_id(space.repo_path())
             .repo_type(RepoType::Space)
             .private(true)
@@ -35,16 +35,16 @@ fn main() -> hf_hub::HFResult<()> {
     )?;
     println!("\nCreated test space: {}", space.repo_path());
 
-    space.add_secret(&SpaceSecretParams::builder().key("EXAMPLE_SECRET").value("secret-value").build())?;
+    space.add_secret(SpaceSecretParams::builder().key("EXAMPLE_SECRET").value("secret-value").build())?;
     println!("Added secret: EXAMPLE_SECRET");
 
-    space.delete_secret(&SpaceSecretDeleteParams::builder().key("EXAMPLE_SECRET").build())?;
+    space.delete_secret(SpaceSecretDeleteParams::builder().key("EXAMPLE_SECRET").build())?;
     println!("Deleted secret: EXAMPLE_SECRET");
 
-    space.add_variable(&SpaceVariableParams::builder().key("EXAMPLE_VAR").value("var-value").build())?;
+    space.add_variable(SpaceVariableParams::builder().key("EXAMPLE_VAR").value("var-value").build())?;
     println!("Added variable: EXAMPLE_VAR");
 
-    space.delete_variable(&SpaceVariableDeleteParams::builder().key("EXAMPLE_VAR").build())?;
+    space.delete_variable(SpaceVariableDeleteParams::builder().key("EXAMPLE_VAR").build())?;
     println!("Deleted variable: EXAMPLE_VAR");
 
     let paused = space.pause()?;
@@ -54,7 +54,7 @@ fn main() -> hf_hub::HFResult<()> {
     println!("Restarted space: {restarted:?}");
 
     client.delete_repo(
-        &DeleteRepoParams::builder()
+        DeleteRepoParams::builder()
             .repo_id(space.repo_path())
             .repo_type(RepoType::Space)
             .missing_ok(true)

@@ -7,11 +7,10 @@
 //! Run: cargo run -p examples --features blocking --example blocking_read
 
 use hf_hub::HFClientSync;
-use hf_hub::commits::RepoListCommitsParams;
-use hf_hub::files::{
-    RepoDownloadFileParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams, RepoTreeEntry,
+use hf_hub::repository::{
+    ListDatasetsParams, ListModelsParams, RepoDownloadFileParams, RepoGetPathsInfoParams, RepoInfo, RepoInfoParams,
+    RepoListCommitsParams, RepoListFilesParams, RepoListTreeParams, RepoTreeEntry,
 };
-use hf_hub::repo::{ListDatasetsParams, ListModelsParams, RepoInfo, RepoInfoParams};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
@@ -22,17 +21,17 @@ fn main() -> hf_hub::HFResult<()> {
     let dataset = client.dataset("rajpurkar", "squad");
     let space = client.space("huggingface", "transformers-benchmarks");
 
-    match model.info(&RepoInfoParams::default())? {
+    match model.info(RepoInfoParams::default())? {
         RepoInfo::Model(info) => println!("Model: {} (downloads: {:?})", info.id, info.downloads),
         _ => unreachable!(),
     }
 
-    match dataset.info(&RepoInfoParams::default())? {
+    match dataset.info(RepoInfoParams::default())? {
         RepoInfo::Dataset(info) => println!("Dataset: {} (downloads: {:?})", info.id, info.downloads),
         _ => unreachable!(),
     }
 
-    match space.info(&RepoInfoParams::default())? {
+    match space.info(RepoInfoParams::default())? {
         RepoInfo::Space(info) => println!("Space: {} (sdk: {:?})", info.id, info.sdk),
         _ => unreachable!(),
     }
@@ -42,13 +41,13 @@ fn main() -> hf_hub::HFResult<()> {
 
     // --- Listing (streams collected to Vec) ---
 
-    let models = client.list_models(&ListModelsParams::builder().author("openai").build())?;
+    let models = client.list_models(ListModelsParams::builder().author("openai").build())?;
     println!("\nModels by openai ({} total):", models.len());
     for m in models.iter().take(3) {
         println!("  - {}", m.id);
     }
 
-    let datasets = client.list_datasets(&ListDatasetsParams::builder().search("squad").build())?;
+    let datasets = client.list_datasets(ListDatasetsParams::builder().search("squad").build())?;
     println!("\nDatasets matching 'squad' ({} total):", datasets.len());
     for ds in datasets.iter().take(3) {
         println!("  - {}", ds.id);
@@ -56,13 +55,13 @@ fn main() -> hf_hub::HFResult<()> {
 
     // --- Files ---
 
-    let files = model.list_files(&RepoListFilesParams::default())?;
+    let files = model.list_files(RepoListFilesParams::default())?;
     println!("\nFiles in gpt2: {}", files.len());
     for f in files.iter().take(5) {
         println!("  - {f}");
     }
 
-    let tree = model.list_tree(&RepoListTreeParams::builder().recursive(true).build())?;
+    let tree = model.list_tree(RepoListTreeParams::builder().recursive(true).build())?;
     println!("\nTree entries in gpt2:");
     for entry in tree.iter().take(5) {
         match entry {
@@ -72,7 +71,7 @@ fn main() -> hf_hub::HFResult<()> {
     }
 
     let paths_info = model.get_paths_info(
-        &RepoGetPathsInfoParams::builder()
+        RepoGetPathsInfoParams::builder()
             .paths(vec!["config.json".to_string(), "README.md".to_string()])
             .build(),
     )?;
@@ -80,7 +79,7 @@ fn main() -> hf_hub::HFResult<()> {
 
     let tmp_dir = tempfile::tempdir().expect("failed to create tempdir");
     let downloaded = model.download_file(
-        &RepoDownloadFileParams::builder()
+        RepoDownloadFileParams::builder()
             .filename("config.json")
             .local_dir(tmp_dir.path().to_path_buf())
             .build(),
@@ -89,7 +88,7 @@ fn main() -> hf_hub::HFResult<()> {
 
     // --- Commits ---
 
-    let commits = model.list_commits(&RepoListCommitsParams::default())?;
+    let commits = model.list_commits(RepoListCommitsParams::default())?;
     println!("\nRecent commits on gpt2 ({} total):", commits.len());
     for c in commits.iter().take(3) {
         println!("  - {} {}", &c.id[..8], c.title);

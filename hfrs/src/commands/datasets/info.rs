@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::repo::{RepoInfo, RepoInfoParams};
+use hf_hub::repository::{RepoInfo, RepoInfoParams};
 use serde_json::json;
 
 use crate::cli::OutputFormat;
@@ -29,7 +29,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         revision: args.revision,
         expand: None,
     };
-    let repo_info = repo.info(&info_params).await?;
+    let repo_info = repo.info(info_params).await?;
     let info = match repo_info {
         RepoInfo::Dataset(d) => d,
         _ => anyhow::bail!("Expected dataset info"),

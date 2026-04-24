@@ -7,9 +7,9 @@
 
 use std::path::Path;
 
-use hf_hub::files::{RepoDownloadFileParams, RepoSnapshotDownloadParams};
-use hf_hub::test_utils::*;
+use hf_hub::repository::{RepoDownloadFileParams, RepoSnapshotDownloadParams};
 use hf_hub::{HFClient, HFClientBuilder, HFError};
+use integration_tests::test_utils::*;
 use serial_test::serial;
 
 fn api() -> Option<HFClient> {
@@ -122,7 +122,7 @@ async fn test_download_file_to_cache() {
 
     let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -151,11 +151,11 @@ async fn test_download_file_cache_hit() {
 
     let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     let path1 = repo
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
     let path2 = repo
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
     assert_eq!(path1, path2);
@@ -169,7 +169,7 @@ async fn test_download_file_local_files_only_miss() {
     let result = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_files_only(true)
                 .build(),
@@ -186,13 +186,13 @@ async fn test_download_file_local_files_only_hit() {
 
     let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     let path1 = repo
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
     let path2 = repo
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_files_only(true)
                 .build(),
@@ -211,7 +211,7 @@ async fn test_download_file_cache_symlink_structure() {
 
     let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -230,7 +230,7 @@ async fn test_snapshot_download() {
     let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string()])
                 .build(),
         )
@@ -254,7 +254,7 @@ async fn test_cache_hit_no_redownload() {
     let client = api_with_cache(cache_dir.path());
 
     let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
-    repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+    repo.download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -262,7 +262,7 @@ async fn test_cache_hit_no_redownload() {
     let mtime_before = std::fs::metadata(&blob).unwrap().modified().unwrap();
 
     // Second download should use 304 and not touch the blob
-    repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+    repo.download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
     let mtime_after = std::fs::metadata(&blob).unwrap().modified().unwrap();
@@ -276,7 +276,7 @@ async fn test_force_download_bypasses_cache() {
     let client = api_with_cache(cache_dir.path());
 
     let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
-    repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+    repo.download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -287,7 +287,7 @@ async fn test_force_download_bypasses_cache() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     repo.download_file(
-        &RepoDownloadFileParams::builder()
+        RepoDownloadFileParams::builder()
             .filename("config.json")
             .force_download(true)
             .build(),
@@ -319,7 +319,7 @@ async fn test_force_download_ignores_no_exist() {
     let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .force_download(true)
                 .build(),
@@ -342,7 +342,7 @@ async fn test_no_exist_marker_on_404() {
     let result = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("this_file_does_not_exist_abc123.txt")
                 .build(),
         )
@@ -370,7 +370,7 @@ async fn test_no_exist_marker_prevents_request() {
     // First download: 404 creates the .no_exist marker
     let _ = repo
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("nonexistent_file_xyz789.txt")
                 .build(),
         )
@@ -380,7 +380,7 @@ async fn test_no_exist_marker_prevents_request() {
     // offline fallback), matching Python's try_to_load_from_cache behavior.
     let result = repo
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("nonexistent_file_xyz789.txt")
                 .local_files_only(true)
                 .build(),
@@ -400,7 +400,7 @@ async fn test_no_exist_writes_ref_on_404() {
 
     let _ = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("no_such_file_ref_test.txt").build())
+        .download_file(RepoDownloadFileParams::builder().filename("no_such_file_ref_test.txt").build())
         .await;
 
     // The refs/main file should have been written even though the file 404'd
@@ -425,7 +425,7 @@ async fn test_ref_written_for_branch_download() {
 
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -447,7 +447,7 @@ async fn test_no_ref_for_commit_hash_download() {
     // First get the commit hash via a normal download
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -464,7 +464,7 @@ async fn test_no_ref_for_commit_hash_download() {
     client2
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .revision(&commit_hash)
                 .build(),
@@ -490,7 +490,7 @@ async fn test_download_by_commit_hash() {
     // Get commit hash from a normal download
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
     let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
@@ -505,7 +505,7 @@ async fn test_download_by_commit_hash() {
     let path = client2
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .revision(&commit_hash)
                 .build(),
@@ -535,7 +535,7 @@ async fn test_offline_fallback_with_cached_file() {
     // Populate cache
     let original_path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -547,7 +547,7 @@ async fn test_offline_fallback_with_cached_file() {
         .unwrap();
     let result = api_broken
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await;
     assert!(result.is_ok(), "Should fall back to cached file, got: {result:?}");
     assert_eq!(result.unwrap(), original_path);
@@ -564,7 +564,7 @@ async fn test_offline_fallback_without_cache_propagates_error() {
 
     let result = api_broken
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await;
     assert!(result.is_err(), "Should propagate error when no cache available");
     // Should NOT be LocalEntryNotFound — should be the original connection error
@@ -587,7 +587,7 @@ async fn test_snapshot_download_ignore_patterns() {
     let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .ignore_patterns(vec!["*.md".to_string()])
                 .allow_patterns(vec!["*.json".to_string(), "*.md".to_string()])
                 .build(),
@@ -608,7 +608,7 @@ async fn test_snapshot_download_local_files_only_miss() {
 
     let result = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .snapshot_download(&RepoSnapshotDownloadParams::builder().local_files_only(true).build())
+        .snapshot_download(RepoSnapshotDownloadParams::builder().local_files_only(true).build())
         .await;
     assert!(matches!(result, Err(HFError::LocalEntryNotFound { .. })));
 }
@@ -622,7 +622,7 @@ async fn test_snapshot_download_local_files_only_hit() {
     let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     let dir1 = repo
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["config.json".to_string()])
                 .build(),
         )
@@ -630,7 +630,7 @@ async fn test_snapshot_download_local_files_only_hit() {
         .unwrap();
 
     let dir2 = repo
-        .snapshot_download(&RepoSnapshotDownloadParams::builder().local_files_only(true).build())
+        .snapshot_download(RepoSnapshotDownloadParams::builder().local_files_only(true).build())
         .await
         .unwrap();
     assert_eq!(dir1, dir2);
@@ -645,7 +645,7 @@ async fn test_snapshot_download_by_commit_hash() {
     // First get the commit hash
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
     let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
@@ -660,7 +660,7 @@ async fn test_snapshot_download_by_commit_hash() {
     let snapshot_dir = client2
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .revision(&commit_hash)
                 .allow_patterns(vec!["config.json".to_string()])
                 .build(),
@@ -688,7 +688,7 @@ async fn test_snapshot_download_force_download() {
 
     let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
     repo.snapshot_download(
-        &RepoSnapshotDownloadParams::builder()
+        RepoSnapshotDownloadParams::builder()
             .allow_patterns(vec!["config.json".to_string()])
             .build(),
     )
@@ -701,7 +701,7 @@ async fn test_snapshot_download_force_download() {
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     repo.snapshot_download(
-        &RepoSnapshotDownloadParams::builder()
+        RepoSnapshotDownloadParams::builder()
             .allow_patterns(vec!["config.json".to_string()])
             .force_download(true)
             .build(),
@@ -722,7 +722,7 @@ async fn test_snapshot_download_returns_correct_path() {
     let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["config.json".to_string()])
                 .build(),
         )
@@ -747,7 +747,7 @@ async fn test_cache_directory_layout() {
 
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -776,7 +776,7 @@ async fn test_blob_deduplication_across_downloads() {
     let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
 
     // Download same file via single file download
-    repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+    repo.download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -785,7 +785,7 @@ async fn test_blob_deduplication_across_downloads() {
 
     // Download again via snapshot (should reuse the same blob)
     repo.snapshot_download(
-        &RepoSnapshotDownloadParams::builder()
+        RepoSnapshotDownloadParams::builder()
             .allow_patterns(vec!["config.json".to_string()])
             .build(),
     )
@@ -804,7 +804,7 @@ async fn test_dataset_repo_type_cache_folder() {
 
     let path = client
         .dataset(TEST_DATASET_PARTS.0, TEST_DATASET_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("README.md").build())
+        .download_file(RepoDownloadFileParams::builder().filename("README.md").build())
         .await
         .unwrap();
     assert!(path.exists());
@@ -823,7 +823,7 @@ async fn test_download_to_local_dir_no_cache() {
     let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(local_dir.path().to_path_buf())
                 .build(),
@@ -859,7 +859,7 @@ async fn test_concurrent_downloads_same_file() {
         let handle = tokio::spawn(async move {
             client_clone
                 .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-                .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+                .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
                 .await
         });
         handles.push(handle);
@@ -1034,7 +1034,7 @@ print(path)
     let client = api_with_cache(&cache_dir);
     let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
     assert!(path.exists());
@@ -1059,7 +1059,7 @@ async fn test_interop_rust_downloads_first() {
     let client = api_with_cache(&cache_dir);
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -1114,13 +1114,13 @@ hf_hub_download("{repo_id}", "README.md")
 
     let client = api_with_cache(&cache_dir);
     let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
-    repo.download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+    repo.download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
     let readme_path = repo
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("README.md")
                 .local_files_only(true)
                 .build(),
@@ -1194,7 +1194,7 @@ print(path)
     let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string()])
                 .build(),
         )
@@ -1224,7 +1224,7 @@ async fn test_interop_rust_writes_python_validates_cache() {
     let snapshot_dir = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string(), "*.md".to_string()])
                 .build(),
         )
@@ -1320,7 +1320,7 @@ async fn test_xet_download_to_cache() {
 
     let path = match client
         .model("hf-internal-testing", "tiny-gemma3")
-        .download_file(&RepoDownloadFileParams::builder().filename("model.safetensors").build())
+        .download_file(RepoDownloadFileParams::builder().filename("model.safetensors").build())
         .await
     {
         Ok(p) => p,
@@ -1369,7 +1369,7 @@ async fn test_xet_download_to_cache() {
     // Second download should be a cache hit (same path returned)
     let path2 = client
         .model("hf-internal-testing", "tiny-gemma3")
-        .download_file(&RepoDownloadFileParams::builder().filename("model.safetensors").build())
+        .download_file(RepoDownloadFileParams::builder().filename("model.safetensors").build())
         .await
         .unwrap();
     assert_eq!(path, path2);
@@ -1378,7 +1378,7 @@ async fn test_xet_download_to_cache() {
     let path3 = client
         .model("hf-internal-testing", "tiny-gemma3")
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("model.safetensors")
                 .local_files_only(true)
                 .build(),
@@ -1396,7 +1396,7 @@ async fn test_xet_snapshot_download_to_cache() {
 
     let snapshot_dir = match client
         .model("hf-internal-testing", "tiny-gemma3")
-        .snapshot_download(&RepoSnapshotDownloadParams::default())
+        .snapshot_download(RepoSnapshotDownloadParams::default())
         .await
     {
         Ok(d) => d,
@@ -1430,7 +1430,7 @@ async fn test_xet_cache_hit_second_download() {
     let repo = client.model("hf-internal-testing", "tiny-gemma3");
 
     let path1 = match repo
-        .download_file(&RepoDownloadFileParams::builder().filename("model.safetensors").build())
+        .download_file(RepoDownloadFileParams::builder().filename("model.safetensors").build())
         .await
     {
         Ok(p) => p,
@@ -1449,7 +1449,7 @@ async fn test_xet_cache_hit_second_download() {
 
     // Second download: should be a cache hit (blob not rewritten)
     let path2 = repo
-        .download_file(&RepoDownloadFileParams::builder().filename("model.safetensors").build())
+        .download_file(RepoDownloadFileParams::builder().filename("model.safetensors").build())
         .await
         .unwrap();
     assert_eq!(path1, path2);
@@ -1480,7 +1480,7 @@ async fn test_interop_rust_no_exist_python_reads() {
     let _ = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("interop_no_exist_test_file.txt")
                 .build(),
         )
@@ -1534,7 +1534,7 @@ async fn test_interop_rust_ref_python_reads() {
     let client = api_with_cache(&cache_dir);
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -1598,7 +1598,7 @@ print("DONE")
     let result = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("python_no_exist_interop_test.txt")
                 .local_files_only(true)
                 .build(),
@@ -1644,7 +1644,7 @@ hf_hub_download("{repo_id}", "config.json")
     let path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_files_only(true)
                 .build(),
@@ -1674,7 +1674,7 @@ async fn test_interop_rust_snapshot_python_snapshot_reuse() {
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string()])
                 .build(),
         )
@@ -1722,7 +1722,7 @@ async fn test_interop_dataset_repo_type() {
     let client = api_with_cache(&cache_dir);
     client
         .dataset(TEST_DATASET_PARTS.0, TEST_DATASET_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("README.md").build())
+        .download_file(RepoDownloadFileParams::builder().filename("README.md").build())
         .await
         .unwrap();
 
@@ -1788,7 +1788,7 @@ print(link)
     let client = api_with_cache(&cache_dir2);
     let rust_path = client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
     let rust_link_target = std::fs::read_link(&rust_path).unwrap().to_string_lossy().to_string();
@@ -1842,7 +1842,7 @@ hf_hub_download("{repo_id}", "config.json")
     let client = api_with_cache(&cache_dir);
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await
         .unwrap();
 
@@ -1868,7 +1868,7 @@ async fn test_interop_scan_cache_counts_match() {
     client
         .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .allow_patterns(vec!["*.json".to_string(), "*.md".to_string()])
                 .build(),
         )

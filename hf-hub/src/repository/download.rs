@@ -5,15 +5,14 @@ use futures::TryStreamExt;
 use futures::stream::{Stream, StreamExt};
 use reqwest::header::IF_NONE_MATCH;
 
+use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash, matches_any_glob};
 use super::{
-    FileMetadataInfo, RepoDownloadFileParams, RepoDownloadFileStreamParams, RepoDownloadFileToBytesParams,
-    RepoListTreeParams, RepoSnapshotDownloadParams, RepoTreeEntry, extract_commit_hash, extract_etag,
-    extract_file_size, extract_xet_hash, matches_any_glob,
+    FileMetadataInfo, HFRepository, RepoDownloadFileParams, RepoDownloadFileStreamParams,
+    RepoDownloadFileToBytesParams, RepoListTreeParams, RepoSnapshotDownloadParams, RepoTreeEntry, RepoType,
 };
 use crate::cache::storage as cache;
 use crate::error::{HFError, HFResult};
 use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress};
-use crate::repo::{HFRepository, RepoType};
 use crate::{constants, retry};
 
 impl HFRepository {
@@ -23,9 +22,14 @@ impl HFRepository {
     /// (no caching). When `local_dir` is `None`, the HF cache system is used:
     /// blobs are stored by etag and symlinked from snapshots/{commit}/{filename}.
     ///
+    /// Returns the local filesystem path of the downloaded or cached file. Use
+    /// [`HFRepository::download_file_stream`] or
+    /// [`HFRepository::download_file_to_bytes`] when you do not want to write to
+    /// disk.
+    ///
     /// Endpoint: GET {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}
-    pub async fn download_file(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
-        let result = self.download_file_inner(params).await;
+    pub async fn download_file(&self, params: RepoDownloadFileParams) -> HFResult<PathBuf> {
+        let result = self.download_file_inner(&params).await;
         if result.is_ok() {
             params.progress.emit(DownloadEvent::Complete);
         }
@@ -56,7 +60,7 @@ impl HFRepository {
     /// Endpoint: GET {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}
     pub async fn download_file_stream(
         &self,
-        params: &RepoDownloadFileStreamParams,
+        params: RepoDownloadFileStreamParams,
     ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
     {
         if let Some(ref range) = params.range
@@ -138,7 +142,7 @@ impl HFRepository {
     /// This is a convenience wrapper around [`download_file_stream`](Self::download_file_stream)
     /// that collects the entire stream into a single buffer. When `range` is set,
     /// only the specified byte range is fetched.
-    pub async fn download_file_to_bytes(&self, params: &RepoDownloadFileToBytesParams) -> HFResult<bytes::Bytes> {
+    pub async fn download_file_to_bytes(&self, params: RepoDownloadFileToBytesParams) -> HFResult<bytes::Bytes> {
         let (content_length, stream) = self.download_file_stream(params).await?;
         futures::pin_mut!(stream);
 
@@ -254,6 +258,7 @@ impl HFRepository {
                 return Err(HFError::EntryNotFound {
                     path: filename.to_string(),
                     repo_id: String::new(),
+                    context: None,
                 });
             }
         }
@@ -484,7 +489,7 @@ impl HFRepository {
         allow_patterns: Option<&Vec<String>>,
         ignore_patterns: Option<&Vec<String>>,
     ) -> HFResult<Vec<String>> {
-        let stream = self.list_tree(&RepoListTreeParams {
+        let stream = self.list_tree(RepoListTreeParams {
             revision: Some(revision.to_string()),
             recursive: true,
             expand: false,
@@ -510,7 +515,17 @@ impl HFRepository {
         Ok(filenames)
     }
 
-    pub async fn snapshot_download(&self, params: &RepoSnapshotDownloadParams) -> HFResult<PathBuf> {
+    /// Download all selected files for a resolved revision.
+    ///
+    /// When `local_dir` is `None`, files are stored in the HF cache and the
+    /// returned path is the cache snapshot directory for the resolved commit.
+    /// When `local_dir` is `Some`, files are written directly under that
+    /// directory.
+    ///
+    /// `allow_patterns` and `ignore_patterns` filter which repository files are
+    /// included. `local_files_only` resolves only from the local cache and does
+    /// not make network requests.
+    pub async fn snapshot_download(&self, params: RepoSnapshotDownloadParams) -> HFResult<PathBuf> {
         if params.local_dir.is_none() && !self.hf_client.cache_enabled() {
             return Err(HFError::CacheNotEnabled);
         }
@@ -588,11 +603,8 @@ impl HFRepository {
                         }
                         return Ok::<_, HFError>(None);
                     } else if !resp.status().is_success() && !resp.status().is_redirection() {
-                        return Err(HFError::Http {
-                            status: resp.status(),
-                            url,
-                            body: String::new(),
-                        });
+                        let context = Box::new(crate::error::HttpErrorContext::from_response(resp).await);
+                        return Err(HFError::Http { context });
                     }
                     let etag =
                         extract_etag(&resp).ok_or_else(|| HFError::Other(format!("Missing ETag for {filename}")))?;
@@ -802,6 +814,7 @@ async fn mark_no_exist_and_return_error(
     HFError::EntryNotFound {
         path: filename.to_string(),
         repo_id: repo_id.to_string(),
+        context: None,
     }
 }
 
@@ -897,8 +910,8 @@ async fn stream_response_to_file_with_progress(
 
 sync_api! {
     impl HFRepository -> HFRepositorySync {
-        fn download_file(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf>;
-        fn download_file_to_bytes(&self, params: &RepoDownloadFileToBytesParams) -> HFResult<bytes::Bytes>;
-        fn snapshot_download(&self, params: &RepoSnapshotDownloadParams) -> HFResult<PathBuf>;
+        fn download_file(&self, params: RepoDownloadFileParams) -> HFResult<PathBuf>;
+        fn download_file_to_bytes(&self, params: RepoDownloadFileToBytesParams) -> HFResult<bytes::Bytes>;
+        fn snapshot_download(&self, params: RepoSnapshotDownloadParams) -> HFResult<PathBuf>;
     }
 }

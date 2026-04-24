@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::files::RepoGetFileMetadataParams;
+use hf_hub::repository::RepoGetFileMetadataParams;
 use serde_json::json;
 
 use crate::cli::{OutputFormat, RepoTypeArg};
@@ -37,7 +37,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         filepath: args.filepath,
         revision: args.revision,
     };
-    let metadata = repo.get_file_metadata(&params).await?;
+    let metadata = repo.get_file_metadata(params).await?;
 
     let json_value = json!({
         "filename": metadata.filename,

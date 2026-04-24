@@ -145,35 +145,44 @@ fn format_anyhow_error(err: &anyhow::Error) -> String {
 
 fn format_hf_error(err: &HFError) -> String {
     match err {
-        HFError::RepoNotFound { repo_id } => {
+        HFError::RepoNotFound { repo_id, .. } => {
             format!("Repository '{repo_id}' not found. If the repo is private, make sure you are authenticated.")
         },
-        HFError::EntryNotFound { path, repo_id } => {
+        HFError::EntryNotFound { path, repo_id, .. } => {
             format!("File '{path}' not found in repository '{repo_id}'.")
         },
-        HFError::RevisionNotFound { repo_id, revision } => {
+        HFError::RevisionNotFound { repo_id, revision, .. } => {
             format!("Revision '{revision}' not found in repository '{repo_id}'.")
         },
-        HFError::AuthRequired => {
+        HFError::AuthRequired { .. } => {
             "Not authenticated. Run `hfrs auth login` or set the HF_TOKEN environment variable.".to_string()
         },
-        HFError::BucketNotFound { bucket_id } => {
+        HFError::BucketNotFound { bucket_id, .. } => {
             format!("Bucket '{bucket_id}' not found. If the bucket is private, make sure you are authenticated.")
         },
-        HFError::Forbidden => {
-            "Permission denied. Check that your token has the required scopes for this operation.".to_string()
-        },
-        HFError::Conflict(body) => {
-            if body.contains("already exists") {
-                "Resource already exists. Use --exist-ok to skip this error.".to_string()
+        HFError::Forbidden { context } => {
+            if let Some(msg) = context.server_message.as_deref() {
+                format!("Permission denied: {msg}")
             } else {
-                format!("Conflict: {body}")
+                "Permission denied. Check that your token has the required scopes for this operation.".to_string()
             }
         },
-        HFError::RateLimited => "Rate limited. Please wait a moment and try again.".to_string(),
-        HFError::Http { status, url, body } => {
-            let status_code = status.as_u16();
-            match status_code {
+        HFError::Conflict { context } => {
+            if context.body.contains("already exists") {
+                "Resource already exists. Use --exist-ok to skip this error.".to_string()
+            } else if let Some(msg) = context.server_message.as_deref() {
+                format!("Conflict: {msg}")
+            } else {
+                format!("Conflict: {}", context.body)
+            }
+        },
+        HFError::RateLimited { retry_after, .. } => match retry_after {
+            Some(d) => format!("Rate limited. Retry in {}s.", d.as_secs()),
+            None => "Rate limited. Please wait a moment and try again.".to_string(),
+        },
+        HFError::Http { context } => {
+            let status = context.status;
+            match status.as_u16() {
                 401 => {
                     let mut msg = "Invalid or expired token.".to_string();
                     if std::env::var("HF_TOKEN").is_ok() {
@@ -181,24 +190,24 @@ fn format_hf_error(err: &HFError) -> String {
                     }
                     msg
                 },
-                404 => {
-                    format!("Not found: {url}")
-                },
+                404 => format!("Not found: {}", context.url),
                 500..=599 => {
-                    format!(
+                    let mut msg = format!(
                         "Server error ({status}). The Hugging Face Hub may be experiencing issues. Try again later."
-                    )
+                    );
+                    if let Some(rid) = context.request_id.as_deref() {
+                        msg.push_str(&format!(" (request_id={rid})"));
+                    }
+                    msg
                 },
                 _ => {
-                    if body.is_empty() {
-                        format!("{status} {url}")
+                    if let Some(server_msg) = context.server_message.as_deref() {
+                        return server_msg.to_string();
+                    }
+                    if context.body.is_empty() {
+                        format!("{status} {}", context.url)
                     } else {
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(body)
-                            && let Some(error_msg) = json.get("error").and_then(|e| e.as_str())
-                        {
-                            return error_msg.to_string();
-                        }
-                        format!("{status}: {body}")
+                        format!("{status}: {}", context.body)
                     }
                 },
             }
@@ -212,13 +221,13 @@ fn format_hf_error(err: &HFError) -> String {
         HFError::CacheLockTimeout { path } => {
             format!("Cache lock timed out: {}. Another process may be using this file.", path.display())
         },
-        HFError::Request(e) => {
-            if e.is_connect() {
+        HFError::Request { source, .. } => {
+            if source.is_connect() {
                 "Connection failed. Check your internet connection.".to_string()
-            } else if e.is_timeout() {
+            } else if source.is_timeout() {
                 "Request timed out. The server may be slow or unreachable.".to_string()
             } else {
-                format!("Network error: {e}")
+                format!("Network error: {source}")
             }
         },
         HFError::Io(e) => {

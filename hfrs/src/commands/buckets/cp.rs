@@ -150,7 +150,7 @@ async fn download_to_local(
     let params = BucketDownloadFilesParams::builder()
         .files(vec![(src.path.clone(), local_path.clone())])
         .build();
-    bucket.download_files(&params, progress).await?;
+    bucket.download_files(params, progress).await?;
     if !quiet {
         return Ok(CommandResult::Raw(format!(
             "Downloaded: hf://buckets/{}/{}/{} -> {}",
@@ -171,7 +171,7 @@ async fn download_to_stdout(client: &HFClient, src: &str) -> Result<CommandResul
         .files(vec![(src.path.clone(), tmp.path().to_path_buf())])
         .build();
     let no_progress: Option<Progress> = None;
-    bucket.download_files(&params, &no_progress).await?;
+    bucket.download_files(params, &no_progress).await?;
     let data = std::fs::read(tmp.path())?;
     io::stdout().write_all(&data)?;
     Ok(CommandResult::Silent)
@@ -192,7 +192,7 @@ async fn server_side_copy(client: &HFClient, src: &str, dst: &str, quiet: bool) 
         }],
         ..Default::default()
     };
-    dst_bucket.batch(&copy_params).await?;
+    dst_bucket.batch(copy_params).await?;
     if !quiet {
         return Ok(CommandResult::Raw(format!(
             "Copied: hf://buckets/{}/{}/{} -> hf://buckets/{}/{}/{}",

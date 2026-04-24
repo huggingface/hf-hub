@@ -14,11 +14,10 @@ use std::io::Write;
 
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::files::{
-    AddSource, RepoDownloadFileParams, RepoDownloadFileStreamParams, RepoSnapshotDownloadParams, RepoUploadFileParams,
-    RepoUploadFolderParams,
+use hf_hub::repository::{
+    AddSource, CreateRepoParams, DeleteRepoParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
+    RepoSnapshotDownloadParams, RepoUploadFileParams, RepoUploadFolderParams,
 };
-use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -29,7 +28,7 @@ async fn main() -> hf_hub::HFResult<()> {
     // --- Download to HF cache ---
 
     let cached_path = model
-        .download_file(&RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
         .await?;
     println!("Downloaded to cache: {}", cached_path.display());
 
@@ -38,7 +37,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let xet_repo = client.model("Lightricks", "LTX-2.3");
     let xet_path = xet_repo
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("ltx-2.3-spatial-upscaler-x1.5-1.0.safetensors")
                 .local_dir(tmp_dir.path().to_path_buf())
                 .build(),
@@ -51,7 +50,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let local_path = model
         .download_file(
-            &RepoDownloadFileParams::builder()
+            RepoDownloadFileParams::builder()
                 .filename("config.json")
                 .local_dir(tmp_dir.path().to_path_buf())
                 .build(),
@@ -63,7 +62,7 @@ async fn main() -> hf_hub::HFResult<()> {
     // --- Download as stream ---
 
     let (content_length, mut stream) = model
-        .download_file_stream(&RepoDownloadFileStreamParams::builder().filename("config.json").build())
+        .download_file_stream(RepoDownloadFileStreamParams::builder().filename("config.json").build())
         .await?;
     println!(
         "Streaming config.json (content-length: {})",
@@ -84,7 +83,7 @@ async fn main() -> hf_hub::HFResult<()> {
     // --- Download as stream and process in memory ---
 
     let (_content_length, mut stream) = model
-        .download_file_stream(&RepoDownloadFileStreamParams::builder().filename("config.json").build())
+        .download_file_stream(RepoDownloadFileStreamParams::builder().filename("config.json").build())
         .await?;
 
     let mut buf = Vec::new();
@@ -100,7 +99,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let snapshot_dir = tmp_dir.path().join("snapshot");
     let snapshot_path = model
         .snapshot_download(
-            &RepoSnapshotDownloadParams::builder()
+            RepoSnapshotDownloadParams::builder()
                 .local_dir(snapshot_dir)
                 .allow_patterns(vec!["*.json".to_string()])
                 .build(),
@@ -124,7 +123,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     client
         .create_repo(
-            &CreateRepoParams::builder()
+            CreateRepoParams::builder()
                 .repo_id(repo.repo_path())
                 .private(true)
                 .exist_ok(true)
@@ -136,7 +135,7 @@ async fn main() -> hf_hub::HFResult<()> {
     // Upload from bytes
     let commit = repo
         .upload_file(
-            &RepoUploadFileParams::builder()
+            RepoUploadFileParams::builder()
                 .source(AddSource::Bytes(b"Hello from Rust!".to_vec()))
                 .path_in_repo("hello.txt")
                 .commit_message("Add hello.txt from bytes")
@@ -151,7 +150,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .upload_file(
-            &RepoUploadFileParams::builder()
+            RepoUploadFileParams::builder()
                 .source(AddSource::File(local_file))
                 .path_in_repo("data/local_data.txt")
                 .commit_message("Add local_data.txt from file path")
@@ -168,7 +167,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .upload_folder(
-            &RepoUploadFolderParams::builder()
+            RepoUploadFolderParams::builder()
                 .folder_path(upload_dir)
                 .path_in_repo("uploaded")
                 .commit_message("Upload folder with nested files")
@@ -179,7 +178,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     // Cleanup
     client
-        .delete_repo(&DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
+        .delete_repo(DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
         .await?;
     println!("Cleaned up repo: {}", repo.repo_path());
 

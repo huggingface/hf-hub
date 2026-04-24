@@ -11,7 +11,7 @@ use typed_builder::TypedBuilder;
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
-use crate::repo::{HFRepository, RepoType, RepoUrl};
+use crate::repository::{HFRepository, RepoType, RepoUrl};
 use crate::retry;
 
 /// Runtime state of a Space: stage, hardware, storage, and replica info.
@@ -211,7 +211,7 @@ impl HFSpace {
     }
 
     /// Request an upgrade or downgrade of the Space's hardware tier.
-    pub async fn request_hardware(&self, params: &SpaceHardwareRequestParams) -> HFResult<SpaceRuntime> {
+    pub async fn request_hardware(&self, params: SpaceHardwareRequestParams) -> HFResult<SpaceRuntime> {
         let url = format!("{}/api/spaces/{}/hardware", self.hf_client.endpoint(), self.repo_path());
         let mut body = serde_json::json!({ "flavor": params.hardware });
         if let Some(sleep_time) = params.sleep_time {
@@ -235,7 +235,7 @@ impl HFSpace {
     }
 
     /// Configure the number of seconds of inactivity before the Space is put to sleep.
-    pub async fn set_sleep_time(&self, params: &SpaceSleepTimeParams) -> HFResult<()> {
+    pub async fn set_sleep_time(&self, params: SpaceSleepTimeParams) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/sleeptime", self.hf_client.endpoint(), self.repo_path());
         let body = serde_json::json!({ "seconds": params.sleep_time });
         let headers = self.hf_client.auth_headers();
@@ -285,7 +285,7 @@ impl HFSpace {
     }
 
     /// Add or update a secret (encrypted environment variable) on the Space.
-    pub async fn add_secret(&self, params: &SpaceSecretParams) -> HFResult<()> {
+    pub async fn add_secret(&self, params: SpaceSecretParams) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/secrets", self.hf_client.endpoint(), self.repo_path());
         let mut body = serde_json::json!({
             "key": params.key,
@@ -311,7 +311,7 @@ impl HFSpace {
     }
 
     /// Delete a secret from the Space by key.
-    pub async fn delete_secret(&self, params: &SpaceSecretDeleteParams) -> HFResult<()> {
+    pub async fn delete_secret(&self, params: SpaceSecretDeleteParams) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/secrets", self.hf_client.endpoint(), self.repo_path());
         let body = serde_json::json!({ "key": params.key });
         let headers = self.hf_client.auth_headers();
@@ -331,7 +331,7 @@ impl HFSpace {
     }
 
     /// Add or update a public environment variable on the Space.
-    pub async fn add_variable(&self, params: &SpaceVariableParams) -> HFResult<()> {
+    pub async fn add_variable(&self, params: SpaceVariableParams) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/variables", self.hf_client.endpoint(), self.repo_path());
         let mut body = serde_json::json!({
             "key": params.key,
@@ -357,7 +357,7 @@ impl HFSpace {
     }
 
     /// Delete a public environment variable from the Space by key.
-    pub async fn delete_variable(&self, params: &SpaceVariableDeleteParams) -> HFResult<()> {
+    pub async fn delete_variable(&self, params: SpaceVariableDeleteParams) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/variables", self.hf_client.endpoint(), self.repo_path());
         let body = serde_json::json!({ "key": params.key });
         let headers = self.hf_client.auth_headers();
@@ -377,7 +377,7 @@ impl HFSpace {
     }
 
     /// Duplicate this Space to a new repository.
-    pub async fn duplicate(&self, params: &DuplicateSpaceParams) -> HFResult<RepoUrl> {
+    pub async fn duplicate(&self, params: DuplicateSpaceParams) -> HFResult<RepoUrl> {
         let url = format!("{}/api/spaces/{}/duplicate", self.hf_client.endpoint(), self.repo_path());
         let mut body = serde_json::Map::new();
         if let Some(ref to_id) = params.to_id {
@@ -450,22 +450,22 @@ impl Deref for HFSpace {
 sync_api! {
     impl HFSpace -> HFSpaceSync {
         fn runtime(&self) -> HFResult<SpaceRuntime>;
-        fn request_hardware(&self, params: &SpaceHardwareRequestParams) -> HFResult<SpaceRuntime>;
-        fn set_sleep_time(&self, params: &SpaceSleepTimeParams) -> HFResult<()>;
+        fn request_hardware(&self, params: SpaceHardwareRequestParams) -> HFResult<SpaceRuntime>;
+        fn set_sleep_time(&self, params: SpaceSleepTimeParams) -> HFResult<()>;
         fn pause(&self) -> HFResult<SpaceRuntime>;
         fn restart(&self) -> HFResult<SpaceRuntime>;
-        fn add_secret(&self, params: &SpaceSecretParams) -> HFResult<()>;
-        fn delete_secret(&self, params: &SpaceSecretDeleteParams) -> HFResult<()>;
-        fn add_variable(&self, params: &SpaceVariableParams) -> HFResult<()>;
-        fn delete_variable(&self, params: &SpaceVariableDeleteParams) -> HFResult<()>;
-        fn duplicate(&self, params: &DuplicateSpaceParams) -> HFResult<RepoUrl>;
+        fn add_secret(&self, params: SpaceSecretParams) -> HFResult<()>;
+        fn delete_secret(&self, params: SpaceSecretDeleteParams) -> HFResult<()>;
+        fn add_variable(&self, params: SpaceVariableParams) -> HFResult<()>;
+        fn delete_variable(&self, params: SpaceVariableDeleteParams) -> HFResult<()>;
+        fn duplicate(&self, params: DuplicateSpaceParams) -> HFResult<RepoUrl>;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{HFSpace, SpaceRuntime, SpaceVariable};
-    use crate::repo::{HFRepository, RepoType};
+    use crate::repository::{HFRepository, RepoType};
 
     #[test]
     fn test_hfspace_constructor_and_deref() {

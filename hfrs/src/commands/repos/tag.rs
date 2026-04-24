@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args as ClapArgs, Subcommand};
 use hf_hub::HFClient;
-use hf_hub::commits::{RepoCreateTagParams, RepoDeleteTagParams, RepoListRefsParams};
+use hf_hub::repository::{RepoCreateTagParams, RepoDeleteTagParams, RepoListRefsParams};
 use serde_json::json;
 
 use crate::cli::{OutputFormat, RepoTypeArg};
@@ -92,7 +92,7 @@ async fn create(client: &HFClient, args: TagCreateArgs) -> Result<CommandResult>
         revision: args.revision,
         message: args.message,
     };
-    repo.create_tag(&params).await?;
+    repo.create_tag(params).await?;
     Ok(CommandResult::Raw("Tag created.".to_string()))
 }
 
@@ -100,7 +100,7 @@ async fn delete(client: &HFClient, args: TagDeleteArgs) -> Result<CommandResult>
     let repo_type: hf_hub::RepoType = args.r#type.into();
     let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
     let params = RepoDeleteTagParams { tag: args.tag };
-    repo.delete_tag(&params).await?;
+    repo.delete_tag(params).await?;
     Ok(CommandResult::Silent)
 }
 
@@ -110,7 +110,7 @@ async fn list(client: &HFClient, args: TagListArgs) -> Result<CommandResult> {
     let params = RepoListRefsParams {
         include_pull_requests: false,
     };
-    let refs = repo.list_refs(&params).await?;
+    let refs = repo.list_refs(params).await?;
 
     if refs.tags.is_empty() && matches!(args.format, OutputFormat::Table) {
         return Ok(CommandResult::Raw("No tags found.".to_string()));

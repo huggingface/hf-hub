@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::repo::CreateRepoParams;
+use hf_hub::repository::CreateRepoParams;
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -38,6 +38,6 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         exist_ok: args.exist_ok,
         space_sdk: args.space_sdk,
     };
-    let result = client.create_repo(&params).await?;
+    let result = client.create_repo(params).await?;
     Ok(CommandResult::Raw(result.url))
 }
