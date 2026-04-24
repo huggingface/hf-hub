@@ -984,7 +984,7 @@ sync_api! {
 mod tests {
     use futures::StreamExt;
 
-    use super::{HFRepository, ListDatasetsParams, ListModelsParams, ListSpacesParams, RepoType};
+    use super::{HFRepository, ListDatasetsParams, ListModelsParams, ListSpacesParams, RepoType, split_repo_id};
     use crate::client::HFClient;
 
     #[test]
@@ -1015,6 +1015,13 @@ mod tests {
         assert_eq!(RepoType::Dataset.to_string(), "dataset");
         assert_eq!(RepoType::Space.to_string(), "space");
         assert_eq!(RepoType::Kernel.to_string(), "kernel");
+    }
+
+    #[test]
+    fn test_split_repo_id() {
+        assert_eq!(split_repo_id("user/repo"), (Some("user"), "repo"));
+        assert_eq!(split_repo_id("repo"), (None, "repo"));
+        assert_eq!(split_repo_id("org/sub/repo"), (Some("org"), "sub/repo"));
     }
 
     #[tokio::test]
