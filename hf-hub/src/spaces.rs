@@ -194,37 +194,7 @@ impl HFSpace {
     pub fn repo(&self) -> &HFRepository {
         &self.repo
     }
-}
 
-impl TryFrom<HFRepository> for HFSpace {
-    type Error = HFError;
-
-    fn try_from(repo: HFRepository) -> HFResult<Self> {
-        if repo.repo_type() != RepoType::Space {
-            return Err(HFError::InvalidRepoType {
-                expected: RepoType::Space,
-                actual: repo.repo_type(),
-            });
-        }
-        Ok(Self { repo: Arc::new(repo) })
-    }
-}
-
-impl From<HFSpace> for Arc<HFRepository> {
-    fn from(space: HFSpace) -> Self {
-        space.repo.clone()
-    }
-}
-
-impl Deref for HFSpace {
-    type Target = HFRepository;
-
-    fn deref(&self) -> &Self::Target {
-        &self.repo
-    }
-}
-
-impl HFSpace {
     /// Fetch the current runtime state of the Space (hardware, stage, URL, etc.).
     pub async fn runtime(&self) -> HFResult<SpaceRuntime> {
         let url = format!("{}/api/spaces/{}/runtime", self.hf_client.endpoint(), self.repo_path());
@@ -446,6 +416,34 @@ impl HFSpace {
             .check_response(response, Some(&self.repo_path()), crate::error::NotFoundContext::Repo)
             .await?;
         Ok(response.json().await?)
+    }
+}
+
+impl TryFrom<HFRepository> for HFSpace {
+    type Error = HFError;
+
+    fn try_from(repo: HFRepository) -> HFResult<Self> {
+        if repo.repo_type() != RepoType::Space {
+            return Err(HFError::InvalidRepoType {
+                expected: RepoType::Space,
+                actual: repo.repo_type(),
+            });
+        }
+        Ok(Self { repo: Arc::new(repo) })
+    }
+}
+
+impl From<HFSpace> for Arc<HFRepository> {
+    fn from(space: HFSpace) -> Self {
+        space.repo.clone()
+    }
+}
+
+impl Deref for HFSpace {
+    type Target = HFRepository;
+
+    fn deref(&self) -> &Self::Target {
+        &self.repo
     }
 }
 

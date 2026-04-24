@@ -81,261 +81,7 @@ impl HFBucket {
     pub fn bucket_id(&self) -> String {
         format!("{}/{}", self.owner, self.name)
     }
-}
 
-/// Parameters for creating a new bucket on the Hub.
-///
-/// Used with [`HFClient::create_bucket`].
-#[derive(Debug, Clone, TypedBuilder)]
-pub struct CreateBucketParams {
-    /// Namespace (user or organization) that owns the bucket.
-    #[builder(setter(into))]
-    pub namespace: String,
-    /// Bucket name within the namespace.
-    #[builder(setter(into))]
-    pub name: String,
-    /// Whether the bucket should be private. Defaults to `false`.
-    #[builder(default = false)]
-    pub private: bool,
-    /// Enterprise resource group ID (optional).
-    #[builder(default, setter(into, strip_option))]
-    pub resource_group_id: Option<String>,
-    /// If `true`, do not error when the bucket already exists. Defaults to `false`.
-    #[builder(default = false)]
-    pub exist_ok: bool,
-}
-
-/// Parameters for listing files in a bucket tree.
-///
-/// Used with [`HFBucket::list_tree`].
-#[derive(Debug, Clone, Default, TypedBuilder)]
-pub struct ListBucketTreeParams {
-    /// Filter results to entries under this prefix.
-    #[builder(default, setter(into, strip_option))]
-    pub prefix: Option<String>,
-    /// If `true`, list entries recursively under the prefix.
-    #[builder(default, setter(strip_option))]
-    pub recursive: Option<bool>,
-}
-
-/// Parameters for batch operations on bucket files.
-///
-/// Used with [`HFBucket::batch`].
-/// Operations are chunked at 1000 entries per request.
-#[derive(Debug, Clone, Default, TypedBuilder)]
-pub struct BatchBucketFilesParams {
-    /// Files to add (register) in the bucket.
-    #[builder(default)]
-    pub add: Vec<BucketAddFile>,
-    /// Paths of files to delete from the bucket.
-    #[builder(default)]
-    pub delete: Vec<String>,
-    /// Files to copy (server-side) into the bucket.
-    #[builder(default)]
-    pub copy: Vec<BucketCopyFile>,
-}
-
-/// A file to register in a bucket via the batch endpoint.
-///
-/// Represents an `addFile` entry in the NDJSON batch payload.
-/// The file content must have already been uploaded to xet to obtain the `xet_hash`.
-#[derive(Debug, Clone)]
-pub struct BucketAddFile {
-    /// Destination path in the bucket.
-    pub path: String,
-    /// Xet content hash from a prior upload.
-    pub xet_hash: String,
-    /// File size in bytes.
-    pub size: u64,
-    /// Last modification time as a Unix timestamp (seconds).
-    pub mtime: Option<u64>,
-    /// MIME content type (e.g. `"text/plain"`, `"application/octet-stream"`).
-    pub content_type: Option<String>,
-}
-
-/// A server-side copy operation for the batch endpoint.
-///
-/// Represents a `copyFile` entry in the NDJSON batch payload.
-/// Copies are performed by xet hash — no data transfer occurs.
-#[derive(Debug, Clone)]
-pub struct BucketCopyFile {
-    /// Destination path in the bucket.
-    pub path: String,
-    /// Xet content hash to copy.
-    pub xet_hash: String,
-    /// Source repo type (e.g. `"bucket"`, `"model"`).
-    pub source_repo_type: String,
-    /// Source repo or bucket ID (e.g. `"user/my-bucket"`).
-    pub source_repo_id: String,
-}
-
-/// Parameters for downloading files from a bucket.
-///
-/// Used with [`HFBucket::download_files`].
-#[derive(Debug, Clone, TypedBuilder)]
-pub struct BucketDownloadFilesParams {
-    /// List of `(remote_path, local_path)` pairs to download.
-    pub files: Vec<(String, PathBuf)>,
-}
-
-/// Metadata about a bucket on the Hugging Face Hub.
-///
-/// Returned by [`HFBucket::info`] and
-/// [`HFClient::list_buckets`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BucketInfo {
-    /// Full bucket identifier, e.g. `"namespace/bucket_name"`.
-    pub id: String,
-    /// Whether the bucket is private.
-    pub private: bool,
-    /// ISO 8601 creation timestamp.
-    #[serde(rename = "createdAt")]
-    pub created_at: String,
-    /// Total size of all files in bytes.
-    pub size: u64,
-    /// Number of files in the bucket.
-    #[serde(rename = "totalFiles")]
-    pub total_files: u64,
-}
-
-/// URL returned after creating a bucket.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BucketUrl {
-    /// Full URL to the bucket on the Hub.
-    pub url: String,
-}
-
-/// A file or directory entry in a bucket tree listing.
-///
-/// Returned by [`HFBucket::list_tree`] and
-/// [`HFBucket::get_paths_info`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum BucketTreeEntry {
-    /// A file entry with content hash and size.
-    File {
-        /// Path within the bucket.
-        path: String,
-        /// File size in bytes.
-        size: u64,
-        /// Xet content-addressable hash.
-        #[serde(rename = "xetHash")]
-        xet_hash: String,
-        /// Last modification time (ISO 8601), if available.
-        mtime: Option<String>,
-        /// Upload timestamp (ISO 8601), if available.
-        uploaded_at: Option<String>,
-    },
-    /// A directory entry.
-    Directory {
-        /// Directory path within the bucket.
-        path: String,
-        /// Upload timestamp (ISO 8601), if available.
-        uploaded_at: Option<String>,
-    },
-}
-
-/// Metadata for a single file in a bucket, retrieved via HEAD request.
-///
-/// Returned by [`HFBucket::get_file_metadata`].
-#[derive(Debug, Clone)]
-pub struct BucketFileMetadata {
-    /// File size in bytes.
-    pub size: u64,
-    /// Xet content-addressable hash.
-    pub xet_hash: String,
-}
-
-impl HFClient {
-    /// Create an [`HFBucket`] handle for a bucket.
-    pub fn bucket(&self, owner: impl Into<String>, name: impl Into<String>) -> HFBucket {
-        HFBucket::new(self.clone(), owner, name)
-    }
-
-    /// Create a new bucket on the Hub.
-    ///
-    /// Endpoint: `POST /api/buckets/{namespace}/{name}`
-    pub async fn create_bucket(&self, params: &CreateBucketParams) -> HFResult<BucketUrl> {
-        let url = format!("{}/api/buckets/{}/{}", self.endpoint(), params.namespace, params.name);
-
-        let mut body = serde_json::json!({});
-        if params.private {
-            body["private"] = serde_json::Value::Bool(true);
-        }
-        if let Some(ref rg) = params.resource_group_id {
-            body["resourceGroupId"] = serde_json::Value::String(rg.clone());
-        }
-
-        let headers = self.auth_headers();
-        let response = retry::retry(self.retry_config(), || {
-            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
-        })
-        .await?;
-
-        let bucket_id = format!("{}/{}", params.namespace, params.name);
-
-        if response.status().as_u16() == 409 && params.exist_ok {
-            return Ok(BucketUrl {
-                url: format!("{}/buckets/{}", self.endpoint(), bucket_id),
-            });
-        }
-
-        let response = self
-            .check_response(response, Some(&bucket_id), NotFoundContext::Generic)
-            .await?;
-        Ok(response.json().await?)
-    }
-
-    /// Delete a bucket from the Hub.
-    ///
-    /// Endpoint: `DELETE /api/buckets/{bucket_id}`
-    pub async fn delete_bucket(&self, bucket_id: &str, missing_ok: bool) -> HFResult<()> {
-        let url = self.bucket_api_url(bucket_id);
-
-        let headers = self.auth_headers();
-        let response =
-            retry::retry(self.retry_config(), || self.http_client().delete(&url).headers(headers.clone()).send())
-                .await?;
-
-        if response.status().as_u16() == 404 && missing_ok {
-            return Ok(());
-        }
-
-        self.check_response(response, Some(bucket_id), NotFoundContext::Bucket).await?;
-        Ok(())
-    }
-
-    /// List buckets in a namespace.
-    ///
-    /// Endpoint: `GET /api/buckets/{namespace}` (paginated)
-    pub fn list_buckets(&self, namespace: &str) -> HFResult<impl Stream<Item = HFResult<BucketInfo>> + '_> {
-        let url = Url::parse(&format!("{}/api/buckets/{}", self.endpoint(), namespace))?;
-        Ok(self.paginate(url, vec![], None))
-    }
-
-    /// Move (rename) a bucket.
-    ///
-    /// Endpoint: `POST /api/repos/move` with `type: "bucket"`
-    pub async fn move_bucket(&self, from_id: &str, to_id: &str) -> HFResult<()> {
-        let url = format!("{}/api/repos/move", self.endpoint());
-        let body = serde_json::json!({
-            "fromRepo": from_id,
-            "toRepo": to_id,
-            "type": "bucket",
-        });
-
-        let headers = self.auth_headers();
-        let response = retry::retry(self.retry_config(), || {
-            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
-        })
-        .await?;
-
-        self.check_response(response, None, NotFoundContext::Generic).await?;
-        Ok(())
-    }
-}
-
-impl HFBucket {
     /// Get metadata about this bucket.
     ///
     /// Endpoint: `GET /api/buckets/{bucket_id}`
@@ -651,6 +397,258 @@ impl HFBucket {
         self.xet_download_batch(&xet_batch_files, progress).await?;
 
         progress.emit(DownloadEvent::Complete);
+        Ok(())
+    }
+}
+
+/// Parameters for creating a new bucket on the Hub.
+///
+/// Used with [`HFClient::create_bucket`].
+#[derive(Debug, Clone, TypedBuilder)]
+pub struct CreateBucketParams {
+    /// Namespace (user or organization) that owns the bucket.
+    #[builder(setter(into))]
+    pub namespace: String,
+    /// Bucket name within the namespace.
+    #[builder(setter(into))]
+    pub name: String,
+    /// Whether the bucket should be private. Defaults to `false`.
+    #[builder(default = false)]
+    pub private: bool,
+    /// Enterprise resource group ID (optional).
+    #[builder(default, setter(into, strip_option))]
+    pub resource_group_id: Option<String>,
+    /// If `true`, do not error when the bucket already exists. Defaults to `false`.
+    #[builder(default = false)]
+    pub exist_ok: bool,
+}
+
+/// Parameters for listing files in a bucket tree.
+///
+/// Used with [`HFBucket::list_tree`].
+#[derive(Debug, Clone, Default, TypedBuilder)]
+pub struct ListBucketTreeParams {
+    /// Filter results to entries under this prefix.
+    #[builder(default, setter(into, strip_option))]
+    pub prefix: Option<String>,
+    /// If `true`, list entries recursively under the prefix.
+    #[builder(default, setter(strip_option))]
+    pub recursive: Option<bool>,
+}
+
+/// Parameters for batch operations on bucket files.
+///
+/// Used with [`HFBucket::batch`].
+/// Operations are chunked at 1000 entries per request.
+#[derive(Debug, Clone, Default, TypedBuilder)]
+pub struct BatchBucketFilesParams {
+    /// Files to add (register) in the bucket.
+    #[builder(default)]
+    pub add: Vec<BucketAddFile>,
+    /// Paths of files to delete from the bucket.
+    #[builder(default)]
+    pub delete: Vec<String>,
+    /// Files to copy (server-side) into the bucket.
+    #[builder(default)]
+    pub copy: Vec<BucketCopyFile>,
+}
+
+/// A file to register in a bucket via the batch endpoint.
+///
+/// Represents an `addFile` entry in the NDJSON batch payload.
+/// The file content must have already been uploaded to xet to obtain the `xet_hash`.
+#[derive(Debug, Clone)]
+pub struct BucketAddFile {
+    /// Destination path in the bucket.
+    pub path: String,
+    /// Xet content hash from a prior upload.
+    pub xet_hash: String,
+    /// File size in bytes.
+    pub size: u64,
+    /// Last modification time as a Unix timestamp (seconds).
+    pub mtime: Option<u64>,
+    /// MIME content type (e.g. `"text/plain"`, `"application/octet-stream"`).
+    pub content_type: Option<String>,
+}
+
+/// A server-side copy operation for the batch endpoint.
+///
+/// Represents a `copyFile` entry in the NDJSON batch payload.
+/// Copies are performed by xet hash — no data transfer occurs.
+#[derive(Debug, Clone)]
+pub struct BucketCopyFile {
+    /// Destination path in the bucket.
+    pub path: String,
+    /// Xet content hash to copy.
+    pub xet_hash: String,
+    /// Source repo type (e.g. `"bucket"`, `"model"`).
+    pub source_repo_type: String,
+    /// Source repo or bucket ID (e.g. `"user/my-bucket"`).
+    pub source_repo_id: String,
+}
+
+/// Parameters for downloading files from a bucket.
+///
+/// Used with [`HFBucket::download_files`].
+#[derive(Debug, Clone, TypedBuilder)]
+pub struct BucketDownloadFilesParams {
+    /// List of `(remote_path, local_path)` pairs to download.
+    pub files: Vec<(String, PathBuf)>,
+}
+
+/// Metadata about a bucket on the Hugging Face Hub.
+///
+/// Returned by [`HFBucket::info`] and
+/// [`HFClient::list_buckets`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BucketInfo {
+    /// Full bucket identifier, e.g. `"namespace/bucket_name"`.
+    pub id: String,
+    /// Whether the bucket is private.
+    pub private: bool,
+    /// ISO 8601 creation timestamp.
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    /// Total size of all files in bytes.
+    pub size: u64,
+    /// Number of files in the bucket.
+    #[serde(rename = "totalFiles")]
+    pub total_files: u64,
+}
+
+/// URL returned after creating a bucket.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BucketUrl {
+    /// Full URL to the bucket on the Hub.
+    pub url: String,
+}
+
+/// A file or directory entry in a bucket tree listing.
+///
+/// Returned by [`HFBucket::list_tree`] and
+/// [`HFBucket::get_paths_info`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum BucketTreeEntry {
+    /// A file entry with content hash and size.
+    File {
+        /// Path within the bucket.
+        path: String,
+        /// File size in bytes.
+        size: u64,
+        /// Xet content-addressable hash.
+        #[serde(rename = "xetHash")]
+        xet_hash: String,
+        /// Last modification time (ISO 8601), if available.
+        mtime: Option<String>,
+        /// Upload timestamp (ISO 8601), if available.
+        uploaded_at: Option<String>,
+    },
+    /// A directory entry.
+    Directory {
+        /// Directory path within the bucket.
+        path: String,
+        /// Upload timestamp (ISO 8601), if available.
+        uploaded_at: Option<String>,
+    },
+}
+
+/// Metadata for a single file in a bucket, retrieved via HEAD request.
+///
+/// Returned by [`HFBucket::get_file_metadata`].
+#[derive(Debug, Clone)]
+pub struct BucketFileMetadata {
+    /// File size in bytes.
+    pub size: u64,
+    /// Xet content-addressable hash.
+    pub xet_hash: String,
+}
+
+impl HFClient {
+    /// Create an [`HFBucket`] handle for a bucket.
+    pub fn bucket(&self, owner: impl Into<String>, name: impl Into<String>) -> HFBucket {
+        HFBucket::new(self.clone(), owner, name)
+    }
+
+    /// Create a new bucket on the Hub.
+    ///
+    /// Endpoint: `POST /api/buckets/{namespace}/{name}`
+    pub async fn create_bucket(&self, params: &CreateBucketParams) -> HFResult<BucketUrl> {
+        let url = format!("{}/api/buckets/{}/{}", self.endpoint(), params.namespace, params.name);
+
+        let mut body = serde_json::json!({});
+        if params.private {
+            body["private"] = serde_json::Value::Bool(true);
+        }
+        if let Some(ref rg) = params.resource_group_id {
+            body["resourceGroupId"] = serde_json::Value::String(rg.clone());
+        }
+
+        let headers = self.auth_headers();
+        let response = retry::retry(self.retry_config(), || {
+            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
+        })
+        .await?;
+
+        let bucket_id = format!("{}/{}", params.namespace, params.name);
+
+        if response.status().as_u16() == 409 && params.exist_ok {
+            return Ok(BucketUrl {
+                url: format!("{}/buckets/{}", self.endpoint(), bucket_id),
+            });
+        }
+
+        let response = self
+            .check_response(response, Some(&bucket_id), NotFoundContext::Generic)
+            .await?;
+        Ok(response.json().await?)
+    }
+
+    /// Delete a bucket from the Hub.
+    ///
+    /// Endpoint: `DELETE /api/buckets/{bucket_id}`
+    pub async fn delete_bucket(&self, bucket_id: &str, missing_ok: bool) -> HFResult<()> {
+        let url = self.bucket_api_url(bucket_id);
+
+        let headers = self.auth_headers();
+        let response =
+            retry::retry(self.retry_config(), || self.http_client().delete(&url).headers(headers.clone()).send())
+                .await?;
+
+        if response.status().as_u16() == 404 && missing_ok {
+            return Ok(());
+        }
+
+        self.check_response(response, Some(bucket_id), NotFoundContext::Bucket).await?;
+        Ok(())
+    }
+
+    /// List buckets in a namespace.
+    ///
+    /// Endpoint: `GET /api/buckets/{namespace}` (paginated)
+    pub fn list_buckets(&self, namespace: &str) -> HFResult<impl Stream<Item = HFResult<BucketInfo>> + '_> {
+        let url = Url::parse(&format!("{}/api/buckets/{}", self.endpoint(), namespace))?;
+        Ok(self.paginate(url, vec![], None))
+    }
+
+    /// Move (rename) a bucket.
+    ///
+    /// Endpoint: `POST /api/repos/move` with `type: "bucket"`
+    pub async fn move_bucket(&self, from_id: &str, to_id: &str) -> HFResult<()> {
+        let url = format!("{}/api/repos/move", self.endpoint());
+        let body = serde_json::json!({
+            "fromRepo": from_id,
+            "toRepo": to_id,
+            "type": "bucket",
+        });
+
+        let headers = self.auth_headers();
+        let response = retry::retry(self.retry_config(), || {
+            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
+        })
+        .await?;
+
+        self.check_response(response, None, NotFoundContext::Generic).await?;
         Ok(())
     }
 }

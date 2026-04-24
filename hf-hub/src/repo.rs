@@ -511,6 +511,206 @@ impl HFClient {
     pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository {
         self.repo(RepoType::Dataset, owner, name)
     }
+
+    /// List models on the Hub.
+    /// Endpoint: GET /api/models
+    pub fn list_models(&self, params: &ListModelsParams) -> HFResult<impl Stream<Item = HFResult<ModelInfo>> + '_> {
+        let url = Url::parse(&format!("{}/api/models", self.endpoint()))?;
+        let mut query: Vec<(String, String)> = Vec::new();
+        if let Some(ref search) = params.search {
+            query.push(("search".into(), search.clone()));
+        }
+        if let Some(ref author) = params.author {
+            query.push(("author".into(), author.clone()));
+        }
+        if let Some(ref filter) = params.filter {
+            query.push(("filter".into(), filter.clone()));
+        }
+        if let Some(ref sort) = params.sort {
+            query.push(("sort".into(), sort.clone()));
+        }
+        if let Some(max) = params.limit {
+            // The Hub API usually returns up to 1000 items per page by default,
+            // so only set an explicit limit for smaller requests.
+            if max < 1000 {
+                query.push(("limit".into(), max.to_string()));
+            }
+        }
+        if let Some(ref pipeline_tag) = params.pipeline_tag {
+            query.push(("pipeline_tag".into(), pipeline_tag.clone()));
+        }
+        if params.full == Some(true) {
+            query.push(("full".into(), "true".into()));
+        }
+        if params.card_data == Some(true) {
+            query.push(("cardData".into(), "true".into()));
+        }
+        if params.fetch_config == Some(true) {
+            query.push(("config".into(), "true".into()));
+        }
+        Ok(self.paginate(url, query, params.limit))
+    }
+
+    /// List datasets on the Hub.
+    /// Endpoint: GET /api/datasets
+    pub fn list_datasets(
+        &self,
+        params: &ListDatasetsParams,
+    ) -> HFResult<impl Stream<Item = HFResult<DatasetInfo>> + '_> {
+        let url = Url::parse(&format!("{}/api/datasets", self.endpoint()))?;
+        let mut query: Vec<(String, String)> = Vec::new();
+        if let Some(ref search) = params.search {
+            query.push(("search".into(), search.clone()));
+        }
+        if let Some(ref author) = params.author {
+            query.push(("author".into(), author.clone()));
+        }
+        if let Some(ref filter) = params.filter {
+            query.push(("filter".into(), filter.clone()));
+        }
+        if let Some(ref sort) = params.sort {
+            query.push(("sort".into(), sort.clone()));
+        }
+        if let Some(max) = params.limit {
+            // The Hub API usually returns up to 1000 items per page by default,
+            // so only set an explicit limit for smaller requests.
+            if max < 1000 {
+                query.push(("limit".into(), max.to_string()));
+            }
+        }
+        if params.full == Some(true) {
+            query.push(("full".into(), "true".into()));
+        }
+        Ok(self.paginate(url, query, params.limit))
+    }
+
+    /// List spaces on the Hub.
+    /// Endpoint: GET /api/spaces
+    pub fn list_spaces(&self, params: &ListSpacesParams) -> HFResult<impl Stream<Item = HFResult<SpaceInfo>> + '_> {
+        let url = Url::parse(&format!("{}/api/spaces", self.endpoint()))?;
+        let mut query: Vec<(String, String)> = Vec::new();
+        if let Some(ref search) = params.search {
+            query.push(("search".into(), search.clone()));
+        }
+        if let Some(ref author) = params.author {
+            query.push(("author".into(), author.clone()));
+        }
+        if let Some(ref filter) = params.filter {
+            query.push(("filter".into(), filter.clone()));
+        }
+        if let Some(ref sort) = params.sort {
+            query.push(("sort".into(), sort.clone()));
+        }
+        if let Some(max) = params.limit {
+            // The Hub API usually returns up to 1000 items per page by default,
+            // so only set an explicit limit for smaller requests.
+            if max < 1000 {
+                query.push(("limit".into(), max.to_string()));
+            }
+        }
+        if params.full == Some(true) {
+            query.push(("full".into(), "true".into()));
+        }
+        Ok(self.paginate(url, query, params.limit))
+    }
+
+    /// Create a new repository.
+    /// Endpoint: POST /api/repos/create
+    pub async fn create_repo(&self, params: &CreateRepoParams) -> HFResult<RepoUrl> {
+        let url = format!("{}/api/repos/create", self.endpoint());
+
+        let (namespace, name) = split_repo_id(&params.repo_id);
+
+        let mut body = serde_json::json!({
+            "name": name,
+            "private": params.private.unwrap_or(false),
+        });
+
+        if let Some(ns) = namespace {
+            body["organization"] = serde_json::Value::String(ns.to_string());
+        }
+        if let Some(ref repo_type) = params.repo_type {
+            body["type"] = serde_json::Value::String(repo_type.to_string());
+        }
+        if let Some(ref sdk) = params.space_sdk {
+            body["sdk"] = serde_json::Value::String(sdk.clone());
+        }
+
+        let headers = self.auth_headers();
+        let response = retry::retry(self.retry_config(), || {
+            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
+        })
+        .await?;
+
+        if response.status().as_u16() == 409 && params.exist_ok {
+            // Already exists and exist_ok=true, return its URL
+            let prefix = constants::repo_type_url_prefix(params.repo_type);
+            return Ok(RepoUrl {
+                url: format!("{}/{}{}", self.endpoint(), prefix, params.repo_id),
+            });
+        }
+
+        let response = self
+            .check_response(response, None, crate::error::NotFoundContext::Generic)
+            .await?;
+        Ok(response.json().await?)
+    }
+
+    /// Delete a repository.
+    /// Endpoint: DELETE /api/repos/delete
+    pub async fn delete_repo(&self, params: &DeleteRepoParams) -> HFResult<()> {
+        let url = format!("{}/api/repos/delete", self.endpoint());
+
+        let (namespace, name) = split_repo_id(&params.repo_id);
+
+        let mut body = serde_json::json!({ "name": name });
+        if let Some(ns) = namespace {
+            body["organization"] = serde_json::Value::String(ns.to_string());
+        }
+        if let Some(ref repo_type) = params.repo_type {
+            body["type"] = serde_json::Value::String(repo_type.to_string());
+        }
+
+        let headers = self.auth_headers();
+        let response = retry::retry(self.retry_config(), || {
+            self.http_client().delete(&url).headers(headers.clone()).json(&body).send()
+        })
+        .await?;
+
+        if response.status().as_u16() == 404 && params.missing_ok {
+            return Ok(());
+        }
+
+        self.check_response(response, Some(&params.repo_id), crate::error::NotFoundContext::Repo)
+            .await?;
+        Ok(())
+    }
+
+    /// Move (rename) a repository.
+    /// Endpoint: POST /api/repos/move
+    pub async fn move_repo(&self, params: &MoveRepoParams) -> HFResult<RepoUrl> {
+        let url = format!("{}/api/repos/move", self.endpoint());
+        let mut body = serde_json::json!({
+            "fromRepo": params.from_id,
+            "toRepo": params.to_id,
+        });
+        if let Some(ref repo_type) = params.repo_type {
+            body["type"] = serde_json::Value::String(repo_type.to_string());
+        }
+
+        let headers = self.auth_headers();
+        let response = retry::retry(self.retry_config(), || {
+            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
+        })
+        .await?;
+
+        self.check_response(response, None, crate::error::NotFoundContext::Generic)
+            .await?;
+        let prefix = constants::repo_type_url_prefix(params.repo_type);
+        Ok(RepoUrl {
+            url: format!("{}/{}{}", self.endpoint(), prefix, params.to_id),
+        })
+    }
 }
 
 impl HFRepository {
@@ -741,208 +941,6 @@ impl HFRepository {
             .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Repo)
             .await?;
         Ok(())
-    }
-}
-
-impl HFClient {
-    /// List models on the Hub.
-    /// Endpoint: GET /api/models
-    pub fn list_models(&self, params: &ListModelsParams) -> HFResult<impl Stream<Item = HFResult<ModelInfo>> + '_> {
-        let url = Url::parse(&format!("{}/api/models", self.endpoint()))?;
-        let mut query: Vec<(String, String)> = Vec::new();
-        if let Some(ref search) = params.search {
-            query.push(("search".into(), search.clone()));
-        }
-        if let Some(ref author) = params.author {
-            query.push(("author".into(), author.clone()));
-        }
-        if let Some(ref filter) = params.filter {
-            query.push(("filter".into(), filter.clone()));
-        }
-        if let Some(ref sort) = params.sort {
-            query.push(("sort".into(), sort.clone()));
-        }
-        if let Some(max) = params.limit {
-            // The Hub API usually returns up to 1000 items per page by default,
-            // so only set an explicit limit for smaller requests.
-            if max < 1000 {
-                query.push(("limit".into(), max.to_string()));
-            }
-        }
-        if let Some(ref pipeline_tag) = params.pipeline_tag {
-            query.push(("pipeline_tag".into(), pipeline_tag.clone()));
-        }
-        if params.full == Some(true) {
-            query.push(("full".into(), "true".into()));
-        }
-        if params.card_data == Some(true) {
-            query.push(("cardData".into(), "true".into()));
-        }
-        if params.fetch_config == Some(true) {
-            query.push(("config".into(), "true".into()));
-        }
-        Ok(self.paginate(url, query, params.limit))
-    }
-
-    /// List datasets on the Hub.
-    /// Endpoint: GET /api/datasets
-    pub fn list_datasets(
-        &self,
-        params: &ListDatasetsParams,
-    ) -> HFResult<impl Stream<Item = HFResult<DatasetInfo>> + '_> {
-        let url = Url::parse(&format!("{}/api/datasets", self.endpoint()))?;
-        let mut query: Vec<(String, String)> = Vec::new();
-        if let Some(ref search) = params.search {
-            query.push(("search".into(), search.clone()));
-        }
-        if let Some(ref author) = params.author {
-            query.push(("author".into(), author.clone()));
-        }
-        if let Some(ref filter) = params.filter {
-            query.push(("filter".into(), filter.clone()));
-        }
-        if let Some(ref sort) = params.sort {
-            query.push(("sort".into(), sort.clone()));
-        }
-        if let Some(max) = params.limit {
-            // The Hub API usually returns up to 1000 items per page by default,
-            // so only set an explicit limit for smaller requests.
-            if max < 1000 {
-                query.push(("limit".into(), max.to_string()));
-            }
-        }
-        if params.full == Some(true) {
-            query.push(("full".into(), "true".into()));
-        }
-        Ok(self.paginate(url, query, params.limit))
-    }
-
-    /// List spaces on the Hub.
-    /// Endpoint: GET /api/spaces
-    pub fn list_spaces(&self, params: &ListSpacesParams) -> HFResult<impl Stream<Item = HFResult<SpaceInfo>> + '_> {
-        let url = Url::parse(&format!("{}/api/spaces", self.endpoint()))?;
-        let mut query: Vec<(String, String)> = Vec::new();
-        if let Some(ref search) = params.search {
-            query.push(("search".into(), search.clone()));
-        }
-        if let Some(ref author) = params.author {
-            query.push(("author".into(), author.clone()));
-        }
-        if let Some(ref filter) = params.filter {
-            query.push(("filter".into(), filter.clone()));
-        }
-        if let Some(ref sort) = params.sort {
-            query.push(("sort".into(), sort.clone()));
-        }
-        if let Some(max) = params.limit {
-            // The Hub API usually returns up to 1000 items per page by default,
-            // so only set an explicit limit for smaller requests.
-            if max < 1000 {
-                query.push(("limit".into(), max.to_string()));
-            }
-        }
-        if params.full == Some(true) {
-            query.push(("full".into(), "true".into()));
-        }
-        Ok(self.paginate(url, query, params.limit))
-    }
-
-    /// Create a new repository.
-    /// Endpoint: POST /api/repos/create
-    pub async fn create_repo(&self, params: &CreateRepoParams) -> HFResult<RepoUrl> {
-        let url = format!("{}/api/repos/create", self.endpoint());
-
-        let (namespace, name) = split_repo_id(&params.repo_id);
-
-        let mut body = serde_json::json!({
-            "name": name,
-            "private": params.private.unwrap_or(false),
-        });
-
-        if let Some(ns) = namespace {
-            body["organization"] = serde_json::Value::String(ns.to_string());
-        }
-        if let Some(ref repo_type) = params.repo_type {
-            body["type"] = serde_json::Value::String(repo_type.to_string());
-        }
-        if let Some(ref sdk) = params.space_sdk {
-            body["sdk"] = serde_json::Value::String(sdk.clone());
-        }
-
-        let headers = self.auth_headers();
-        let response = retry::retry(self.retry_config(), || {
-            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
-        })
-        .await?;
-
-        if response.status().as_u16() == 409 && params.exist_ok {
-            // Already exists and exist_ok=true, return its URL
-            let prefix = constants::repo_type_url_prefix(params.repo_type);
-            return Ok(RepoUrl {
-                url: format!("{}/{}{}", self.endpoint(), prefix, params.repo_id),
-            });
-        }
-
-        let response = self
-            .check_response(response, None, crate::error::NotFoundContext::Generic)
-            .await?;
-        Ok(response.json().await?)
-    }
-
-    /// Delete a repository.
-    /// Endpoint: DELETE /api/repos/delete
-    pub async fn delete_repo(&self, params: &DeleteRepoParams) -> HFResult<()> {
-        let url = format!("{}/api/repos/delete", self.endpoint());
-
-        let (namespace, name) = split_repo_id(&params.repo_id);
-
-        let mut body = serde_json::json!({ "name": name });
-        if let Some(ns) = namespace {
-            body["organization"] = serde_json::Value::String(ns.to_string());
-        }
-        if let Some(ref repo_type) = params.repo_type {
-            body["type"] = serde_json::Value::String(repo_type.to_string());
-        }
-
-        let headers = self.auth_headers();
-        let response = retry::retry(self.retry_config(), || {
-            self.http_client().delete(&url).headers(headers.clone()).json(&body).send()
-        })
-        .await?;
-
-        if response.status().as_u16() == 404 && params.missing_ok {
-            return Ok(());
-        }
-
-        self.check_response(response, Some(&params.repo_id), crate::error::NotFoundContext::Repo)
-            .await?;
-        Ok(())
-    }
-
-    /// Move (rename) a repository.
-    /// Endpoint: POST /api/repos/move
-    pub async fn move_repo(&self, params: &MoveRepoParams) -> HFResult<RepoUrl> {
-        let url = format!("{}/api/repos/move", self.endpoint());
-        let mut body = serde_json::json!({
-            "fromRepo": params.from_id,
-            "toRepo": params.to_id,
-        });
-        if let Some(ref repo_type) = params.repo_type {
-            body["type"] = serde_json::Value::String(repo_type.to_string());
-        }
-
-        let headers = self.auth_headers();
-        let response = retry::retry(self.retry_config(), || {
-            self.http_client().post(&url).headers(headers.clone()).json(&body).send()
-        })
-        .await?;
-
-        self.check_response(response, None, crate::error::NotFoundContext::Generic)
-            .await?;
-        let prefix = constants::repo_type_url_prefix(params.repo_type);
-        Ok(RepoUrl {
-            url: format!("{}/{}{}", self.endpoint(), prefix, params.to_id),
-        })
     }
 }
 
