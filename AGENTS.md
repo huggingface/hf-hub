@@ -51,12 +51,12 @@ These rules apply to ALL code written or modified in this repo:
 
 #### Integration Tests
 
-- Located in `hf-hub/tests/integration_test.rs`
+- Located in `hf-hub/tests/` (`integration_test.rs`, `blocking_test.rs`, `bucket_sync_test.rs`, `bucket_xet_transfer_test.rs`, `cache_test.rs`, `download_test.rs`, `xet_transfer_test.rs`)
 - Require a valid `HF_TOKEN` environment variable and internet access
 - Tests skip gracefully when `HF_TOKEN` is not set (no failures)
-- Run read-only tests: `HF_TOKEN=HF_xxx cargo test -p hf-hub --test integration_test`
+- Run read-only tests: `HF_TOKEN=HF_xxx cargo test -p hf-hub --tests`
 - Write operation tests (create/delete repos, upload files) require `HF_TEST_WRITE=1`
-- Run all tests including writes: `HF_TOKEN=HF_xxx HF_TEST_WRITE=1 cargo test -p hf-hub --test integration_test`
+- Run all tests including writes: `HF_TOKEN=HF_xxx HF_TEST_WRITE=1 cargo test -p hf-hub --tests`
 
 ### Formatting and Linting
 
@@ -72,49 +72,65 @@ These rules apply to ALL code written or modified in this repo:
 
 > **Agents MUST update this section when adding new crates or large modules.**
 
+Types and API methods live together per component. Each component is either a single file (for smaller components) or a folder (when the impl block needs splitting). Public types are reached via `hf_hub::<component>::…`; no `hf_hub::types` module exists.
+
 ```txt
 hf-hub/
 ├── Cargo.toml                      # Workspace root
-├── AGENTS.md                       # This file
+├── AGENTS.md                       # This file (CLAUDE.md is a symlink to it)
 ├── .gitignore
 ├── hf-hub/                         # Main library crate (package: hf-hub)
 │   ├── Cargo.toml                  # Crate manifest, dependencies, features
 │   ├── src/
-│   │   ├── lib.rs                  # Public re-exports, crate docs
+│   │   ├── lib.rs                  # Module declarations, public re-exports, crate docs
 │   │   ├── client.rs               # HFClient, HFClientBuilder, HFClientInner, auth headers, URL builders
-│   │   ├── repository.rs           # HFRepository/HFRepo handle, repo-scoped params, repo-bound methods
-│   │   ├── bucket.rs               # HFBucket handle with factory method and URL helpers
+│   │   ├── blocking.rs             # Synchronous *Sync handles (behind "blocking" feature)
 │   │   ├── constants.rs            # Env var names, default URLs, repo type helpers
-│   │   ├── error.rs                # HFError enum, Result alias, NotFoundContext
+│   │   ├── error.rs                # HFError enum, HFResult alias, NotFoundContext
 │   │   ├── pagination.rs           # Generic paginate<T>() with Link header parsing
-│   │   ├── cache.rs                # Cache path computation, locking, ref read/write, symlink, scan, delete
-│   │   ├── diff.rs                 # Raw diff parsing (parse_raw_diff, stream_raw_diff), HFFileDiff, GitStatus
-│   │   ├── xet.rs                  # Xet high-performance transfer stubs
-│   │   ├── types/
-│   │   │   ├── mod.rs              # Module declarations, re-exports
-│   │   │   ├── cache.rs            # CachedFileInfo, CachedRepoInfo, HFCacheInfo, DeleteCacheRevision
-│   │   │   ├── repo.rs             # RepoType, RepoInfo, ModelInfo, DatasetInfo, SpaceInfo, RepoTreeEntry
-│   │   │   ├── user.rs             # User, Organization, OrgMembership
-│   │   │   ├── commit.rs           # CommitInfo, GitCommitInfo, GitRefs, CommitOperation, AddSource
-│   │   │   ├── params.rs           # All *Params structs with TypedBuilder
-│   │   │   ├── buckets.rs          # Bucket params, info/url/tree/metadata types, and sync plan types
-│   │   │   └── spaces.rs           # SpaceRuntime, SpaceVariable (behind "spaces" feature)
-│   │   └── api/
-│   │       ├── mod.rs              # Module declarations
-│   │       ├── repo.rs             # Repo info, listing, existence checks, create/delete/update/move
-│   │       ├── cache.rs            # scan_cache, delete_cache_revisions
-│   │       ├── files.rs            # File listing, download, upload, create_commit, snapshot_download
-│   │       ├── commits.rs          # Commit listing, diffs, branch/tag management
-│   │       ├── users.rs            # whoami, auth_check, user/org info, followers
-│   │       ├── spaces.rs           # Space runtime, secrets, variables, hardware, pause/restart
-│   │       └── buckets/
-│   │           ├── mod.rs          # All bucket API methods (create, delete, list, move, tree, batch, download)
-│   │           └── sync.rs         # HFBucket::sync() — plan computation and execution
+│   │   ├── retry.rs                # Retry logic for transient HTTP failures
+│   │   ├── macros.rs               # sync_api!/sync_api_stream! macros
+│   │   ├── test_utils.rs           # Public test helpers
+│   │   ├── progress.rs             # ProgressEvent, ProgressHandler, Upload/DownloadEvent, FileProgress
+│   │   ├── repo.rs                 # Repo component: HFRepository/HFRepo handles, RepoType, RepoInfo,
+│   │   │                           #   ModelInfo/DatasetInfo/SpaceInfo, list/create/delete/move/update
+│   │   ├── spaces.rs               # Spaces component: HFSpace handle, SpaceRuntime/SpaceVariable,
+│   │   │                           #   Space*Params, runtime/hardware/secrets/variables/duplicate
+│   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
+│   │   │                           #   user+org lookup, followers/following
+│   │   ├── xet.rs                  # Xet component: XetTokenType, GetXetTokenParams, get_xet_token,
+│   │   │                           #   xet transfer plumbing (pub(crate))
+│   │   ├── commits/
+│   │   │   ├── mod.rs              # Git history types/params + list_commits/list_refs/diff/branches/tags
+│   │   │   └── diff.rs             # HFFileDiff, GitStatus, HFDiffParseError, parse_raw_diff, stream_raw_diff
+│   │   ├── files/
+│   │   │   ├── mod.rs              # File types/params: BlobLfsInfo, RepoTreeEntry, FileMetadataInfo,
+│   │   │   │                       #   CommitOperation/AddSource/CommitInfo, all file-op params
+│   │   │   ├── listing.rs          # list_files, list_tree, get_paths_info, get_file_metadata
+│   │   │   ├── download.rs         # download_file, download_file_stream, download_file_to_bytes,
+│   │   │   │                       #   snapshot_download
+│   │   │   └── upload.rs           # upload_file, upload_folder, create_commit, delete_file/folder
+│   │   ├── buckets/
+│   │   │   ├── mod.rs              # HFBucket handle, bucket types/params, create/list/tree/batch/download
+│   │   │   └── sync.rs             # BucketSync* types, HFBucket::sync — plan computation and execution
+│   │   └── cache/
+│   │       ├── mod.rs              # CachedFileInfo/CachedRepoInfo/HFCacheInfo + scan_cache API
+│   │       └── storage.rs          # pub(crate) on-disk plumbing: scan, locking, ref read/write, symlinks
 │   └── tests/
-│       └── integration_test.rs     # Integration tests against live Hub API
+│       ├── integration_test.rs        # Read-only integration tests against live Hub API
+│       ├── blocking_test.rs           # Blocking wrapper parity tests
+│       ├── bucket_sync_test.rs        # Bucket sync plan/execution tests
+│       ├── bucket_xet_transfer_test.rs # Bucket xet upload/download tests
+│       ├── cache_test.rs              # Cache scanning/locking tests
+│       ├── download_test.rs           # Download path tests
+│       └── xet_transfer_test.rs       # Xet transfer tests
 ├── examples/                       # Example programs crate (package: examples)
 │   ├── Cargo.toml                  # Crate manifest; each example declared with explicit path
-│   └── *.rs                        # Flat example source files (repo, files, commits, buckets, blocking_*, ...)
+│   └── *.rs                        # Flat example source files (repo, files, commits, buckets, users,
+│                                   #   spaces, progress, diff, download_upload, blocking_*, ...)
+├── benches/                        # Benchmark crate (package: hf-hub-benches)
+│   ├── Cargo.toml                  # Criterion benchmark setup
+│   └── sync_api.rs                 # Download/info benches for the sync API
 └── hfrs/                           # CLI crate (package: hfrs)
     ├── Cargo.toml                  # Crate manifest, binary dependencies
     ├── src/
