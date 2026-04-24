@@ -17,8 +17,11 @@
 //!   HF_TOKEN=hf_xxx cargo test -p hf-hub --all-features --test integration_test
 
 use futures::StreamExt;
+use hf_hub::commits::*;
+use hf_hub::files::*;
+use hf_hub::repo::*;
+use hf_hub::spaces::*;
 use hf_hub::test_utils::*;
-use hf_hub::types::*;
 use hf_hub::{HFClient, HFClientBuilder, HFRepository};
 
 fn api() -> Option<HFClient> {
@@ -551,7 +554,7 @@ async fn test_diff_against_empty_tree_all_additions() {
         for diff in &diffs {
             assert_eq!(
                 diff.status,
-                hf_hub::diff::GitStatus::Addition,
+                hf_hub::commits::GitStatus::Addition,
                 "[{repo_id}] file '{}' should be an Addition, got {:?}",
                 diff.file_path,
                 diff.status,

@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::TryStreamExt;
+use hf_hub::buckets::{BucketDownloadFilesParams, BucketTreeEntry, CreateBucketParams, ListBucketTreeParams};
 use hf_hub::test_utils::*;
-use hf_hub::types::{BucketDownloadFilesParams, BucketTreeEntry, CreateBucketParams, ListBucketTreeParams};
 use hf_hub::{HFBucket, HFClient, HFClientBuilder};
 use rand::RngExt;
 use tokio::sync::OnceCell;

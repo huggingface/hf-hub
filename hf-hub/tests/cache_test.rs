@@ -7,8 +7,8 @@
 
 use std::path::Path;
 
+use hf_hub::files::{RepoDownloadFileParams, RepoSnapshotDownloadParams};
 use hf_hub::test_utils::*;
-use hf_hub::types::{RepoDownloadFileParams, RepoSnapshotDownloadParams};
 use hf_hub::{HFClient, HFClientBuilder, HFError};
 use serial_test::serial;
 

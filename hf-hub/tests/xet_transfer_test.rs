@@ -16,11 +16,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
+use hf_hub::files::{AddSource, RepoDownloadFileParams, RepoDownloadFileStreamParams, RepoUploadFileParams};
+use hf_hub::repo::{CreateRepoParams, DeleteRepoParams, RepoFileExistsParams};
 use hf_hub::test_utils::*;
-use hf_hub::types::{
-    AddSource, CreateRepoParams, DeleteRepoParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
-    RepoFileExistsParams, RepoUploadFileParams,
-};
 use hf_hub::{HFClient, HFClientBuilder, HFRepository};
 use rand::RngExt;
 use tokio::sync::OnceCell;

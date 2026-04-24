@@ -12,12 +12,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures::StreamExt;
-use hf_hub::test_utils::*;
-use hf_hub::types::{
-    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, DownloadEvent, FileStatus, ProgressEvent,
-    ProgressHandler, RepoCreateCommitParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
-    RepoSnapshotDownloadParams, RepoUploadFileParams, UploadEvent,
+use hf_hub::files::{
+    AddSource, CommitOperation, RepoCreateCommitParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
+    RepoSnapshotDownloadParams, RepoUploadFileParams,
 };
+use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
+use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
+use hf_hub::test_utils::*;
 use hf_hub::{HFClient, HFClientBuilder, HFRepository};
 use sha2::{Digest, Sha256};
 

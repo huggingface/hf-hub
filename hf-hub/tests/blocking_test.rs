@@ -8,8 +8,10 @@
 //! Local: HF_TOKEN=hf_xxx cargo test -p hf-hub --features blocking --test blocking_test
 //! CI: The workflow sets HF_CI_TOKEN + HF_PROD_TOKEN.
 
+use hf_hub::commits::*;
+use hf_hub::files::*;
+use hf_hub::repo::*;
 use hf_hub::test_utils::*;
-use hf_hub::types::*;
 use hf_hub::{HFClientBuilder, HFClientSync};
 
 fn prod_sync_api() -> Option<HFClientSync> {
