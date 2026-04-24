@@ -1,2 +1,0 @@
-[build]
-rustdocflags = ["--cfg", "docsrs"]

@@ -88,19 +88,19 @@ jobs:
     name: Docs
     runs-on: ubuntu-latest
     env:
-      RUSTDOCFLAGS: "-D warnings"
+      RUSTDOCFLAGS: "-D warnings --cfg docsrs"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - name: Install Rust Stable
+      - name: Install Rust Nightly
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
         with:
-          toolchain: stable
+          toolchain: nightly
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
       - name: Build docs
-        run: cargo doc --workspace --all-features --no-deps
+        run: cargo +nightly doc --workspace --all-features --no-deps
 
   audit:
     name: Audit
