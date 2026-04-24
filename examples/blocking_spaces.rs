@@ -5,11 +5,9 @@
 //! Requires HF_TOKEN and the "blocking" + "spaces" features.
 //! Run: cargo run -p examples --features blocking --example blocking_spaces
 
-use hf_hub::HFClientSync;
-use hf_hub::types::{
-    CreateRepoParams, DeleteRepoParams, RepoType, SpaceSecretDeleteParams, SpaceSecretParams,
-    SpaceVariableDeleteParams, SpaceVariableParams,
-};
+use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
+use hf_hub::spaces::{SpaceSecretDeleteParams, SpaceSecretParams, SpaceVariableDeleteParams, SpaceVariableParams};
+use hf_hub::{HFClientSync, RepoType};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;

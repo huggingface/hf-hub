@@ -5,7 +5,7 @@
 
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::types::RepoGetRawDiffParams;
+use hf_hub::commits::RepoGetRawDiffParams;
 
 const GIT_EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 

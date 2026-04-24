@@ -14,10 +14,11 @@ use std::io::Write;
 
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::types::{
-    AddSource, CreateRepoParams, DeleteRepoParams, RepoDownloadFileParams, RepoDownloadFileStreamParams,
-    RepoSnapshotDownloadParams, RepoUploadFileParams, RepoUploadFolderParams,
+use hf_hub::files::{
+    AddSource, RepoDownloadFileParams, RepoDownloadFileStreamParams, RepoSnapshotDownloadParams, RepoUploadFileParams,
+    RepoUploadFolderParams,
 };
+use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {

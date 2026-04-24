@@ -7,10 +7,11 @@
 //! Run: cargo run -p examples --features blocking --example blocking_read
 
 use hf_hub::HFClientSync;
-use hf_hub::types::{
-    ListDatasetsParams, ListModelsParams, RepoDownloadFileParams, RepoGetPathsInfoParams, RepoInfo, RepoInfoParams,
-    RepoListCommitsParams, RepoListFilesParams, RepoListTreeParams, RepoTreeEntry,
+use hf_hub::commits::RepoListCommitsParams;
+use hf_hub::files::{
+    RepoDownloadFileParams, RepoGetPathsInfoParams, RepoListFilesParams, RepoListTreeParams, RepoTreeEntry,
 };
+use hf_hub::repo::{ListDatasetsParams, ListModelsParams, RepoInfo, RepoInfoParams};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;

@@ -16,10 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use hf_hub::HFClient;
-use hf_hub::types::{
-    AddSource, CreateRepoParams, DeleteRepoParams, ProgressEvent, ProgressHandler, RepoDownloadFileParams,
-    RepoSnapshotDownloadParams, RepoUploadFileParams,
-};
+use hf_hub::files::{AddSource, RepoDownloadFileParams, RepoSnapshotDownloadParams, RepoUploadFileParams};
+use hf_hub::progress::{ProgressEvent, ProgressHandler};
+use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
 
 /// Logs each `ProgressEvent` to stderr with a millisecond offset from when
 /// the handler was constructed, plus an event counter. Thread-safe — uses

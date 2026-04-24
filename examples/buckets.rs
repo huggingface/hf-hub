@@ -6,7 +6,7 @@
 
 use futures::TryStreamExt;
 use hf_hub::HFClient;
-use hf_hub::types::{BucketInfo, CreateBucketParams, ListBucketTreeParams};
+use hf_hub::buckets::{BucketInfo, CreateBucketParams, ListBucketTreeParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {

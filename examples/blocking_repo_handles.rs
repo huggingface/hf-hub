@@ -6,8 +6,8 @@
 //! Read-only operations require no auth.
 //! Run: cargo run -p examples --features blocking --example blocking_repo_handles
 
-use hf_hub::types::{RepoFileExistsParams, RepoInfo, RepoInfoParams, RepoType};
-use hf_hub::{HFClientSync, HFSpaceSync};
+use hf_hub::repo::{RepoFileExistsParams, RepoInfo, RepoInfoParams};
+use hf_hub::{HFClientSync, HFSpaceSync, RepoType};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;

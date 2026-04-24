@@ -5,7 +5,7 @@
 
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::types::{
+use hf_hub::repo::{
     CreateRepoParams, DeleteRepoParams, ListDatasetsParams, ListModelsParams, ListSpacesParams, MoveRepoParams,
     RepoFileExistsParams, RepoInfo, RepoInfoParams, RepoRevisionExistsParams, RepoUpdateSettingsParams,
 };

@@ -8,7 +8,8 @@
 use std::sync::Arc;
 
 use hf_hub::HFClient;
-use hf_hub::types::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, RepoDownloadFileParams, UploadEvent};
+use hf_hub::files::RepoDownloadFileParams;
+use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
 
 struct PrintProgressHandler;
 

@@ -4,8 +4,8 @@
 //! Read-only operations require no auth.
 //! Run: cargo run -p examples --example repo_handles
 
-use hf_hub::types::{RepoFileExistsParams, RepoInfo, RepoInfoParams, RepoType};
-use hf_hub::{HFClient, HFSpace};
+use hf_hub::repo::{RepoFileExistsParams, RepoInfo, RepoInfoParams};
+use hf_hub::{HFClient, HFSpace, RepoType};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {

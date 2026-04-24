@@ -3,11 +3,9 @@
 //! Requires HF_TOKEN and the "spaces" feature.
 //! Run: cargo run -p examples --example spaces
 
-use hf_hub::HFClient;
-use hf_hub::types::{
-    CreateRepoParams, DeleteRepoParams, RepoType, SpaceSecretDeleteParams, SpaceSecretParams,
-    SpaceVariableDeleteParams, SpaceVariableParams,
-};
+use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
+use hf_hub::spaces::{SpaceSecretDeleteParams, SpaceSecretParams, SpaceVariableDeleteParams, SpaceVariableParams};
+use hf_hub::{HFClient, RepoType};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {

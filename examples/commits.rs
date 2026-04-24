@@ -5,10 +5,11 @@
 
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::types::{
-    CreateRepoParams, DeleteRepoParams, RepoCreateBranchParams, RepoCreateTagParams, RepoDeleteBranchParams,
-    RepoDeleteTagParams, RepoGetCommitDiffParams, RepoGetRawDiffParams, RepoListCommitsParams, RepoListRefsParams,
+use hf_hub::commits::{
+    RepoCreateBranchParams, RepoCreateTagParams, RepoDeleteBranchParams, RepoDeleteTagParams, RepoGetCommitDiffParams,
+    RepoGetRawDiffParams, RepoListCommitsParams, RepoListRefsParams,
 };
+use hf_hub::repo::{CreateRepoParams, DeleteRepoParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {

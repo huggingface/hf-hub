@@ -6,11 +6,14 @@
 //! Run: cargo run -p examples --features blocking --example blocking_write
 
 use hf_hub::HFClientSync;
-use hf_hub::types::{
-    AddSource, CommitOperation, CreateRepoParams, DeleteRepoParams, RepoCreateBranchParams, RepoCreateCommitParams,
-    RepoCreateTagParams, RepoDeleteBranchParams, RepoDeleteFileParams, RepoDeleteTagParams, RepoDownloadFileParams,
-    RepoFileExistsParams, RepoListFilesParams, RepoListRefsParams, RepoUploadFileParams, RepoUploadFolderParams,
+use hf_hub::commits::{
+    RepoCreateBranchParams, RepoCreateTagParams, RepoDeleteBranchParams, RepoDeleteTagParams, RepoListRefsParams,
 };
+use hf_hub::files::{
+    AddSource, CommitOperation, RepoCreateCommitParams, RepoDeleteFileParams, RepoDownloadFileParams,
+    RepoListFilesParams, RepoUploadFileParams, RepoUploadFolderParams,
+};
+use hf_hub::repo::{CreateRepoParams, DeleteRepoParams, RepoFileExistsParams};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
