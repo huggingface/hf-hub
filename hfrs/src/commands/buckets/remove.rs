@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::types::{BucketTreeEntry, ListBucketTreeParams};
+use hf_hub::buckets::{BucketTreeEntry, ListBucketTreeParams};
 
 use crate::output::CommandResult;
 

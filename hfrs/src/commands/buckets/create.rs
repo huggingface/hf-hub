@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::types::CreateBucketParams;
+use hf_hub::buckets::CreateBucketParams;
 
 use super::parse_bucket_id;
 use crate::output::CommandResult;

@@ -5,7 +5,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::types::{BucketDownloadFilesParams, Progress};
+use hf_hub::buckets::BucketDownloadFilesParams;
+use hf_hub::progress::Progress;
 
 use crate::output::CommandResult;
 use crate::progress::CliProgressHandler;
@@ -182,8 +183,8 @@ async fn server_side_copy(client: &HFClient, src: &str, dst: &str, quiet: bool) 
     let src_bucket = client.bucket(&src.namespace, &src.bucket_name);
     let metadata = src_bucket.get_file_metadata(&src.path).await?;
     let dst_bucket = client.bucket(&dst.namespace, &dst.bucket_name);
-    let copy_params = hf_hub::types::BatchBucketFilesParams {
-        copy: vec![hf_hub::types::BucketCopyFile {
+    let copy_params = hf_hub::buckets::BatchBucketFilesParams {
+        copy: vec![hf_hub::buckets::BucketCopyFile {
             path: dst.path.clone(),
             xet_hash: metadata.xet_hash,
             source_repo_type: "bucket".to_string(),

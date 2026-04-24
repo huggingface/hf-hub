@@ -1,7 +1,6 @@
 pub mod token;
 
-use hf_hub::types::RepoType;
-use hf_hub::{HFClient, HFRepository};
+use hf_hub::{HFClient, HFRepository, RepoType};
 
 /// Split a repo ID like "owner/name" into (owner, name).
 /// If no slash is present, treats the whole string as the name with an empty owner.

@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::types::ListSpacesParams;
+use hf_hub::repo::ListSpacesParams;
 use serde_json::json;
 
 use crate::cli::OutputFormat;

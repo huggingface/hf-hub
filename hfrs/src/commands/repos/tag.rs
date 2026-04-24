@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Args as ClapArgs, Subcommand};
 use hf_hub::HFClient;
-use hf_hub::types::{RepoCreateTagParams, RepoDeleteTagParams, RepoListRefsParams};
+use hf_hub::commits::{RepoCreateTagParams, RepoDeleteTagParams, RepoListRefsParams};
 use serde_json::json;
 
 use crate::cli::{OutputFormat, RepoTypeArg};
@@ -85,7 +85,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
 }
 
 async fn create(client: &HFClient, args: TagCreateArgs) -> Result<CommandResult> {
-    let repo_type: hf_hub::types::RepoType = args.r#type.into();
+    let repo_type: hf_hub::RepoType = args.r#type.into();
     let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
     let params = RepoCreateTagParams {
         tag: args.tag,
@@ -97,7 +97,7 @@ async fn create(client: &HFClient, args: TagCreateArgs) -> Result<CommandResult>
 }
 
 async fn delete(client: &HFClient, args: TagDeleteArgs) -> Result<CommandResult> {
-    let repo_type: hf_hub::types::RepoType = args.r#type.into();
+    let repo_type: hf_hub::RepoType = args.r#type.into();
     let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
     let params = RepoDeleteTagParams { tag: args.tag };
     repo.delete_tag(&params).await?;
@@ -105,7 +105,7 @@ async fn delete(client: &HFClient, args: TagDeleteArgs) -> Result<CommandResult>
 }
 
 async fn list(client: &HFClient, args: TagListArgs) -> Result<CommandResult> {
-    let repo_type: hf_hub::types::RepoType = args.r#type.into();
+    let repo_type: hf_hub::RepoType = args.r#type.into();
     let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
     let params = RepoListRefsParams {
         include_pull_requests: false,

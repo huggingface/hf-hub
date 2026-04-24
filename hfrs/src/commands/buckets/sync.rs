@@ -4,7 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::types::{BucketSyncAction, BucketSyncDirection, BucketSyncParams, Progress};
+use hf_hub::buckets::sync::{BucketSyncAction, BucketSyncDirection, BucketSyncParams};
+use hf_hub::progress::Progress;
 
 use crate::output::CommandResult;
 use crate::progress::CliProgressHandler;
