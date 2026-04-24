@@ -50,7 +50,7 @@ This builds in release mode by default. Once installed, run `hfrs --help` to see
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::types::{RepoInfo, RepoInfoParams};
+use hf_hub::repo::{RepoInfo, RepoInfoParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -76,7 +76,7 @@ Requires the `blocking` feature. `HFClientSync` manages a dedicated tokio runtim
 
 ```rust,ignore
 use hf_hub::HFClientSync;
-use hf_hub::types::{RepoInfo, RepoInfoParams};
+use hf_hub::repo::{RepoInfo, RepoInfoParams};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
@@ -102,7 +102,7 @@ The blocking handles (`HFClientSync`, `HFRepositorySync`, `HFSpaceSync`, `HFBuck
 ```rust,no_run
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::types::ListModelsParams;
+use hf_hub::repo::ListModelsParams;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -129,7 +129,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::types::{RepoFileExistsParams, RepoInfo, RepoInfoParams};
+use hf_hub::repo::{RepoFileExistsParams, RepoInfo, RepoInfoParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -160,7 +160,7 @@ async fn main() -> hf_hub::HFResult<()> {
 ```rust,no_run
 use std::path::PathBuf;
 use hf_hub::HFClient;
-use hf_hub::types::RepoDownloadFileParams;
+use hf_hub::files::RepoDownloadFileParams;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -183,7 +183,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::types::{AddSource, RepoUploadFileParams};
+use hf_hub::files::{AddSource, RepoUploadFileParams};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -207,7 +207,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::types::CreateRepoParams;
+use hf_hub::repo::CreateRepoParams;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
