@@ -1,6 +1,4 @@
-//! Spaces component: the [`HFSpace`] handle, Space-specific parameter structs,
-//! Space response types, and all Space API operations (runtime, hardware,
-//! secrets, variables, duplicate, pause/restart).
+//! Space handles, parameter and response types, and runtime/hardware/secrets APIs.
 
 use std::fmt;
 use std::ops::Deref;
@@ -146,29 +144,38 @@ pub struct SpaceVariableDeleteParams {
     pub key: String,
 }
 
-/// A handle for a Space repository, providing Space-specific operations on top of [`HFRepository`].
-///
-/// `HFSpace` wraps an [`HFRepository`] fixed to [`RepoType::Space`] and exposes hardware,
-/// secret, and variable management. It derefs to [`HFRepository`], so all general repo
-/// methods (e.g. `exists`, `info`, `download_file`) are accessible directly.
-///
-/// Created via [`HFClient::space`] or [`TryFrom<HFRepository>`].
-///
-/// # Example
-///
-/// ```rust,no_run
-/// # use hf_hub::HFClient;
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// let client = HFClient::builder().build()?;
-/// let space = client.space("huggingface", "diffusers-gallery");
-/// // General repo methods are available via Deref:
-/// let exists = space.exists().await?;
-/// # Ok(()) }
-/// ```
-#[derive(Clone)]
-pub struct HFSpace {
-    pub(crate) repo: Arc<HFRepository>,
+pub(crate) mod _handle {
+    use std::sync::Arc;
+
+    #[allow(unused_imports)]
+    use super::{HFClient, HFRepository, RepoType};
+
+    /// A handle for a Space repository, providing Space-specific operations on top of [`HFRepository`].
+    ///
+    /// `HFSpace` wraps an [`HFRepository`] fixed to [`RepoType::Space`] and exposes hardware,
+    /// secret, and variable management. It derefs to [`HFRepository`], so all general repo
+    /// methods (e.g. `exists`, `info`, `download_file`) are accessible directly.
+    ///
+    /// Created via [`HFClient::space`] or [`TryFrom<HFRepository>`].
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use hf_hub::HFClient;
+    /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+    /// let client = HFClient::builder().build()?;
+    /// let space = client.space("huggingface", "diffusers-gallery");
+    /// // General repo methods are available via Deref:
+    /// let exists = space.exists().await?;
+    /// # Ok(()) }
+    /// ```
+    #[derive(Clone)]
+    pub struct HFSpace {
+        pub(crate) repo: Arc<HFRepository>,
+    }
 }
+
+pub(crate) use _handle::HFSpace;
 
 impl fmt::Debug for HFSpace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

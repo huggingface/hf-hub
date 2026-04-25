@@ -208,6 +208,7 @@ mod pagination;
 mod retry;
 
 #[cfg(feature = "blocking")]
+#[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 mod blocking;
 
 pub mod buckets;
@@ -219,12 +220,17 @@ pub mod users;
 pub(crate) mod xet;
 
 #[cfg(feature = "blocking")]
+#[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync, HFSpaceSync};
-pub use buckets::HFBucket;
+#[doc(inline)]
+pub use buckets::_handle::HFBucket;
 pub use client::{HFClient, HFClientBuilder};
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult};
-pub use progress::ProgressHandler;
-pub use repository::{HFRepository, RepoType};
-pub use spaces::HFSpace;
+#[doc(inline)]
+pub use repository::_handle::HFRepository;
+#[doc(inline)]
+pub use repository::_kind::RepoType;
+#[doc(inline)]
+pub use spaces::_handle::HFSpace;

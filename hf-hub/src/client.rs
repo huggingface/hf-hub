@@ -202,12 +202,16 @@ impl HFClientBuilder {
 
     /// Builds the [`crate::blocking::HFClientSync`].
     ///
+    /// Requires the `blocking` feature and is equivalent to calling
+    /// [`build`](Self::build) and then [`HFClientSync::from_inner`](crate::HFClientSync::from_inner).
+    ///
     /// # Errors
     ///
     /// Returns an error if the endpoint URL is not a valid URL or if the `reqwest` client
     /// cannot be constructed (e.g., an invalid `User-Agent` string was provided), or if the
     /// tokio runtime handle could not be correctly created for the blocking client.
     #[cfg(feature = "blocking")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
     pub fn build_sync(self) -> HFResult<crate::blocking::HFClientSync> {
         let async_client = self.build()?;
         let client = crate::blocking::HFClientSync::from_inner(async_client)?;

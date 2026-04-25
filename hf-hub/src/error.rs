@@ -12,11 +12,17 @@ use thiserror::Error;
 /// present; `server_message` falls back to the JSON body's `"error"` field.
 #[derive(Debug, Clone)]
 pub struct HttpErrorContext {
+    /// HTTP status code returned by the server.
     pub status: reqwest::StatusCode,
+    /// Final request URL.
     pub url: String,
+    /// Hub request id, when returned by the server.
     pub request_id: Option<String>,
+    /// Hub-specific error code, when returned by the server.
     pub error_code: Option<String>,
+    /// Best-effort human-readable message from headers or JSON body.
     pub server_message: Option<String>,
+    /// Raw response body.
     pub body: String,
 }
 
@@ -65,91 +71,154 @@ fn format_http_suffix(ctx: &HttpErrorContext) -> String {
     }
 }
 
+/// Error type returned by public `hf-hub` APIs.
+///
+/// Match on the specific variants first for common Hub cases such as
+/// authentication, missing repos/files/revisions, forbidden access, and rate
+/// limiting. Lower-level transport failures use [`HFError::Request`], while
+/// unmapped HTTP responses use [`HFError::Http`].
 #[derive(Error, Debug)]
 pub enum HFError {
+    /// Non-success HTTP response that was not mapped to a more specific
+    /// variant.
     #[error("HTTP error: {} {}{}", .context.status, .context.url, format_http_suffix(.context))]
-    Http { context: Box<HttpErrorContext> },
-
-    #[error("Authentication required: {}{}", .context.url, format_http_suffix(.context))]
-    AuthRequired { context: Box<HttpErrorContext> },
-
-    #[error("Repository not found: {repo_id}")]
-    RepoNotFound {
-        repo_id: String,
-        context: Option<Box<HttpErrorContext>>,
-    },
-
-    #[error("Revision not found: {revision} in {repo_id}")]
-    RevisionNotFound {
-        repo_id: String,
-        revision: String,
-        context: Option<Box<HttpErrorContext>>,
-    },
-
-    #[error("Entry not found: {path} in {repo_id}")]
-    EntryNotFound {
-        path: String,
-        repo_id: String,
-        context: Option<Box<HttpErrorContext>>,
-    },
-
-    #[error("Bucket not found: {bucket_id}")]
-    BucketNotFound {
-        bucket_id: String,
-        context: Option<Box<HttpErrorContext>>,
-    },
-
-    #[error("Invalid repository type: expected {expected}, got {actual}")]
-    InvalidRepoType {
-        expected: crate::repository::RepoType,
-        actual: crate::repository::RepoType,
-    },
-
-    #[error("Forbidden: {}{}", .context.url, format_http_suffix(.context))]
-    Forbidden { context: Box<HttpErrorContext> },
-
-    #[error("Conflict: {}{}", .context.body, format_http_suffix(.context))]
-    Conflict { context: Box<HttpErrorContext> },
-
-    #[error("Rate limited: {}{}", .context.url, format_http_suffix(.context))]
-    RateLimited {
-        retry_after: Option<Duration>,
+    Http {
+        /// Response metadata captured from the server.
         context: Box<HttpErrorContext>,
     },
 
-    #[error("File not found in local cache: {path}")]
-    LocalEntryNotFound { path: String },
+    /// Authentication is required or the configured token was rejected.
+    #[error("Authentication required: {}{}", .context.url, format_http_suffix(.context))]
+    AuthRequired {
+        /// Response metadata captured from the server.
+        context: Box<HttpErrorContext>,
+    },
 
+    /// Repository was not found.
+    #[error("Repository not found: {repo_id}")]
+    RepoNotFound {
+        /// Repository id, usually in `owner/name` form.
+        repo_id: String,
+        /// Original HTTP response context, when available.
+        context: Option<Box<HttpErrorContext>>,
+    },
+
+    /// Revision was not found within a repository.
+    #[error("Revision not found: {revision} in {repo_id}")]
+    RevisionNotFound {
+        /// Repository id, usually in `owner/name` form.
+        repo_id: String,
+        /// Missing revision name or commit SHA.
+        revision: String,
+        /// Original HTTP response context, when available.
+        context: Option<Box<HttpErrorContext>>,
+    },
+
+    /// File or path was not found within a repository or bucket.
+    #[error("Entry not found: {path} in {repo_id}")]
+    EntryNotFound {
+        /// Missing repository-relative or bucket-relative path.
+        path: String,
+        /// Repository or bucket id associated with the lookup.
+        repo_id: String,
+        /// Original HTTP response context, when available.
+        context: Option<Box<HttpErrorContext>>,
+    },
+
+    /// Bucket was not found.
+    #[error("Bucket not found: {bucket_id}")]
+    BucketNotFound {
+        /// Bucket id in `owner/name` form.
+        bucket_id: String,
+        /// Original HTTP response context, when available.
+        context: Option<Box<HttpErrorContext>>,
+    },
+
+    /// A handle of the wrong repository type was used for an operation.
+    #[error("Invalid repository type: expected {expected}, got {actual}")]
+    InvalidRepoType {
+        /// Required repository type.
+        expected: crate::repository::RepoType,
+        /// Actual repository type on the handle.
+        actual: crate::repository::RepoType,
+    },
+
+    /// Credentials are valid, but the caller is not allowed to perform the
+    /// operation.
+    #[error("Forbidden: {}{}", .context.url, format_http_suffix(.context))]
+    Forbidden {
+        /// Response metadata captured from the server.
+        context: Box<HttpErrorContext>,
+    },
+
+    /// Server reported a conflict, such as an already-existing resource or a
+    /// branch head mismatch.
+    #[error("Conflict: {}{}", .context.body, format_http_suffix(.context))]
+    Conflict {
+        /// Response metadata captured from the server.
+        context: Box<HttpErrorContext>,
+    },
+
+    /// Request was rate limited by the Hub.
+    #[error("Rate limited: {}{}", .context.url, format_http_suffix(.context))]
+    RateLimited {
+        /// Parsed `Retry-After` delay, when the server returned one.
+        retry_after: Option<Duration>,
+        /// Response metadata captured from the server.
+        context: Box<HttpErrorContext>,
+    },
+
+    /// File was not found in the local cache during a cache-only lookup.
+    #[error("File not found in local cache: {path}")]
+    LocalEntryNotFound {
+        /// Missing cached path.
+        path: String,
+    },
+
+    /// The operation requires the local cache, but caching is disabled.
     #[error(
         "Cache is not enabled — set cache_enabled(true) on HFClientBuilder, or provide local_dir in download params"
     )]
     CacheNotEnabled,
 
+    /// Timed out waiting for an on-disk cache lock.
     #[error("Cache lock timed out: {}", path.display())]
-    CacheLockTimeout { path: std::path::PathBuf },
+    CacheLockTimeout {
+        /// Path of the lock file or locked entry.
+        path: std::path::PathBuf,
+    },
 
+    /// Transport-level HTTP client error before a usable Hub response was
+    /// produced.
     #[error("HTTP request error: {source}{}", .url.as_deref().map(|u| format!(" ({u})")).unwrap_or_default())]
     Request {
         #[source]
         source: reqwest::Error,
+        /// Request URL, when known.
         url: Option<String>,
     },
 
+    /// Filesystem I/O error.
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
+    /// JSON serialization or deserialization error.
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 
+    /// URL parsing error.
     #[error(transparent)]
     Url(#[from] url::ParseError),
 
+    /// Caller provided an invalid parameter value.
     #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
 
+    /// Raw diff parsing error.
     #[error(transparent)]
     DiffParse(#[from] crate::repository::HFDiffParseError),
 
+    /// Catch-all error for cases that do not fit another variant.
     #[error("{0}")]
     Other(String),
 }
@@ -175,6 +244,9 @@ impl HFError {
     }
 }
 
+/// Convenience alias used by public `hf-hub` APIs.
+///
+/// Equivalent to `Result<T, HFError>`.
 pub type HFResult<T> = std::result::Result<T, HFError>;
 
 /// Context for mapping HTTP 404 errors to specific HFError variants.

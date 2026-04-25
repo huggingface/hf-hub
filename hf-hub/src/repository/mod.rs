@@ -1,8 +1,4 @@
-//! Repository component: the [`HFRepository`] handle, repo-scoped parameter
-//! structs, repo metadata types, and the client-level list/create/delete/move
-//! repo APIs. All repo-bound operations (info, existence checks, settings
-//! updates, file listing/download/upload, commits, branches, tags, and diffs)
-//! live as methods on [`HFRepository`].
+//! Repository handles, parameter and metadata types, and list/create/delete/move APIs.
 
 mod commits;
 mod diff;
@@ -38,15 +34,21 @@ use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
 
-/// The kind of repository on the Hugging Face Hub.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RepoType {
-    Model,
-    Dataset,
-    Space,
-    Kernel,
+pub(crate) mod _kind {
+    use serde::{Deserialize, Serialize};
+
+    /// The kind of repository on the Hugging Face Hub.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub enum RepoType {
+        Model,
+        Dataset,
+        Space,
+        Kernel,
+    }
 }
+
+pub(crate) use _kind::RepoType;
 
 /// Access-gating mode for a repository.
 ///
@@ -188,31 +190,37 @@ pub struct RepoUrl {
     pub url: String,
 }
 
-/// A handle for a single repository on the Hugging Face Hub.
-///
-/// `HFRepository` is created via [`HFClient::repo`], [`HFClient::model`], or
-/// [`HFClient::dataset`] and binds together the client, owner, repo name, and repo type.
-/// All repo-scoped API operations are methods on this type.
-///
-/// Cheap to clone — the inner [`HFClient`] is `Arc`-backed.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// # use hf_hub::{HFClient, RepoType};
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// let client = HFClient::builder().build()?;
-/// let repo = client.model("openai-community", "gpt2");
-/// let info = repo.info(Default::default()).await?;
-/// # Ok(()) }
-/// ```
-#[derive(Clone)]
-pub struct HFRepository {
-    pub(crate) hf_client: HFClient,
-    owner: String,
-    name: String,
-    pub(crate) repo_type: RepoType,
+pub(crate) mod _handle {
+    use super::{HFClient, RepoType};
+
+    /// A handle for a single repository on the Hugging Face Hub.
+    ///
+    /// `HFRepository` is created via [`HFClient::repo`], [`HFClient::model`], or
+    /// [`HFClient::dataset`] and binds together the client, owner, repo name, and repo type.
+    /// All repo-scoped API operations are methods on this type.
+    ///
+    /// Cheap to clone — the inner [`HFClient`] is `Arc`-backed.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use hf_hub::{HFClient, RepoType};
+    /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+    /// let client = HFClient::builder().build()?;
+    /// let repo = client.model("openai-community", "gpt2");
+    /// let info = repo.info(Default::default()).await?;
+    /// # Ok(()) }
+    /// ```
+    #[derive(Clone)]
+    pub struct HFRepository {
+        pub(crate) hf_client: HFClient,
+        pub(super) owner: String,
+        pub(super) name: String,
+        pub(crate) repo_type: RepoType,
+    }
 }
+
+pub(crate) use _handle::HFRepository;
 
 /// Parameters for listing models on the Hub.
 ///

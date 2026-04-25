@@ -31,30 +31,36 @@ use crate::retry;
 const BUCKET_BATCH_CHUNK_SIZE: usize = 1000;
 const BUCKET_PATHS_INFO_BATCH_SIZE: usize = 1000;
 
-/// A handle for a single bucket on the Hugging Face Hub.
-///
-/// `HFBucket` is created via [`HFClient::bucket`] and binds together the client,
-/// owner (namespace), and bucket name. All bucket-scoped API operations are methods
-/// on this type.
-///
-/// Cheap to clone — the inner [`HFClient`] is `Arc`-backed.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// # use hf_hub::HFClient;
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// let client = HFClient::builder().build()?;
-/// let bucket = client.bucket("my-org", "my-bucket");
-/// assert_eq!(bucket.bucket_id(), "my-org/my-bucket");
-/// # Ok(()) }
-/// ```
-#[derive(Clone)]
-pub struct HFBucket {
-    pub(crate) hf_client: HFClient,
-    owner: String,
-    name: String,
+pub(crate) mod _handle {
+    use super::HFClient;
+
+    /// A handle for a single bucket on the Hugging Face Hub.
+    ///
+    /// `HFBucket` is created via [`HFClient::bucket`] and binds together the client,
+    /// owner (namespace), and bucket name. All bucket-scoped API operations are methods
+    /// on this type.
+    ///
+    /// Cheap to clone — the inner [`HFClient`] is `Arc`-backed.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use hf_hub::HFClient;
+    /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+    /// let client = HFClient::builder().build()?;
+    /// let bucket = client.bucket("my-org", "my-bucket");
+    /// assert_eq!(bucket.bucket_id(), "my-org/my-bucket");
+    /// # Ok(()) }
+    /// ```
+    #[derive(Clone)]
+    pub struct HFBucket {
+        pub(crate) hf_client: HFClient,
+        pub(super) owner: String,
+        pub(super) name: String,
+    }
 }
+
+pub(crate) use _handle::HFBucket;
 
 impl fmt::Debug for HFBucket {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

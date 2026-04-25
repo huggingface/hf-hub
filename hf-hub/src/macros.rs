@@ -12,7 +12,13 @@ macro_rules! sync_api {
         $(#[$impl_meta])*
         impl $crate::blocking::$sync_type {
             $(
-                #[doc = concat!("Blocking wrapper around [`", stringify!($async_type), "::", stringify!($name), "`].")]
+                #[doc = concat!(
+                    "Blocking wrapper around [`",
+                    stringify!($async_type),
+                    "::",
+                    stringify!($name),
+                    "`]. See the async method for parameters, behavior, and errors."
+                )]
                 pub fn $name(&self $(, $pname : $ptype)*) -> $ret {
                     self.runtime.block_on(self.inner.$name($($pname),*))
                 }
@@ -35,7 +41,14 @@ macro_rules! sync_api_stream {
         $(#[$impl_meta])*
         impl $crate::blocking::$sync_type {
             $(
-                #[doc = concat!("Blocking wrapper around [`", stringify!($async_type), "::", stringify!($name), "`]. Collects all items into a `Vec`.")]
+                #[doc = concat!(
+                    "Blocking wrapper around [`",
+                    stringify!($async_type),
+                    "::",
+                    stringify!($name),
+                    "`]. See the async method for parameters, behavior, and errors. \
+                     This blocking variant collects the stream into a `Vec`."
+                )]
                 pub fn $name(&self $(, $pname : $ptype)*) -> $crate::error::HFResult<Vec<$item>> {
                     use futures::StreamExt;
                     self.runtime.block_on(async {
@@ -67,7 +80,14 @@ macro_rules! sync_api_async_stream {
         $(#[$impl_meta])*
         impl $crate::blocking::$sync_type {
             $(
-                #[doc = concat!("Blocking wrapper around [`", stringify!($async_type), "::", stringify!($name), "`]. Collects all items into a `Vec`.")]
+                #[doc = concat!(
+                    "Blocking wrapper around [`",
+                    stringify!($async_type),
+                    "::",
+                    stringify!($name),
+                    "`]. See the async method for parameters, behavior, and errors. \
+                     This blocking variant collects the stream into a `Vec`."
+                )]
                 pub fn $name(&self $(, $pname : $ptype)*) -> $crate::error::HFResult<Vec<$item>> {
                     use futures::StreamExt;
                     self.runtime.block_on(async {

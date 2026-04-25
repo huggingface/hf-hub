@@ -17,9 +17,11 @@ fn build_runtime() -> HFResult<Arc<tokio::runtime::Runtime>> {
 
 /// Synchronous/blocking counterpart to [`HFClient`].
 ///
-/// Wraps an `HFClient` together with a dedicated single-threaded tokio runtime so
-/// that every async API method can be called from synchronous code. The runtime is
-/// shared with all repo/space handles derived from this client.
+/// Wraps an [`HFClient`] together with a dedicated single-threaded tokio
+/// runtime so the async API can be used from synchronous code.
+///
+/// See [`HFClient`] for configuration and API semantics.
+#[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 #[derive(Clone)]
 pub struct HFClientSync {
     pub(crate) inner: HFClient,
@@ -28,10 +30,11 @@ pub struct HFClientSync {
 
 /// Synchronous/blocking counterpart to [`HFRepository`].
 ///
-/// Holds a reference to the underlying async handle and the shared tokio runtime.
-/// Derefs to [`HFRepository`], so all accessor methods (owner, name, repo_path,
-/// etc.) are available directly. Blocking API methods are defined via the `sync_api!`
-/// macro in the corresponding component modules.
+/// Wraps an [`HFRepository`] and blocks on the corresponding async methods.
+/// Derefs to [`HFRepository`], so repo accessors are available directly.
+///
+/// See [`HFRepository`] for method semantics.
+#[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 #[derive(Clone)]
 pub struct HFRepositorySync {
     pub(crate) inner: Arc<HFRepository>,
@@ -40,9 +43,11 @@ pub struct HFRepositorySync {
 
 /// Synchronous/blocking counterpart to [`HFSpace`].
 ///
-/// Derefs to [`HFRepositorySync`] so all blocking repository methods and accessors
-/// are available directly. Space-specific blocking methods are defined via the
-/// `sync_api!` macro.
+/// Derefs to [`HFRepositorySync`], so blocking repository methods are
+/// available directly.
+///
+/// See [`HFSpace`] for Space-specific behavior.
+#[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 #[derive(Clone)]
 pub struct HFSpaceSync {
     repo_sync: Arc<HFRepositorySync>,
@@ -51,8 +56,11 @@ pub struct HFSpaceSync {
 
 /// Synchronous/blocking counterpart to [`crate::buckets::HFBucket`].
 ///
-/// Holds a reference to the underlying async handle and the shared tokio runtime.
-/// Blocking API methods are defined via the `sync_api!` macro in `buckets/mod.rs`.
+/// Wraps an [`crate::buckets::HFBucket`] and blocks on the corresponding async
+/// methods.
+///
+/// See [`crate::buckets::HFBucket`] for method semantics.
+#[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 #[derive(Clone)]
 pub struct HFBucketSync {
     pub(crate) inner: Arc<crate::buckets::HFBucket>,
@@ -89,7 +97,7 @@ impl fmt::Debug for HFBucketSync {
 impl HFClientSync {
     /// Creates an `HFClientSync` using the default configuration from the environment.
     ///
-    /// Reads the `HF_TOKEN`, `HF_ENDPOINT`, and other the standard environment variables.
+    /// Reads the standard environment variables used by [`HFClient::new`].
     ///
     /// # Errors
     ///
@@ -101,7 +109,7 @@ impl HFClientSync {
         })
     }
 
-    /// Creates an `HFClientSync` wrapping an already-configured [`HFClient`].
+    /// Creates an `HFClientSync` from an existing [`HFClient`].
     ///
     /// # Errors
     ///
@@ -113,27 +121,37 @@ impl HFClientSync {
         })
     }
 
-    /// Creates a blocking repository handle for the given repo type, owner, and name.
+    /// Creates a blocking repository handle.
+    ///
+    /// See [`HFClient::repo`] for details.
     pub fn repo(&self, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync {
         HFRepositorySync::new(self.clone(), repo_type, owner, name)
     }
 
     /// Creates a blocking handle for a model repository.
+    ///
+    /// See [`HFClient::model`].
     pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync {
         self.repo(RepoType::Model, owner, name)
     }
 
     /// Creates a blocking handle for a dataset repository.
+    ///
+    /// See [`HFClient::dataset`].
     pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync {
         self.repo(RepoType::Dataset, owner, name)
     }
 
-    /// Creates a blocking handle for a space repository.
+    /// Creates a blocking handle for a Space repository.
+    ///
+    /// See [`HFClient::space`].
     pub fn space(&self, owner: impl Into<String>, name: impl Into<String>) -> HFSpaceSync {
         HFSpaceSync::new(self.clone(), owner, name)
     }
 
     /// Creates a blocking handle for a bucket.
+    ///
+    /// See [`HFClient::bucket`].
     pub fn bucket(&self, owner: impl Into<String>, name: impl Into<String>) -> HFBucketSync {
         HFBucketSync::new(self.clone(), owner, name)
     }
@@ -148,7 +166,9 @@ impl Deref for HFClientSync {
 }
 
 impl HFRepositorySync {
-    /// Creates a blocking repository handle from a client, repo type, owner, and name.
+    /// Creates a blocking repository handle.
+    ///
+    /// See [`HFRepository::new`].
     pub fn new(client: HFClientSync, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             inner: Arc::new(HFRepository::new(client.inner.clone(), repo_type, owner, name)),
@@ -166,7 +186,9 @@ impl Deref for HFRepositorySync {
 }
 
 impl HFSpaceSync {
-    /// Creates a blocking space handle for the given owner and name.
+    /// Creates a blocking Space handle.
+    ///
+    /// See [`HFSpace::new`].
     pub fn new(client: HFClientSync, owner: impl Into<String>, name: impl Into<String>) -> Self {
         let repo_sync = Arc::new(HFRepositorySync::new(client, RepoType::Space, owner, name));
         let inner = Arc::new(HFSpace {
@@ -175,7 +197,9 @@ impl HFSpaceSync {
         Self { repo_sync, inner }
     }
 
-    /// Converts this space handle into a plain [`HFRepositorySync`], discarding space-specific state.
+    /// Returns the underlying blocking repository handle.
+    ///
+    /// See [`HFSpace::repo`].
     pub fn repo(&self) -> &HFRepositorySync {
         &self.repo_sync
     }
@@ -190,7 +214,9 @@ impl Deref for HFSpaceSync {
 }
 
 impl HFBucketSync {
-    /// Creates a blocking bucket handle from a client, owner, and name.
+    /// Creates a blocking bucket handle.
+    ///
+    /// See [`crate::buckets::HFBucket::new`].
     pub fn new(client: HFClientSync, owner: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             inner: Arc::new(crate::buckets::HFBucket::new(client.inner.clone(), owner, name)),

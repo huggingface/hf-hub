@@ -19,7 +19,7 @@
 use futures::StreamExt;
 use hf_hub::repository::*;
 use hf_hub::spaces::*;
-use hf_hub::{HFClient, HFClientBuilder, HFRepository};
+use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoType};
 use integration_tests::test_utils::*;
 
 fn api() -> Option<HFClient> {
