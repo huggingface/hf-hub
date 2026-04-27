@@ -12,12 +12,11 @@
 //!
 //! ```rust,no_run
 //! use hf_hub::HFClient;
-//! use hf_hub::repository::RepoInfoParams;
 //!
 //! #[tokio::main]
 //! async fn main() -> hf_hub::HFResult<()> {
 //!     let client = HFClient::new()?;
-//!     let info = client.model("openai-community", "gpt2").info(RepoInfoParams::default()).await?;
+//!     let info = client.model("openai-community", "gpt2").info().send().await?;
 //!     println!("Repo: {:?}", info);
 //!     Ok(())
 //! }
@@ -84,7 +83,7 @@
 //! // Or a generic repo when the type is only known at runtime:
 //! let repo = client.repo(RepoType::Model, "openai-community", "gpt2");
 //!
-//! let exists = model.exists().await?;
+//! let exists = model.exists().send().await?;
 //! # let _ = (dataset, space, repo, exists); Ok(()) }
 //! ```
 //!
@@ -100,13 +99,14 @@
 //!
 //! ```rust,no_run
 //! use hf_hub::HFClient;
-//! use hf_hub::repository::RepoDownloadFileParams;
 //!
 //! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 //! let client = HFClient::new()?;
 //! let path = client
 //!     .model("openai-community", "gpt2")
-//!     .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
+//!     .download_file()
+//!     .filename("config.json")
+//!     .send()
 //!     .await?;
 //! println!("cached at {}", path.display());
 //! # Ok(()) }
@@ -148,10 +148,9 @@
 //!
 //! ```rust,ignore
 //! use hf_hub::HFClientSync;
-//! use hf_hub::repository::RepoInfoParams;
 //!
 //! let client = HFClientSync::new()?;
-//! let info = client.model("openai-community", "gpt2").info(RepoInfoParams::default())?;
+//! let info = client.model("openai-community", "gpt2").info().send()?;
 //! # Ok::<(), hf_hub::HFError>(())
 //! ```
 //!
@@ -177,8 +176,8 @@
 //!
 //! Disable caching entirely with
 //! [`HFClientBuilder::cache_enabled(false)`][HFClientBuilder::cache_enabled], or
-//! bypass it for a single request by passing a `local_dir` on the download
-//! parameters.
+//! bypass it for a single request by setting `.local_dir(...)` on the download
+//! builder.
 //!
 //! To inspect the cache — list cached repos, revisions, and disk usage — use
 //! [`HFClient::scan_cache`][crate::HFClient::scan_cache], which returns an

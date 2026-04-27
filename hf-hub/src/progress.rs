@@ -1,10 +1,10 @@
 //! Progress reporting for upload and download operations.
 //!
 //! Consumers implement [`ProgressHandler`], wrap it in [`Progress`] (an
-//! `Arc<dyn ProgressHandler>`), and pass `Some(handler)` to the `.progress(...)`
-//! builder method on any params struct that supports it (upload, download,
-//! snapshot download, create_commit, bucket sync, etc.). When no handler is
-//! provided, the library emits nothing — there is no runtime cost.
+//! `Arc<dyn ProgressHandler>`), and pass it to the `.progress(...)` setter of any
+//! method builder that supports progress reporting (upload, download, snapshot
+//! download, create_commit, bucket sync, etc.). When no handler is provided, the
+//! library emits nothing — there is no runtime cost.
 //!
 //! # Event model
 //!
@@ -78,7 +78,7 @@
 //! }
 //!
 //! let handler: Progress = Arc::new(PrintHandler);
-//! // then: RepoUploadFileParams::builder().progress(Some(handler)).build()
+//! // then: repo.upload_file().source(src).path_in_repo("x").progress(handler).send().await?
 //! ```
 //!
 //! # Thread safety and performance contract
@@ -101,11 +101,9 @@ use std::sync::Arc;
 /// Receives progress updates from long-running upload and download operations.
 ///
 /// Register a handler by wrapping it in [`Progress`] (i.e. `Arc<dyn ProgressHandler>`)
-/// and passing `Some(handler)` to the `.progress(...)` method of a params
-/// builder, e.g. [`RepoUploadFileParams`](crate::repository::RepoUploadFileParams),
-/// [`RepoSnapshotDownloadParams`](crate::repository::RepoSnapshotDownloadParams),
-/// [`RepoCreateCommitParams`](crate::repository::RepoCreateCommitParams), or
-/// [`BucketSyncParams`](crate::buckets::sync::BucketSyncParams).
+/// and passing it to the `.progress(...)` setter of any method builder that
+/// supports progress reporting (e.g. `repo.upload_file()`, `repo.snapshot_download()`,
+/// `repo.create_commit()`, `bucket.upload_files()`, `bucket.sync()`).
 ///
 /// The library calls [`on_progress`](Self::on_progress) by reference to avoid
 /// cloning large per-file vectors; clone the event (or its fields) only if you
@@ -167,7 +165,8 @@ pub trait ProgressHandler: Send + Sync {
 
 /// Type alias for the shared-ownership form of a [`ProgressHandler`].
 ///
-/// Params structs accept `Option<Progress>` — passing `None` disables progress
+/// Method builders accept `Option<Progress>` for the `progress` parameter —
+/// not setting it (or passing `None` via `maybe_progress`) disables progress
 /// emission entirely (zero cost). The `Arc` allows the library to share the
 /// handler across concurrent tasks within a single operation.
 ///

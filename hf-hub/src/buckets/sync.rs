@@ -11,8 +11,8 @@
 //! - `prefix` scopes the remote side of the comparison. Returned operation paths are always relative to that prefix and
 //!   to `local_path`.
 //! - `include` and `exclude` glob patterns are evaluated against those relative paths. Excludes win over includes.
-//! - The returned plan reflects the operations that were executed. Set [`BucketSyncParams::verbose`] to keep explicit
-//!   skip entries in the plan.
+//! - The returned plan reflects the operations that were executed. Set the `verbose(true)` builder
+//!   option on [`HFBucket::sync`] to keep explicit skip entries in the plan.
 //! - By default, file comparisons consider both size and modification time, with a small timestamp tolerance to avoid
 //!   unnecessary transfers.
 
@@ -122,8 +122,8 @@ impl BucketSyncPlan {
 
     /// Count skip operations in the plan.
     ///
-    /// Skip entries are only included when [`BucketSyncParams::verbose`] is
-    /// enabled.
+    /// Skip entries are only included when the `verbose(true)` builder option is set on
+    /// [`HFBucket::sync`].
     pub fn skips(&self) -> usize {
         self.operations.iter().filter(|op| op.action == BucketSyncAction::Skip).count()
     }
@@ -729,32 +729,6 @@ impl HFBucket {
         Ok(())
     }
 
-    /// Synchronize a local directory with this bucket.
-    ///
-    /// The sync is one-way and controlled by [`BucketSyncParams::direction`]:
-    ///
-    /// - [`BucketSyncDirection::Upload`] compares `local_path` against the bucket (optionally scoped by `prefix`) and
-    ///   uploads changed or missing files.
-    /// - [`BucketSyncDirection::Download`] compares the bucket against `local_path` and downloads changed or missing
-    ///   files.
-    ///
-    /// When [`BucketSyncParams::delete`] is enabled, files that only exist on
-    /// the receiving side are removed as part of the sync.
-    ///
-    /// The returned [`BucketSyncPlan`] describes the operations that were
-    /// executed. Use [`BucketSyncParams::verbose`] if you also want explicit
-    /// `Skip` entries explaining why untouched files were not transferred.
-    ///
-    /// # Comparison behavior
-    ///
-    /// By default, files are considered different when their sizes differ or
-    /// when the source file is newer than the destination file. Modification
-    /// times are compared with a small tolerance to avoid unnecessary transfers
-    /// caused by filesystem timestamp precision.
-    ///
-    /// `ignore_times` changes the comparison to size-only, while `ignore_sizes`
-    /// changes it to mtime-only. `existing` and `ignore_existing` further limit
-    /// which files are eligible to transfer.
     async fn sync_impl(&self, params: BucketSyncParams) -> HFResult<BucketSyncPlan> {
         validate_params(&params)?;
 
@@ -794,10 +768,27 @@ impl HFBucket {
 
 #[bon]
 impl HFBucket {
-    /// One-way sync between a local directory and a bucket prefix.
+    /// Synchronize a local directory with this bucket.
     ///
-    /// `local_path` is always the local root of the sync; `prefix` optionally scopes the remote
-    /// side to a bucket subdirectory.
+    /// The sync is one-way and controlled by `direction`:
+    ///
+    /// - [`BucketSyncDirection::Upload`] compares `local_path` against the bucket (optionally
+    ///   scoped by `prefix`) and uploads changed or missing files.
+    /// - [`BucketSyncDirection::Download`] compares the bucket against `local_path` and downloads
+    ///   changed or missing files.
+    ///
+    /// When `delete` is enabled, files that only exist on the receiving side are removed as part
+    /// of the sync. The returned [`BucketSyncPlan`] describes the operations that were executed;
+    /// set `verbose(true)` if you also want explicit `Skip` entries explaining why untouched files
+    /// were not transferred.
+    ///
+    /// # Comparison behavior
+    ///
+    /// By default, files are considered different when their sizes differ or when the source file
+    /// is newer than the destination file. Modification times are compared with a small tolerance
+    /// to avoid unnecessary transfers caused by filesystem timestamp precision. `ignore_times`
+    /// switches the comparison to size-only; `ignore_sizes` switches it to mtime-only. `existing`
+    /// and `ignore_existing` further limit which files are eligible to transfer.
     ///
     /// # Parameters
     ///

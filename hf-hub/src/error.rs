@@ -177,7 +177,7 @@ pub enum HFError {
 
     /// The operation requires the local cache, but caching is disabled.
     #[error(
-        "Cache is not enabled — set cache_enabled(true) on HFClientBuilder, or provide local_dir in download params"
+        "Cache is not enabled — set cache_enabled(true) on HFClientBuilder, or set .local_dir(...) on the download builder"
     )]
     CacheNotEnabled,
 

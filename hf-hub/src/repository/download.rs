@@ -14,7 +14,7 @@ use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progre
 use crate::{constants, retry};
 
 /// Internal options struct used by the file download helpers.
-struct RepoDownloadFileParams {
+struct DownloadFileParams {
     filename: String,
     local_dir: Option<PathBuf>,
     revision: Option<String>,
@@ -24,14 +24,14 @@ struct RepoDownloadFileParams {
 }
 
 /// Internal options struct used by the streaming download helpers.
-struct RepoDownloadFileStreamParams {
+struct DownloadFileStreamParams {
     filename: String,
     revision: Option<String>,
     range: Option<std::ops::Range<u64>>,
 }
 
 /// Internal options struct used by `snapshot_download_impl`.
-struct RepoSnapshotDownloadParams {
+struct SnapshotDownloadParams {
     revision: Option<String>,
     allow_patterns: Option<Vec<String>>,
     ignore_patterns: Option<Vec<String>>,
@@ -43,7 +43,7 @@ struct RepoSnapshotDownloadParams {
 }
 
 impl HFRepository {
-    async fn download_file_impl(&self, params: RepoDownloadFileParams) -> HFResult<PathBuf> {
+    async fn download_file_impl(&self, params: DownloadFileParams) -> HFResult<PathBuf> {
         let result = self.download_file_inner(&params).await;
         if result.is_ok() {
             params.progress.emit(DownloadEvent::Complete);
@@ -51,7 +51,7 @@ impl HFRepository {
         result
     }
 
-    async fn download_file_inner(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
+    async fn download_file_inner(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         if params.local_dir.is_some() {
             self.download_file_to_local_dir(params).await
         } else {
@@ -64,7 +64,7 @@ impl HFRepository {
 
     async fn download_file_stream_impl(
         &self,
-        params: RepoDownloadFileStreamParams,
+        params: DownloadFileStreamParams,
     ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
     {
         if let Some(ref range) = params.range
@@ -141,7 +141,7 @@ impl HFRepository {
         Ok((content_length, Box::new(Box::pin(stream))))
     }
 
-    async fn download_file_to_bytes_impl(&self, params: RepoDownloadFileStreamParams) -> HFResult<bytes::Bytes> {
+    async fn download_file_to_bytes_impl(&self, params: DownloadFileStreamParams) -> HFResult<bytes::Bytes> {
         let (content_length, stream) = self.download_file_stream_impl(params).await?;
         futures::pin_mut!(stream);
 
@@ -153,7 +153,7 @@ impl HFRepository {
         Ok(buf.freeze())
     }
 
-    async fn download_file_to_local_dir(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
+    async fn download_file_to_local_dir(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let repo_path = self.repo_path();
         let url = self
@@ -286,7 +286,7 @@ impl HFRepository {
         target.file_name()?.to_str().map(|s| s.to_string())
     }
 
-    async fn download_file_to_cache(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
+    async fn download_file_to_cache(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let cache_dir = self.hf_client.cache_dir();
         let repo_folder = cache::repo_folder_name(&self.repo_path(), Some(self.repo_type));
@@ -317,7 +317,7 @@ impl HFRepository {
 
     async fn download_file_to_cache_network(
         &self,
-        params: &RepoDownloadFileParams,
+        params: &DownloadFileParams,
         revision: &str,
         cache_dir: &Path,
         repo_folder: &str,
@@ -509,7 +509,7 @@ impl HFRepository {
         Ok(filenames)
     }
 
-    async fn snapshot_download_impl(&self, params: RepoSnapshotDownloadParams) -> HFResult<PathBuf> {
+    async fn snapshot_download_impl(&self, params: SnapshotDownloadParams) -> HFResult<PathBuf> {
         if params.local_dir.is_none() && !self.hf_client.cache_enabled() {
             return Err(HFError::CacheNotEnabled);
         }
@@ -825,10 +825,10 @@ fn build_download_params(
     force_download: Option<bool>,
     local_dir: Option<PathBuf>,
     progress: &Option<Progress>,
-) -> Vec<RepoDownloadFileParams> {
+) -> Vec<DownloadFileParams> {
     filenames
         .iter()
-        .map(|filename| RepoDownloadFileParams {
+        .map(|filename| DownloadFileParams {
             filename: filename.clone(),
             local_dir: local_dir.clone(),
             revision: Some(commit_hash.to_string()),
@@ -841,7 +841,7 @@ fn build_download_params(
 
 async fn download_concurrently(
     api: &HFRepository,
-    params: &[RepoDownloadFileParams],
+    params: &[DownloadFileParams],
     max_workers: usize,
 ) -> HFResult<Vec<PathBuf>> {
     futures::stream::iter(params.iter().map(|p| api.download_file_inner(p)))
@@ -926,7 +926,7 @@ impl HFRepository {
         local_files_only: Option<bool>,
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        self.download_file_impl(RepoDownloadFileParams {
+        self.download_file_impl(DownloadFileParams {
             filename,
             local_dir,
             revision,
@@ -957,7 +957,7 @@ impl HFRepository {
         range: Option<std::ops::Range<u64>>,
     ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
     {
-        self.download_file_stream_impl(RepoDownloadFileStreamParams {
+        self.download_file_stream_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
@@ -977,7 +977,7 @@ impl HFRepository {
         #[builder(into)] revision: Option<String>,
         range: Option<std::ops::Range<u64>>,
     ) -> HFResult<bytes::Bytes> {
-        self.download_file_to_bytes_impl(RepoDownloadFileStreamParams {
+        self.download_file_to_bytes_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
@@ -1013,7 +1013,7 @@ impl HFRepository {
         max_workers: Option<usize>,
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        self.snapshot_download_impl(RepoSnapshotDownloadParams {
+        self.snapshot_download_impl(SnapshotDownloadParams {
             revision,
             allow_patterns,
             ignore_patterns,

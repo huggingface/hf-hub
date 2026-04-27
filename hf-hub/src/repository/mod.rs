@@ -1,4 +1,4 @@
-//! Repository handles, parameter and metadata types, and list/create/delete/move APIs.
+//! Repository handles, metadata types, and list/create/delete/move APIs.
 
 mod commits;
 mod diff;
@@ -198,7 +198,7 @@ pub(crate) mod _handle {
     /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
     /// let client = HFClient::builder().build()?;
     /// let repo = client.model("openai-community", "gpt2");
-    /// let info = repo.info(Default::default()).await?;
+    /// let info = repo.info().send().await?;
     /// # Ok(()) }
     /// ```
     #[derive(Clone)]

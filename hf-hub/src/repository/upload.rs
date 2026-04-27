@@ -16,7 +16,7 @@ use crate::{constants, retry};
 
 /// Internal options struct for [`HFRepository::create_commit`]. Built by the bon-generated
 /// `create_commit()` builder.
-struct RepoCreateCommitParams {
+struct CreateCommitParams {
     operations: Vec<CommitOperation>,
     commit_message: String,
     commit_description: Option<String>,
@@ -27,7 +27,7 @@ struct RepoCreateCommitParams {
 }
 
 /// Internal options struct for [`HFRepository::upload_file`].
-struct RepoUploadFileParams {
+struct UploadFileParams {
     source: AddSource,
     path_in_repo: String,
     revision: Option<String>,
@@ -39,7 +39,7 @@ struct RepoUploadFileParams {
 }
 
 /// Internal options struct for [`HFRepository::upload_folder`].
-struct RepoUploadFolderParams {
+struct UploadFolderParams {
     folder_path: PathBuf,
     path_in_repo: Option<String>,
     revision: Option<String>,
@@ -53,7 +53,7 @@ struct RepoUploadFolderParams {
 }
 
 /// Internal options struct for [`HFRepository::delete_file`].
-struct RepoDeleteFileParams {
+struct DeleteFileParams {
     path_in_repo: String,
     revision: Option<String>,
     commit_message: Option<String>,
@@ -61,7 +61,7 @@ struct RepoDeleteFileParams {
 }
 
 /// Internal options struct for [`HFRepository::delete_folder`].
-struct RepoDeleteFolderParams {
+struct DeleteFolderParams {
     path_in_repo: String,
     revision: Option<String>,
     commit_message: Option<String>,
@@ -69,7 +69,7 @@ struct RepoDeleteFolderParams {
 }
 
 impl HFRepository {
-    async fn create_commit_impl(&self, params: RepoCreateCommitParams) -> HFResult<CommitInfo> {
+    async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = format!("{}/commit/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
 
@@ -201,13 +201,13 @@ impl HFRepository {
         }))
     }
 
-    async fn upload_file_impl(&self, params: RepoUploadFileParams) -> HFResult<CommitInfo> {
+    async fn upload_file_impl(&self, params: UploadFileParams) -> HFResult<CommitInfo> {
         let commit_message = params
             .commit_message
             .clone()
             .unwrap_or_else(|| format!("Upload {}", params.path_in_repo));
 
-        self.create_commit_impl(RepoCreateCommitParams {
+        self.create_commit_impl(CreateCommitParams {
             operations: vec![CommitOperation::Add {
                 path_in_repo: params.path_in_repo.clone(),
                 source: params.source.clone(),
@@ -222,7 +222,7 @@ impl HFRepository {
         .await
     }
 
-    async fn upload_folder_impl(&self, params: RepoUploadFolderParams) -> HFResult<CommitInfo> {
+    async fn upload_folder_impl(&self, params: UploadFolderParams) -> HFResult<CommitInfo> {
         let mut operations = Vec::new();
 
         let folder = &params.folder_path;
@@ -253,7 +253,7 @@ impl HFRepository {
 
         let commit_message = params.commit_message.clone().unwrap_or_else(|| "Upload folder".to_string());
 
-        self.create_commit_impl(RepoCreateCommitParams {
+        self.create_commit_impl(CreateCommitParams {
             operations,
             commit_message,
             commit_description: params.commit_description.clone(),
@@ -265,13 +265,13 @@ impl HFRepository {
         .await
     }
 
-    async fn delete_file_impl(&self, params: RepoDeleteFileParams) -> HFResult<CommitInfo> {
+    async fn delete_file_impl(&self, params: DeleteFileParams) -> HFResult<CommitInfo> {
         let commit_message = params
             .commit_message
             .clone()
             .unwrap_or_else(|| format!("Delete {}", params.path_in_repo));
 
-        self.create_commit_impl(RepoCreateCommitParams {
+        self.create_commit_impl(CreateCommitParams {
             operations: vec![CommitOperation::delete(params.path_in_repo.clone())],
             commit_message,
             commit_description: None,
@@ -283,7 +283,7 @@ impl HFRepository {
         .await
     }
 
-    async fn delete_folder_impl(&self, params: RepoDeleteFolderParams) -> HFResult<CommitInfo> {
+    async fn delete_folder_impl(&self, params: DeleteFolderParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
 
         let stream = self.list_tree().revision(revision.to_string()).recursive(true).send()?;
@@ -310,7 +310,7 @@ impl HFRepository {
             .clone()
             .unwrap_or_else(|| format!("Delete {}", params.path_in_repo));
 
-        self.create_commit_impl(RepoCreateCommitParams {
+        self.create_commit_impl(CreateCommitParams {
             operations,
             commit_message,
             commit_description: None,
@@ -330,7 +330,7 @@ impl HFRepository {
     /// uploaded via xet and should be referenced as lfsFile in the commit.
     async fn preupload_and_upload_lfs_files(
         &self,
-        params: &RepoCreateCommitParams,
+        params: &CreateCommitParams,
         revision: &str,
     ) -> HFResult<HashMap<String, (String, u64)>> {
         let add_ops: Vec<(&String, &AddSource)> = params
@@ -437,7 +437,7 @@ impl HFRepository {
     /// Compute SHA256, negotiate LFS batch transfer, and upload via xet.
     async fn upload_lfs_files_via_xet(
         &self,
-        params: &RepoCreateCommitParams,
+        params: &CreateCommitParams,
         revision: &str,
         lfs_files: &[&(String, u64, Vec<u8>, &AddSource)],
     ) -> HFResult<HashMap<String, (String, u64)>> {
@@ -694,7 +694,7 @@ impl HFRepository {
         #[builder(into)] parent_commit: Option<String>,
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        self.create_commit_impl(RepoCreateCommitParams {
+        self.create_commit_impl(CreateCommitParams {
             operations,
             commit_message,
             commit_description,
@@ -730,7 +730,7 @@ impl HFRepository {
         #[builder(into)] parent_commit: Option<String>,
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        self.upload_file_impl(RepoUploadFileParams {
+        self.upload_file_impl(UploadFileParams {
             source,
             path_in_repo,
             revision,
@@ -771,7 +771,7 @@ impl HFRepository {
         delete_patterns: Option<Vec<String>>,
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        self.upload_folder_impl(RepoUploadFolderParams {
+        self.upload_folder_impl(UploadFolderParams {
             folder_path,
             path_in_repo,
             revision,
@@ -805,7 +805,7 @@ impl HFRepository {
         #[builder(into)] commit_message: Option<String>,
         create_pr: Option<bool>,
     ) -> HFResult<CommitInfo> {
-        self.delete_file_impl(RepoDeleteFileParams {
+        self.delete_file_impl(DeleteFileParams {
             path_in_repo,
             revision,
             commit_message,
@@ -833,7 +833,7 @@ impl HFRepository {
         #[builder(into)] commit_message: Option<String>,
         create_pr: Option<bool>,
     ) -> HFResult<CommitInfo> {
-        self.delete_folder_impl(RepoDeleteFolderParams {
+        self.delete_folder_impl(DeleteFolderParams {
             path_in_repo,
             revision,
             commit_message,

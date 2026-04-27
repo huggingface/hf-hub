@@ -138,7 +138,7 @@ because the struct has no direct `runtime` field. Do NOT reintroduce the legacy 
 `sync_api_stream!` / `sync_api_async_stream!` macros — they were removed deliberately when the
 crate moved to bon.
 
-When parameters need a backing struct for internal helpers (e.g. `RepoDownloadFileParams` is
+When parameters need a backing struct for internal helpers (e.g. `DownloadFileParams` is
 plumbed through several private functions in `repository/download.rs`), keep that struct
 **private** to the module with no `#[derive(TypedBuilder)]` and have the bon method assemble it.
 Never expose it publicly.
@@ -169,22 +169,23 @@ hf-hub/
 │   │   │   │                       #   flat public surface via `hf_hub::repository::…`
 │   │   │   ├── mod.rs              # HFRepository handle, RepoType, RepoInfo, ModelInfo/DatasetInfo/
 │   │   │   │                       #   SpaceInfo, list/create/delete/move/update + flat re-exports
-│   │   │   ├── commits.rs          # Git history types/params + list_commits/list_refs/diff/branches/tags
+│   │   │   ├── commits.rs          # Git history types + list_commits/list_refs/diff/branches/tags
 │   │   │   ├── diff.rs             # HFFileDiff, GitStatus, HFDiffParseError, parse_raw_diff, stream_raw_diff
-│   │   │   ├── files.rs            # File types/params: BlobLfsInfo, RepoTreeEntry, FileMetadataInfo,
-│   │   │   │                       #   CommitOperation/AddSource/CommitInfo, all file-op params
+│   │   │   ├── files.rs            # Shared file types: BlobLfsInfo, RepoTreeEntry, FileMetadataInfo,
+│   │   │   │                       #   CommitOperation, AddSource, CommitInfo, LastCommitInfo
 │   │   │   ├── listing.rs          # list_files, list_tree, get_paths_info, get_file_metadata
 │   │   │   ├── download.rs         # download_file, download_file_stream, download_file_to_bytes,
-│   │   │   │                       #   snapshot_download
+│   │   │   │                       #   snapshot_download (private helper structs live here)
 │   │   │   └── upload.rs           # upload_file, upload_folder, create_commit, delete_file/folder
-│   │   ├── spaces.rs               # Spaces component: HFSpace handle, SpaceRuntime/SpaceVariable,
-│   │   │                           #   Space*Params, runtime/hardware/secrets/variables/duplicate
+│   │   │                           #   (private helper structs live here)
+│   │   ├── spaces.rs               # Spaces component: HFSpace handle, SpaceRuntime, SpaceVariable,
+│   │   │                           #   runtime/hardware/secrets/variables/duplicate
 │   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
 │   │   │                           #   user+org lookup, followers/following
 │   │   ├── xet.rs                  # Xet component (pub(crate)): XetConnectionInfo, xet transfer plumbing
 │   │   │                           #   used by repositories and buckets
 │   │   ├── buckets/
-│   │   │   ├── mod.rs              # HFBucket handle, bucket types/params, create/list/tree/batch/download
+│   │   │   ├── mod.rs              # HFBucket handle, bucket types, create/list/tree/batch/download
 │   │   │   └── sync.rs             # BucketSync* types, HFBucket::sync — plan computation and execution
 │   │   └── cache/
 │   │       ├── mod.rs              # CachedFileInfo/CachedRepoInfo/HFCacheInfo + scan_cache API
