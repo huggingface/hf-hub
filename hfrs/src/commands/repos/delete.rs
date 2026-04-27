@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::repository::DeleteRepoParams;
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -23,11 +22,12 @@ pub struct Args {
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let repo_type: hf_hub::RepoType = args.r#type.into();
-    let params = DeleteRepoParams {
-        repo_id: args.repo_id,
-        repo_type: Some(repo_type),
-        missing_ok: args.missing_ok,
-    };
-    client.delete_repo(params).await?;
+    client
+        .delete_repo()
+        .repo_id(args.repo_id)
+        .repo_type(repo_type)
+        .missing_ok(args.missing_ok)
+        .send()
+        .await?;
     Ok(CommandResult::Silent)
 }

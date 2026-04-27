@@ -5,10 +5,6 @@
 
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::repository::{
-    CreateRepoParams, DeleteRepoParams, RepoCreateBranchParams, RepoCreateTagParams, RepoDeleteBranchParams,
-    RepoDeleteTagParams, RepoGetCommitDiffParams, RepoGetRawDiffParams, RepoListCommitsParams, RepoListRefsParams,
-};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -17,7 +13,7 @@ async fn main() -> hf_hub::HFResult<()> {
     // --- Read operations ---
 
     let repo = client.model("openai-community", "gpt2");
-    let commits_stream = repo.list_commits(RepoListCommitsParams::default())?;
+    let commits_stream = repo.list_commits().send()?;
     futures::pin_mut!(commits_stream);
     println!("Recent commits in gpt2:");
     let mut first_two_ids: Vec<String> = Vec::new();
@@ -33,7 +29,7 @@ async fn main() -> hf_hub::HFResult<()> {
         }
     }
 
-    let refs = repo.list_refs(RepoListRefsParams::default()).await?;
+    let refs = repo.list_refs().send().await?;
     println!("\nBranches:");
     for b in &refs.branches {
         println!("  {} -> {}", b.name, &b.target_commit[..8]);
@@ -45,53 +41,42 @@ async fn main() -> hf_hub::HFResult<()> {
 
     if first_two_ids.len() == 2 {
         let compare = format!("{}..{}", first_two_ids[1], first_two_ids[0]);
-        let diff = repo
-            .get_commit_diff(RepoGetCommitDiffParams::builder().compare(&compare).build())
-            .await?;
+        let diff = repo.get_commit_diff().compare(&compare).send().await?;
         println!("\nDiff ({compare}):");
         println!("  {} chars", diff.len());
 
-        let raw_diff = repo
-            .get_raw_diff(RepoGetRawDiffParams::builder().compare(&compare).build())
-            .await?;
+        let raw_diff = repo.get_raw_diff().compare(&compare).send().await?;
         println!("Raw diff: {} chars", raw_diff.len());
     }
 
     // --- Write operations (creates real resources on the Hub) ---
 
-    let user = client.whoami().await?;
+    let user = client.whoami().send().await?;
     let unique = std::process::id();
     let repo = client.model(&user.username, format!("example-commits-{unique}"));
 
     client
-        .create_repo(
-            CreateRepoParams::builder()
-                .repo_id(repo.repo_path())
-                .private(true)
-                .exist_ok(true)
-                .build(),
-        )
+        .create_repo()
+        .repo_id(repo.repo_path())
+        .private(true)
+        .exist_ok(true)
+        .send()
         .await?;
     println!("\nCreated test repo: {}", repo.repo_path());
 
-    repo.create_branch(RepoCreateBranchParams::builder().branch("feature-branch").build())
-        .await?;
+    repo.create_branch().branch("feature-branch").send().await?;
     println!("Created branch: feature-branch");
 
-    repo.delete_branch(RepoDeleteBranchParams::builder().branch("feature-branch").build())
-        .await?;
+    repo.delete_branch().branch("feature-branch").send().await?;
     println!("Deleted branch: feature-branch");
 
-    repo.create_tag(RepoCreateTagParams::builder().tag("v0.1.0").message("Initial release").build())
-        .await?;
+    repo.create_tag().tag("v0.1.0").message("Initial release").send().await?;
     println!("Created tag: v0.1.0");
 
-    repo.delete_tag(RepoDeleteTagParams::builder().tag("v0.1.0").build()).await?;
+    repo.delete_tag().tag("v0.1.0").send().await?;
     println!("Deleted tag: v0.1.0");
 
-    client
-        .delete_repo(DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
-        .await?;
+    client.delete_repo().repo_id(repo.repo_path()).missing_ok(true).send().await?;
     println!("Cleaned up test repo");
 
     Ok(())

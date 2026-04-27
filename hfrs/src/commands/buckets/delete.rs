@@ -39,7 +39,12 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         }
     }
 
-    client.delete_bucket(&bucket_id, args.missing_ok).await?;
+    client
+        .delete_bucket()
+        .bucket_id(&bucket_id)
+        .missing_ok(args.missing_ok)
+        .send()
+        .await?;
 
     if args.quiet {
         Ok(CommandResult::Raw(bucket_id))

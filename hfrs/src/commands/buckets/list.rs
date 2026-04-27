@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::buckets::{BucketTreeEntry, ListBucketTreeParams};
+use hf_hub::buckets::BucketTreeEntry;
 
 use crate::cli::OutputFormat;
 use crate::output::{CommandOutput, CommandResult};
@@ -101,7 +101,7 @@ async fn list_buckets(
     quiet: bool,
     human_readable: bool,
 ) -> Result<CommandResult> {
-    let stream = client.list_buckets(namespace)?;
+    let stream = client.list_buckets().namespace(namespace).send()?;
     futures::pin_mut!(stream);
 
     let mut buckets = Vec::new();
@@ -155,12 +155,11 @@ async fn list_files(
     args: &Args,
 ) -> Result<CommandResult> {
     let bucket = client.bucket(namespace, bucket_name);
-    let params = ListBucketTreeParams {
-        prefix,
-        recursive: if args.recursive { Some(true) } else { None },
-    };
-
-    let stream = bucket.list_tree(params)?;
+    let stream = bucket
+        .list_tree()
+        .maybe_prefix(prefix)
+        .maybe_recursive(if args.recursive { Some(true) } else { None })
+        .send()?;
     futures::pin_mut!(stream);
 
     let mut entries = Vec::new();

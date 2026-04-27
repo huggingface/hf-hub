@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::buckets::CreateBucketParams;
 
 use super::parse_bucket_id;
 use crate::output::CommandResult;
@@ -27,14 +26,14 @@ pub struct Args {
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let (namespace, name) = parse_bucket_id(&args.bucket_id)?;
 
-    let params = CreateBucketParams::builder()
+    let result = client
+        .create_bucket()
         .namespace(&namespace)
         .name(&name)
         .private(args.private)
         .exist_ok(args.exist_ok)
-        .build();
-
-    let result = client.create_bucket(params).await?;
+        .send()
+        .await?;
     let handle = format!("hf://buckets/{}/{}", namespace, name);
 
     if args.quiet {

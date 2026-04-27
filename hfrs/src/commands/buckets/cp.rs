@@ -5,7 +5,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::buckets::BucketDownloadFilesParams;
 use hf_hub::progress::Progress;
 
 use crate::output::CommandResult;
@@ -67,15 +66,15 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
     }
 
     if !src_is_bucket && !src_is_stdin && dst_is_bucket {
-        return upload_local(client, &args.src, &dst_str, args.quiet, &handler).await;
+        return upload_local(client, &args.src, &dst_str, args.quiet, handler).await;
     }
 
     if src_is_stdin && dst_is_bucket {
-        return upload_stdin(client, &dst_str, args.quiet, &handler).await;
+        return upload_stdin(client, &dst_str, args.quiet, handler).await;
     }
 
     if src_is_bucket && !dst_is_bucket && !dst_is_stdout {
-        return download_to_local(client, &args.src, &dst_str, args.quiet, &handler).await;
+        return download_to_local(client, &args.src, &dst_str, args.quiet, handler).await;
     }
 
     if src_is_bucket && dst_is_stdout {
@@ -94,7 +93,7 @@ async fn upload_local(
     src: &str,
     dst: &str,
     quiet: bool,
-    progress: &Option<Progress>,
+    progress: Option<Progress>,
 ) -> Result<CommandResult> {
     let dst = parse_bucket_path(dst).ok_or_else(|| anyhow::anyhow!("Invalid bucket destination: {dst}"))?;
     let local_path = PathBuf::from(src);
@@ -102,7 +101,12 @@ async fn upload_local(
         anyhow::bail!("Source file not found: {src}");
     }
     let bucket = client.bucket(&dst.namespace, &dst.bucket_name);
-    bucket.upload_files(&[(local_path, dst.path.clone())], progress).await?;
+    bucket
+        .upload_files()
+        .files(vec![(local_path, dst.path.clone())])
+        .maybe_progress(progress)
+        .send()
+        .await?;
     if !quiet {
         return Ok(CommandResult::Raw(format!(
             "Uploaded: {} -> hf://buckets/{}/{}/{}",
@@ -112,7 +116,7 @@ async fn upload_local(
     Ok(CommandResult::Silent)
 }
 
-async fn upload_stdin(client: &HFClient, dst: &str, quiet: bool, progress: &Option<Progress>) -> Result<CommandResult> {
+async fn upload_stdin(client: &HFClient, dst: &str, quiet: bool, progress: Option<Progress>) -> Result<CommandResult> {
     let dst = parse_bucket_path(dst).ok_or_else(|| anyhow::anyhow!("Invalid bucket destination: {dst}"))?;
     let mut data = Vec::new();
     io::stdin().read_to_end(&mut data)?;
@@ -120,7 +124,10 @@ async fn upload_stdin(client: &HFClient, dst: &str, quiet: bool, progress: &Opti
     std::fs::write(tmp.path(), &data)?;
     let bucket = client.bucket(&dst.namespace, &dst.bucket_name);
     bucket
-        .upload_files(&[(tmp.path().to_path_buf(), dst.path.clone())], progress)
+        .upload_files()
+        .files(vec![(tmp.path().to_path_buf(), dst.path.clone())])
+        .maybe_progress(progress)
+        .send()
         .await?;
     if !quiet {
         return Ok(CommandResult::Raw(format!(
@@ -136,7 +143,7 @@ async fn download_to_local(
     src: &str,
     dst: &str,
     quiet: bool,
-    progress: &Option<Progress>,
+    progress: Option<Progress>,
 ) -> Result<CommandResult> {
     let src = parse_bucket_path(src).ok_or_else(|| anyhow::anyhow!("Invalid bucket source: {src}"))?;
     let mut local_path = PathBuf::from(dst);
@@ -147,10 +154,12 @@ async fn download_to_local(
         std::fs::create_dir_all(parent)?;
     }
     let bucket = client.bucket(&src.namespace, &src.bucket_name);
-    let params = BucketDownloadFilesParams::builder()
+    bucket
+        .download_files()
         .files(vec![(src.path.clone(), local_path.clone())])
-        .build();
-    bucket.download_files(params, progress).await?;
+        .maybe_progress(progress)
+        .send()
+        .await?;
     if !quiet {
         return Ok(CommandResult::Raw(format!(
             "Downloaded: hf://buckets/{}/{}/{} -> {}",
@@ -167,11 +176,11 @@ async fn download_to_stdout(client: &HFClient, src: &str) -> Result<CommandResul
     let src = parse_bucket_path(src).ok_or_else(|| anyhow::anyhow!("Invalid bucket source: {src}"))?;
     let tmp = tempfile::NamedTempFile::new()?;
     let bucket = client.bucket(&src.namespace, &src.bucket_name);
-    let params = BucketDownloadFilesParams::builder()
+    bucket
+        .download_files()
         .files(vec![(src.path.clone(), tmp.path().to_path_buf())])
-        .build();
-    let no_progress: Option<Progress> = None;
-    bucket.download_files(params, &no_progress).await?;
+        .send()
+        .await?;
     let data = std::fs::read(tmp.path())?;
     io::stdout().write_all(&data)?;
     Ok(CommandResult::Silent)
@@ -181,18 +190,18 @@ async fn server_side_copy(client: &HFClient, src: &str, dst: &str, quiet: bool) 
     let src = parse_bucket_path(src).ok_or_else(|| anyhow::anyhow!("Invalid bucket source: {src}"))?;
     let dst = parse_bucket_path(dst).ok_or_else(|| anyhow::anyhow!("Invalid bucket destination: {dst}"))?;
     let src_bucket = client.bucket(&src.namespace, &src.bucket_name);
-    let metadata = src_bucket.get_file_metadata(&src.path).await?;
+    let metadata = src_bucket.get_file_metadata().remote_path(&src.path).send().await?;
     let dst_bucket = client.bucket(&dst.namespace, &dst.bucket_name);
-    let copy_params = hf_hub::buckets::BatchBucketFilesParams {
-        copy: vec![hf_hub::buckets::BucketCopyFile {
+    dst_bucket
+        .batch()
+        .copy(vec![hf_hub::buckets::BucketCopyFile {
             path: dst.path.clone(),
             xet_hash: metadata.xet_hash,
             source_repo_type: "bucket".to_string(),
             source_repo_id: format!("{}/{}", src.namespace, src.bucket_name),
-        }],
-        ..Default::default()
-    };
-    dst_bucket.batch(copy_params).await?;
+        }])
+        .send()
+        .await?;
     if !quiet {
         return Ok(CommandResult::Raw(format!(
             "Copied: hf://buckets/{}/{}/{} -> hf://buckets/{}/{}/{}",

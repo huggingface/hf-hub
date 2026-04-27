@@ -5,7 +5,6 @@
 
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::repository::RepoGetRawDiffParams;
 
 const GIT_EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -15,9 +14,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo = client.model("openai-community", "gpt2");
 
     let compare = format!("{GIT_EMPTY_TREE_HASH}..main");
-    let mut diff_stream = repo
-        .get_raw_diff_stream(RepoGetRawDiffParams::builder().compare(&compare).build())
-        .await?;
+    let mut diff_stream = repo.get_raw_diff_stream().compare(&compare).send().await?;
 
     let mut count = 0;
     println!("Streaming all files in main (first 10):");

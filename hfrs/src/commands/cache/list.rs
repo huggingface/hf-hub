@@ -40,7 +40,7 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
-    let cache_info = client.scan_cache().await?;
+    let cache_info = client.scan_cache().send().await?;
 
     if cache_info.repos.is_empty() && matches!(args.format, OutputFormat::Table) {
         return Ok(CommandResult::Raw("No cached repos found.".to_string()));

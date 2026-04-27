@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use hf_hub::HFClient;
 use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
-use hf_hub::repository::RepoDownloadFileParams;
 
 struct PrintProgressHandler;
 
@@ -97,13 +96,11 @@ async fn main() -> hf_hub::HFResult<()> {
     let tmp_dir = tempfile::tempdir().expect("failed to create tempdir");
 
     let path = model
-        .download_file(
-            RepoDownloadFileParams::builder()
-                .filename("config.json")
-                .local_dir(tmp_dir.path().to_path_buf())
-                .progress(Some(Arc::new(PrintProgressHandler)))
-                .build(),
-        )
+        .download_file()
+        .filename("config.json")
+        .local_dir(tmp_dir.path().to_path_buf())
+        .progress(Arc::new(PrintProgressHandler))
+        .send()
         .await?;
 
     println!("File saved to: {}", path.display());

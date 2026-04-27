@@ -20,7 +20,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let from = format!("{}/{}", from_ns, from_name);
     let to = format!("{}/{}", to_ns, to_name);
 
-    client.move_bucket(&from, &to).await?;
+    client.move_bucket().from_id(&from).to_id(&to).send().await?;
 
     Ok(CommandResult::Raw(format!("Bucket moved: {from} -> {to}")))
 }

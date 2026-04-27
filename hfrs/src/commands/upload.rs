@@ -5,7 +5,7 @@ use anyhow::{Result, bail};
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
 use hf_hub::progress::Progress;
-use hf_hub::repository::{AddSource, CreateRepoParams, RepoUploadFileParams, RepoUploadFolderParams};
+use hf_hub::repository::AddSource;
 use tracing::info;
 
 use crate::cli::RepoTypeArg;
@@ -71,16 +71,16 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
     let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
 
     // Ensure the repo exists, creating it if necessary
-    if !repo.exists().await? {
+    if !repo.exists().send().await? {
         info!(repo_id = args.repo_id.as_str(), private = args.private, "creating repository");
-        let create_params = CreateRepoParams {
-            repo_id: args.repo_id.clone(),
-            repo_type: Some(repo_type),
-            private: if args.private { Some(true) } else { None },
-            exist_ok: true,
-            space_sdk: None,
-        };
-        client.create_repo(create_params).await?;
+        client
+            .create_repo()
+            .repo_id(args.repo_id.clone())
+            .repo_type(repo_type)
+            .maybe_private(if args.private { Some(true) } else { None })
+            .exist_ok(true)
+            .send()
+            .await?;
     }
 
     let handler: Option<Progress> = if args.quiet {
@@ -98,17 +98,16 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default()
         });
-        let params = RepoUploadFileParams {
-            source: AddSource::File(local_path),
-            path_in_repo,
-            revision: args.revision,
-            commit_message: args.commit_message,
-            commit_description: args.commit_description,
-            create_pr: if args.create_pr { Some(true) } else { None },
-            parent_commit: None,
-            progress: handler.clone(),
-        };
-        repo.upload_file(params).await?
+        repo.upload_file()
+            .source(AddSource::File(local_path))
+            .path_in_repo(path_in_repo)
+            .maybe_revision(args.revision)
+            .maybe_commit_message(args.commit_message)
+            .maybe_commit_description(args.commit_description)
+            .maybe_create_pr(if args.create_pr { Some(true) } else { None })
+            .maybe_progress(handler.clone())
+            .send()
+            .await?
     } else if local_path.is_dir() {
         let allow_patterns = if !args.include.is_empty() {
             Some(args.include)
@@ -125,19 +124,19 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
         } else {
             None
         };
-        let params = RepoUploadFolderParams {
-            folder_path: local_path,
-            path_in_repo: args.path_in_repo,
-            revision: args.revision,
-            commit_message: args.commit_message,
-            commit_description: args.commit_description,
-            create_pr: if args.create_pr { Some(true) } else { None },
-            allow_patterns,
-            ignore_patterns,
-            delete_patterns,
-            progress: handler.clone(),
-        };
-        repo.upload_folder(params).await?
+        repo.upload_folder()
+            .folder_path(local_path)
+            .maybe_path_in_repo(args.path_in_repo)
+            .maybe_revision(args.revision)
+            .maybe_commit_message(args.commit_message)
+            .maybe_commit_description(args.commit_description)
+            .maybe_create_pr(if args.create_pr { Some(true) } else { None })
+            .maybe_allow_patterns(allow_patterns)
+            .maybe_ignore_patterns(ignore_patterns)
+            .maybe_delete_patterns(delete_patterns)
+            .maybe_progress(handler.clone())
+            .send()
+            .await?
     } else {
         bail!("local path does not exist: {}", local_path.display());
     };

@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::buckets::{BucketTreeEntry, ListBucketTreeParams};
+use hf_hub::buckets::BucketTreeEntry;
 
 use crate::output::CommandResult;
 
@@ -71,11 +71,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let bucket_id = format!("{namespace}/{bucket_name}");
 
     let paths_to_delete = if args.recursive {
-        let params = ListBucketTreeParams {
-            prefix: path_prefix.clone(),
-            recursive: Some(true),
-        };
-        let stream = bucket.list_tree(params)?;
+        let stream = bucket.list_tree().maybe_prefix(path_prefix.clone()).recursive(true).send()?;
         futures::pin_mut!(stream);
 
         let mut paths = Vec::new();
@@ -133,7 +129,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         }
     }
 
-    bucket.delete_files(&paths_to_delete).await?;
+    bucket.delete_files().paths(paths_to_delete.clone()).send().await?;
     let count = paths_to_delete.len();
     Ok(CommandResult::Raw(format!("{count} file(s) removed.")))
 }

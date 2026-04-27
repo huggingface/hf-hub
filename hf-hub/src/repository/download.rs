@@ -1,34 +1,49 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use bon::bon;
 use futures::TryStreamExt;
 use futures::stream::{Stream, StreamExt};
 use reqwest::header::IF_NONE_MATCH;
 
 use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash, matches_any_glob};
-use super::{
-    FileMetadataInfo, HFRepository, RepoDownloadFileParams, RepoDownloadFileStreamParams,
-    RepoDownloadFileToBytesParams, RepoListTreeParams, RepoSnapshotDownloadParams, RepoTreeEntry, RepoType,
-};
+use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
 use crate::cache::storage as cache;
 use crate::error::{HFError, HFResult};
 use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress};
 use crate::{constants, retry};
 
+/// Internal options struct used by the file download helpers.
+struct DownloadFileParams {
+    filename: String,
+    local_dir: Option<PathBuf>,
+    revision: Option<String>,
+    force_download: Option<bool>,
+    local_files_only: Option<bool>,
+    progress: Option<Progress>,
+}
+
+/// Internal options struct used by the streaming download helpers.
+struct DownloadFileStreamParams {
+    filename: String,
+    revision: Option<String>,
+    range: Option<std::ops::Range<u64>>,
+}
+
+/// Internal options struct used by `snapshot_download_impl`.
+struct SnapshotDownloadParams {
+    revision: Option<String>,
+    allow_patterns: Option<Vec<String>>,
+    ignore_patterns: Option<Vec<String>>,
+    local_dir: Option<PathBuf>,
+    force_download: Option<bool>,
+    local_files_only: Option<bool>,
+    max_workers: Option<usize>,
+    progress: Option<Progress>,
+}
+
 impl HFRepository {
-    /// Download a single file from a repository.
-    ///
-    /// When `local_dir` is `Some`, the file is downloaded directly to that directory
-    /// (no caching). When `local_dir` is `None`, the HF cache system is used:
-    /// blobs are stored by etag and symlinked from snapshots/{commit}/{filename}.
-    ///
-    /// Returns the local filesystem path of the downloaded or cached file. Use
-    /// [`HFRepository::download_file_stream`] or
-    /// [`HFRepository::download_file_to_bytes`] when you do not want to write to
-    /// disk.
-    ///
-    /// Endpoint: GET {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}
-    pub async fn download_file(&self, params: RepoDownloadFileParams) -> HFResult<PathBuf> {
+    async fn download_file_impl(&self, params: DownloadFileParams) -> HFResult<PathBuf> {
         let result = self.download_file_inner(&params).await;
         if result.is_ok() {
             params.progress.emit(DownloadEvent::Complete);
@@ -36,7 +51,7 @@ impl HFRepository {
         result
     }
 
-    async fn download_file_inner(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
+    async fn download_file_inner(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         if params.local_dir.is_some() {
             self.download_file_to_local_dir(params).await
         } else {
@@ -47,20 +62,9 @@ impl HFRepository {
         }
     }
 
-    /// Download a file and return a byte stream instead of writing to disk.
-    ///
-    /// Returns a `(content_length, stream)` tuple. `content_length` is `Some`
-    /// when the server provides a `Content-Length` header.
-    ///
-    /// When `range` is set, only the specified byte range is fetched. This works
-    /// for both regular files (via HTTP Range header) and xet-backed files (via
-    /// the xet streaming download API). For non-xet files the server must support
-    /// range requests; the returned `content_length` reflects the range size.
-    ///
-    /// Endpoint: GET {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}
-    pub async fn download_file_stream(
+    async fn download_file_stream_impl(
         &self,
-        params: RepoDownloadFileStreamParams,
+        params: DownloadFileStreamParams,
     ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
     {
         if let Some(ref range) = params.range
@@ -137,13 +141,8 @@ impl HFRepository {
         Ok((content_length, Box::new(Box::pin(stream))))
     }
 
-    /// Download a file (or byte range) into memory and return the contents as [`bytes::Bytes`].
-    ///
-    /// This is a convenience wrapper around [`download_file_stream`](Self::download_file_stream)
-    /// that collects the entire stream into a single buffer. When `range` is set,
-    /// only the specified byte range is fetched.
-    pub async fn download_file_to_bytes(&self, params: RepoDownloadFileToBytesParams) -> HFResult<bytes::Bytes> {
-        let (content_length, stream) = self.download_file_stream(params).await?;
+    async fn download_file_to_bytes_impl(&self, params: DownloadFileStreamParams) -> HFResult<bytes::Bytes> {
+        let (content_length, stream) = self.download_file_stream_impl(params).await?;
         futures::pin_mut!(stream);
 
         let capacity = content_length.unwrap_or(0) as usize;
@@ -154,7 +153,7 @@ impl HFRepository {
         Ok(buf.freeze())
     }
 
-    async fn download_file_to_local_dir(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
+    async fn download_file_to_local_dir(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let repo_path = self.repo_path();
         let url = self
@@ -287,7 +286,7 @@ impl HFRepository {
         target.file_name()?.to_str().map(|s| s.to_string())
     }
 
-    async fn download_file_to_cache(&self, params: &RepoDownloadFileParams) -> HFResult<PathBuf> {
+    async fn download_file_to_cache(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let cache_dir = self.hf_client.cache_dir();
         let repo_folder = cache::repo_folder_name(&self.repo_path(), Some(self.repo_type));
@@ -318,7 +317,7 @@ impl HFRepository {
 
     async fn download_file_to_cache_network(
         &self,
-        params: &RepoDownloadFileParams,
+        params: &DownloadFileParams,
         revision: &str,
         cache_dir: &Path,
         repo_folder: &str,
@@ -489,12 +488,7 @@ impl HFRepository {
         allow_patterns: Option<&Vec<String>>,
         ignore_patterns: Option<&Vec<String>>,
     ) -> HFResult<Vec<String>> {
-        let stream = self.list_tree(RepoListTreeParams {
-            revision: Some(revision.to_string()),
-            recursive: true,
-            expand: false,
-            limit: None,
-        })?;
+        let stream = self.list_tree().revision(revision.to_string()).recursive(true).send()?;
         futures::pin_mut!(stream);
 
         let mut filenames: Vec<String> = Vec::new();
@@ -515,17 +509,7 @@ impl HFRepository {
         Ok(filenames)
     }
 
-    /// Download all selected files for a resolved revision.
-    ///
-    /// When `local_dir` is `None`, files are stored in the HF cache and the
-    /// returned path is the cache snapshot directory for the resolved commit.
-    /// When `local_dir` is `Some`, files are written directly under that
-    /// directory.
-    ///
-    /// `allow_patterns` and `ignore_patterns` filter which repository files are
-    /// included. `local_files_only` resolves only from the local cache and does
-    /// not make network requests.
-    pub async fn snapshot_download(&self, params: RepoSnapshotDownloadParams) -> HFResult<PathBuf> {
+    async fn snapshot_download_impl(&self, params: SnapshotDownloadParams) -> HFResult<PathBuf> {
         if params.local_dir.is_none() && !self.hf_client.cache_enabled() {
             return Err(HFError::CacheNotEnabled);
         }
@@ -841,10 +825,10 @@ fn build_download_params(
     force_download: Option<bool>,
     local_dir: Option<PathBuf>,
     progress: &Option<Progress>,
-) -> Vec<RepoDownloadFileParams> {
+) -> Vec<DownloadFileParams> {
     filenames
         .iter()
-        .map(|filename| RepoDownloadFileParams {
+        .map(|filename| DownloadFileParams {
             filename: filename.clone(),
             local_dir: local_dir.clone(),
             revision: Some(commit_hash.to_string()),
@@ -857,7 +841,7 @@ fn build_download_params(
 
 async fn download_concurrently(
     api: &HFRepository,
-    params: &[RepoDownloadFileParams],
+    params: &[DownloadFileParams],
     max_workers: usize,
 ) -> HFResult<Vec<PathBuf>> {
     futures::stream::iter(params.iter().map(|p| api.download_file_inner(p)))
@@ -908,10 +892,214 @@ async fn stream_response_to_file_with_progress(
     Ok(())
 }
 
-sync_api! {
-    impl HFRepository -> HFRepositorySync {
-        fn download_file(&self, params: RepoDownloadFileParams) -> HFResult<PathBuf>;
-        fn download_file_to_bytes(&self, params: RepoDownloadFileToBytesParams) -> HFResult<bytes::Bytes>;
-        fn snapshot_download(&self, params: RepoSnapshotDownloadParams) -> HFResult<PathBuf>;
+#[bon]
+impl HFRepository {
+    /// Download a single file from a repository.
+    ///
+    /// When `local_dir` is `Some`, the file is downloaded directly to that directory
+    /// (no caching). When `local_dir` is `None`, the HF cache system is used:
+    /// blobs are stored by etag and symlinked from snapshots/{commit}/{filename}.
+    ///
+    /// Returns the local filesystem path of the downloaded or cached file. Use
+    /// [`HFRepository::download_file_stream`] or
+    /// [`HFRepository::download_file_to_bytes`] when you do not want to write to
+    /// disk.
+    ///
+    /// Endpoint: `GET {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}`.
+    ///
+    /// # Parameters
+    ///
+    /// - `filename` (required): path of the file to download within the repository.
+    /// - `local_dir`: local directory to download the file into. When set, the file is saved with its repo path
+    ///   structure.
+    /// - `revision`: Git revision. Defaults to the main branch.
+    /// - `force_download`: re-download the file even if a cached copy exists.
+    /// - `local_files_only`: only return the file if cached locally; never make a network request.
+    /// - `progress`: optional progress handler.
+    #[builder(finish_fn = send)]
+    pub async fn download_file(
+        &self,
+        #[builder(into)] filename: String,
+        local_dir: Option<PathBuf>,
+        #[builder(into)] revision: Option<String>,
+        force_download: Option<bool>,
+        local_files_only: Option<bool>,
+        progress: Option<Progress>,
+    ) -> HFResult<PathBuf> {
+        self.download_file_impl(DownloadFileParams {
+            filename,
+            local_dir,
+            revision,
+            force_download,
+            local_files_only,
+            progress,
+        })
+        .await
+    }
+
+    /// Download a file and return a byte stream instead of writing to disk.
+    ///
+    /// Returns a `(content_length, stream)` tuple. `content_length` is `Some`
+    /// when the server provides a `Content-Length` header.
+    ///
+    /// When `range` is set, only the specified byte range is fetched.
+    ///
+    /// # Parameters
+    ///
+    /// - `filename` (required): path of the file to stream within the repository.
+    /// - `revision`: Git revision. Defaults to the main branch.
+    /// - `range`: byte range to request (HTTP Range header).
+    #[builder(finish_fn = send)]
+    pub async fn download_file_stream(
+        &self,
+        #[builder(into)] filename: String,
+        #[builder(into)] revision: Option<String>,
+        range: Option<std::ops::Range<u64>>,
+    ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
+    {
+        self.download_file_stream_impl(DownloadFileStreamParams {
+            filename,
+            revision,
+            range,
+        })
+        .await
+    }
+
+    /// Download a file (or byte range) into memory and return the contents as [`bytes::Bytes`].
+    ///
+    /// This is a convenience wrapper around
+    /// [`download_file_stream`](Self::download_file_stream) that collects the entire stream into
+    /// a single buffer. When `range` is set, only the specified byte range is fetched.
+    #[builder(finish_fn = send)]
+    pub async fn download_file_to_bytes(
+        &self,
+        #[builder(into)] filename: String,
+        #[builder(into)] revision: Option<String>,
+        range: Option<std::ops::Range<u64>>,
+    ) -> HFResult<bytes::Bytes> {
+        self.download_file_to_bytes_impl(DownloadFileStreamParams {
+            filename,
+            revision,
+            range,
+        })
+        .await
+    }
+
+    /// Download all selected files for a resolved revision.
+    ///
+    /// When `local_dir` is `None`, files are stored in the HF cache and the returned path is the
+    /// cache snapshot directory for the resolved commit. When `local_dir` is `Some`, files are
+    /// written directly under that directory.
+    ///
+    /// # Parameters
+    ///
+    /// - `revision`: Git revision. Defaults to the main branch.
+    /// - `allow_patterns`: glob patterns of files to include.
+    /// - `ignore_patterns`: glob patterns of files to exclude.
+    /// - `local_dir`: local directory to download into.
+    /// - `force_download`: re-download all files even if cached.
+    /// - `local_files_only`: resolve only from the local cache.
+    /// - `max_workers`: maximum concurrent file downloads (default 8).
+    /// - `progress`: optional progress handler.
+    #[builder(finish_fn = send)]
+    pub async fn snapshot_download(
+        &self,
+        #[builder(into)] revision: Option<String>,
+        allow_patterns: Option<Vec<String>>,
+        ignore_patterns: Option<Vec<String>>,
+        local_dir: Option<PathBuf>,
+        force_download: Option<bool>,
+        local_files_only: Option<bool>,
+        max_workers: Option<usize>,
+        progress: Option<Progress>,
+    ) -> HFResult<PathBuf> {
+        self.snapshot_download_impl(SnapshotDownloadParams {
+            revision,
+            allow_patterns,
+            ignore_patterns,
+            local_dir,
+            force_download,
+            local_files_only,
+            max_workers,
+            progress,
+        })
+        .await
+    }
+}
+
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFRepositorySync {
+    /// Blocking counterpart of [`HFRepository::download_file`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn download_file(
+        &self,
+        #[builder(into)] filename: String,
+        local_dir: Option<PathBuf>,
+        #[builder(into)] revision: Option<String>,
+        force_download: Option<bool>,
+        local_files_only: Option<bool>,
+        progress: Option<Progress>,
+    ) -> HFResult<PathBuf> {
+        self.runtime.block_on(
+            self.inner
+                .download_file()
+                .filename(filename)
+                .maybe_local_dir(local_dir)
+                .maybe_revision(revision)
+                .maybe_force_download(force_download)
+                .maybe_local_files_only(local_files_only)
+                .maybe_progress(progress)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFRepository::download_file_to_bytes`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn download_file_to_bytes(
+        &self,
+        #[builder(into)] filename: String,
+        #[builder(into)] revision: Option<String>,
+        range: Option<std::ops::Range<u64>>,
+    ) -> HFResult<bytes::Bytes> {
+        self.runtime.block_on(
+            self.inner
+                .download_file_to_bytes()
+                .filename(filename)
+                .maybe_revision(revision)
+                .maybe_range(range)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFRepository::snapshot_download`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn snapshot_download(
+        &self,
+        #[builder(into)] revision: Option<String>,
+        allow_patterns: Option<Vec<String>>,
+        ignore_patterns: Option<Vec<String>>,
+        local_dir: Option<PathBuf>,
+        force_download: Option<bool>,
+        local_files_only: Option<bool>,
+        max_workers: Option<usize>,
+        progress: Option<Progress>,
+    ) -> HFResult<PathBuf> {
+        self.runtime.block_on(
+            self.inner
+                .snapshot_download()
+                .maybe_revision(revision)
+                .maybe_allow_patterns(allow_patterns)
+                .maybe_ignore_patterns(ignore_patterns)
+                .maybe_local_dir(local_dir)
+                .maybe_force_download(force_download)
+                .maybe_local_files_only(local_files_only)
+                .maybe_max_workers(max_workers)
+                .maybe_progress(progress)
+                .send(),
+        )
     }
 }

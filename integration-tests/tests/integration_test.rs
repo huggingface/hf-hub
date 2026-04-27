@@ -18,7 +18,6 @@
 
 use futures::StreamExt;
 use hf_hub::repository::*;
-use hf_hub::spaces::*;
 use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoType};
 use integration_tests::test_utils::*;
 
@@ -68,7 +67,7 @@ async fn cached_username() -> &'static str {
     USERNAME
         .get_or_init(|| async {
             let client = api().expect("API client required for cached_username");
-            client.whoami().await.expect("whoami failed").username
+            client.whoami().send().await.expect("whoami failed").username
         })
         .await
 }
@@ -98,7 +97,7 @@ fn repo_typed(client: &HFClient, repo_id: &str, repo_type: RepoType) -> HFReposi
 async fn test_model_info() {
     let Some(client) = prod_api() else { return };
     let model_repo = TEST_MODEL_REPO;
-    let info = repo(&client, model_repo).info(RepoInfoParams::default()).await.unwrap();
+    let info = repo(&client, model_repo).info().send().await.unwrap();
     match info {
         RepoInfo::Model(model) => assert!(model.id.contains("tiny-gemma3")),
         _ => panic!("expected model info"),
@@ -111,16 +110,13 @@ async fn test_repo_handle_info_and_file_exists() {
     let model_repo = TEST_MODEL_REPO;
     let repo = repo(&client, model_repo);
 
-    let info = repo.info(RepoInfoParams::default()).await.unwrap();
+    let info = repo.info().send().await.unwrap();
     match info {
         RepoInfo::Model(model) => assert_eq!(model.id, model_repo),
         _ => panic!("expected model info"),
     }
 
-    let exists = repo
-        .file_exists(RepoFileExistsParams::builder().filename("config.json").build())
-        .await
-        .unwrap();
+    let exists = repo.file_exists().filename("config.json").send().await.unwrap();
     assert!(exists);
 }
 
@@ -129,7 +125,8 @@ async fn test_dataset_info() {
     let Some(client) = prod_api() else { return };
     let dataset_repo = TEST_DATASET_REPO;
     let info = repo_typed(&client, dataset_repo, RepoType::Dataset)
-        .info(RepoInfoParams::default())
+        .info()
+        .send()
         .await
         .unwrap();
     match info {
@@ -141,10 +138,11 @@ async fn test_dataset_info() {
 #[tokio::test]
 async fn test_repo_exists() {
     let Some(client) = prod_api() else { return };
-    assert!(repo(&client, TEST_MODEL_REPO).exists().await.unwrap());
+    assert!(repo(&client, TEST_MODEL_REPO).exists().send().await.unwrap());
     assert!(
         !repo(&client, "this-repo-definitely-does-not-exist-12345")
             .exists()
+            .send()
             .await
             .unwrap()
     );
@@ -156,14 +154,18 @@ async fn test_file_exists() {
     let model_repo = TEST_MODEL_REPO;
     assert!(
         repo(&client, model_repo)
-            .file_exists(RepoFileExistsParams::builder().filename("config.json").build())
+            .file_exists()
+            .filename("config.json")
+            .send()
             .await
             .unwrap()
     );
 
     assert!(
         !repo(&client, model_repo)
-            .file_exists(RepoFileExistsParams::builder().filename("nonexistent_file.xyz").build())
+            .file_exists()
+            .filename("nonexistent_file.xyz")
+            .send()
             .await
             .unwrap()
     );
@@ -173,8 +175,7 @@ async fn test_file_exists() {
 async fn test_list_models() {
     let Some(client) = prod_api() else { return };
     let author = TEST_MODEL_AUTHOR;
-    let params = ListModelsParams::builder().author(author).limit(3_usize).build();
-    let stream = client.list_models(params).unwrap();
+    let stream = client.list_models().author(author).limit(3_usize).send().unwrap();
     futures::pin_mut!(stream);
 
     let mut count = 0;
@@ -189,10 +190,7 @@ async fn test_list_models() {
 #[tokio::test]
 async fn test_list_repo_files() {
     let Some(client) = prod_api() else { return };
-    let files = repo(&client, TEST_MODEL_REPO)
-        .list_files(RepoListFilesParams::default())
-        .await
-        .unwrap();
+    let files = repo(&client, TEST_MODEL_REPO).list_files().send().await.unwrap();
     assert!(files.contains(&"config.json".to_string()));
     assert!(files.contains(&"README.md".to_string()));
 }
@@ -201,7 +199,7 @@ async fn test_list_repo_files() {
 async fn test_list_repo_tree() {
     let Some(client) = prod_api() else { return };
     let r = repo(&client, TEST_MODEL_REPO);
-    let stream = r.list_tree(RepoListTreeParams::default()).unwrap();
+    let stream = r.list_tree().send().unwrap();
     futures::pin_mut!(stream);
 
     let mut found_config = false;
@@ -221,7 +219,7 @@ async fn test_list_repo_tree() {
 async fn test_list_repo_commits() {
     let Some(client) = prod_api() else { return };
     let r = repo(&client, TEST_MODEL_REPO);
-    let stream = r.list_commits(RepoListCommitsParams::default()).unwrap();
+    let stream = r.list_commits().send().unwrap();
     futures::pin_mut!(stream);
 
     let first = stream.next().await.unwrap().unwrap();
@@ -232,10 +230,7 @@ async fn test_list_repo_commits() {
 #[tokio::test]
 async fn test_list_repo_refs() {
     let Some(client) = prod_api() else { return };
-    let refs = repo(&client, TEST_MODEL_REPO)
-        .list_refs(RepoListRefsParams::default())
-        .await
-        .unwrap();
+    let refs = repo(&client, TEST_MODEL_REPO).list_refs().send().await.unwrap();
     assert!(!refs.branches.is_empty());
     // "main" branch should exist
     assert!(refs.branches.iter().any(|b| b.name == "main"));
@@ -247,14 +242,18 @@ async fn test_revision_exists() {
     let model_repo = TEST_MODEL_REPO;
     assert!(
         repo(&client, model_repo)
-            .revision_exists(RepoRevisionExistsParams::builder().revision("main").build())
+            .revision_exists()
+            .revision("main")
+            .send()
             .await
             .unwrap()
     );
 
     assert!(
         !repo(&client, model_repo)
-            .revision_exists(RepoRevisionExistsParams::builder().revision("nonexistent-branch-xyz").build())
+            .revision_exists()
+            .revision("nonexistent-branch-xyz")
+            .send()
             .await
             .unwrap()
     );
@@ -265,12 +264,10 @@ async fn test_download_file() {
     let Some(client) = prod_api() else { return };
     let dir = tempfile::tempdir().unwrap();
     let path = repo(&client, TEST_MODEL_REPO)
-        .download_file(
-            RepoDownloadFileParams::builder()
-                .filename("config.json")
-                .local_dir(dir.path().to_path_buf())
-                .build(),
-        )
+        .download_file()
+        .filename("config.json")
+        .local_dir(dir.path().to_path_buf())
+        .send()
         .await
         .unwrap();
     assert!(path.exists());
@@ -284,21 +281,21 @@ async fn test_download_file() {
 #[tokio::test]
 async fn test_whoami() {
     let Some(client) = api() else { return };
-    let user = client.whoami().await.unwrap();
+    let user = client.whoami().send().await.unwrap();
     assert!(!user.username.is_empty());
 }
 
 #[tokio::test]
 async fn test_auth_check() {
     let Some(client) = api() else { return };
-    client.auth_check().await.unwrap();
+    client.auth_check().send().await.unwrap();
 }
 
 #[tokio::test]
 async fn test_get_user_overview() {
     let Some(client) = prod_api() else { return };
     let username = TEST_USER;
-    let user = client.get_user_overview(username).await.unwrap();
+    let user = client.get_user_overview().username(username).send().await.unwrap();
     assert_eq!(user.username, username);
 }
 
@@ -306,14 +303,14 @@ async fn test_get_user_overview() {
 async fn test_get_organization_overview() {
     let Some(client) = prod_api() else { return };
     let org_name = TEST_ORG;
-    let org = client.get_organization_overview(org_name).await.unwrap();
+    let org = client.get_organization_overview().organization(org_name).send().await.unwrap();
     assert_eq!(org.name, org_name);
 }
 
 #[tokio::test]
 async fn test_list_user_followers() {
     let Some(client) = prod_api() else { return };
-    let stream = client.list_user_followers(TEST_USER, None).unwrap();
+    let stream = client.list_user_followers().username(TEST_USER).send().unwrap();
     futures::pin_mut!(stream);
     let first = stream.next().await;
     assert!(first.is_some());
@@ -323,7 +320,7 @@ async fn test_list_user_followers() {
 #[tokio::test]
 async fn test_list_user_following() {
     let Some(client) = prod_api() else { return };
-    let stream = client.list_user_following(TEST_USER, None).unwrap();
+    let stream = client.list_user_following().username(TEST_USER).send().unwrap();
     futures::pin_mut!(stream);
     let first = stream.next().await;
     assert!(first.is_some());
@@ -333,7 +330,7 @@ async fn test_list_user_following() {
 #[tokio::test]
 async fn test_list_organization_members() {
     let Some(client) = prod_api() else { return };
-    let stream = client.list_organization_members(TEST_ORG, None).unwrap();
+    let stream = client.list_organization_members().organization(TEST_ORG).send().unwrap();
     futures::pin_mut!(stream);
     let first = stream.next().await;
     assert!(first.is_some());
@@ -346,10 +343,7 @@ async fn test_list_organization_members() {
 async fn test_space_info() {
     let Some(client) = prod_api() else { return };
     let space_repo = TEST_SPACE_INFO_REPO;
-    let info = repo_typed(&client, space_repo, RepoType::Space)
-        .info(RepoInfoParams::default())
-        .await
-        .unwrap();
+    let info = repo_typed(&client, space_repo, RepoType::Space).info().send().await.unwrap();
     match info {
         RepoInfo::Space(space) => assert_eq!(space.id, space_repo),
         _ => panic!("expected space info"),
@@ -359,8 +353,7 @@ async fn test_space_info() {
 #[tokio::test]
 async fn test_list_datasets() {
     let Some(client) = prod_api() else { return };
-    let params = ListDatasetsParams::builder().author(TEST_ORG).limit(3_usize).build();
-    let stream = client.list_datasets(params).unwrap();
+    let stream = client.list_datasets().author(TEST_ORG).limit(3_usize).send().unwrap();
     futures::pin_mut!(stream);
 
     let mut count = 0;
@@ -374,8 +367,7 @@ async fn test_list_datasets() {
 #[tokio::test]
 async fn test_list_spaces() {
     let Some(client) = prod_api() else { return };
-    let params = ListSpacesParams::builder().author(TEST_ORG).limit(3_usize).build();
-    let stream = client.list_spaces(params).unwrap();
+    let stream = client.list_spaces().author(TEST_ORG).limit(3_usize).send().unwrap();
     futures::pin_mut!(stream);
 
     let mut count = 0;
@@ -392,11 +384,9 @@ async fn test_list_spaces() {
 async fn test_get_paths_info() {
     let Some(client) = prod_api() else { return };
     let entries = repo(&client, TEST_MODEL_REPO)
-        .get_paths_info(
-            RepoGetPathsInfoParams::builder()
-                .paths(vec!["config.json".to_string(), "README.md".to_string()])
-                .build(),
-        )
+        .get_paths_info()
+        .paths(vec!["config.json".to_string(), "README.md".to_string()])
+        .send()
         .await
         .unwrap();
     assert_eq!(entries.len(), 2);
@@ -415,7 +405,9 @@ async fn test_get_paths_info() {
 async fn test_get_file_metadata() {
     let Some(client) = prod_api() else { return };
     let meta = repo(&client, TEST_MODEL_REPO)
-        .get_file_metadata(RepoGetFileMetadataParams::builder().filepath("config.json").build())
+        .get_file_metadata()
+        .filepath("config.json")
+        .send()
         .await
         .unwrap();
     assert_eq!(meta.filename, "config.json");
@@ -428,29 +420,22 @@ async fn test_get_file_metadata() {
 async fn test_get_file_metadata_with_revision() {
     let Some(client) = prod_api() else { return };
     let model = repo(&client, TEST_MODEL_REPO);
-    let meta_default = model
-        .get_file_metadata(RepoGetFileMetadataParams::builder().filepath("config.json").build())
-        .await
-        .unwrap();
+    let meta_default = model.get_file_metadata().filepath("config.json").send().await.unwrap();
     let meta_main = model
-        .get_file_metadata(
-            RepoGetFileMetadataParams::builder()
-                .filepath("config.json")
-                .revision("main")
-                .build(),
-        )
+        .get_file_metadata()
+        .filepath("config.json")
+        .revision("main")
+        .send()
         .await
         .unwrap();
     assert_eq!(meta_default.commit_hash, meta_main.commit_hash);
     assert_eq!(meta_default.etag, meta_main.etag);
 
     let pinned = model
-        .get_file_metadata(
-            RepoGetFileMetadataParams::builder()
-                .filepath("config.json")
-                .revision(meta_main.commit_hash.clone())
-                .build(),
-        )
+        .get_file_metadata()
+        .filepath("config.json")
+        .revision(meta_main.commit_hash.clone())
+        .send()
         .await
         .unwrap();
     assert_eq!(pinned.commit_hash, meta_main.commit_hash);
@@ -460,11 +445,9 @@ async fn test_get_file_metadata_with_revision() {
 async fn test_get_file_metadata_missing() {
     let Some(client) = prod_api() else { return };
     let err = repo(&client, TEST_MODEL_REPO)
-        .get_file_metadata(
-            RepoGetFileMetadataParams::builder()
-                .filepath("this-file-does-not-exist.bin")
-                .build(),
-        )
+        .get_file_metadata()
+        .filepath("this-file-does-not-exist.bin")
+        .send()
         .await
         .unwrap_err();
     match err {
@@ -482,18 +465,16 @@ async fn test_get_commit_diff() {
     let Some(client) = prod_api() else { return };
 
     let gpt2 = repo(&client, TEST_MODEL_REPO);
-    let stream = gpt2.list_commits(RepoListCommitsParams::default()).unwrap();
+    let stream = gpt2.list_commits().send().unwrap();
     futures::pin_mut!(stream);
 
     let first = stream.next().await.unwrap().unwrap();
     let second = stream.next().await.unwrap().unwrap();
 
     let diff = gpt2
-        .get_commit_diff(
-            RepoGetCommitDiffParams::builder()
-                .compare(format!("{}..{}", second.id, first.id))
-                .build(),
-        )
+        .get_commit_diff()
+        .compare(format!("{}..{}", second.id, first.id))
+        .send()
         .await
         .unwrap();
     assert!(!diff.is_empty());
@@ -504,18 +485,16 @@ async fn test_get_raw_diff() {
     let Some(client) = prod_api() else { return };
 
     let gpt2 = repo(&client, TEST_MODEL_REPO);
-    let stream = gpt2.list_commits(RepoListCommitsParams::default()).unwrap();
+    let stream = gpt2.list_commits().send().unwrap();
     futures::pin_mut!(stream);
 
     let first = stream.next().await.unwrap().unwrap();
     let second = stream.next().await.unwrap().unwrap();
 
     let raw = gpt2
-        .get_raw_diff(
-            RepoGetRawDiffParams::builder()
-                .compare(format!("{}..{}", second.id, first.id))
-                .build(),
-        )
+        .get_raw_diff()
+        .compare(format!("{}..{}", second.id, first.id))
+        .send()
         .await
         .unwrap();
     assert!(!raw.is_empty());
@@ -529,19 +508,17 @@ async fn test_diff_against_empty_tree_all_additions() {
     const ZERO_BLOB_ID: &str = "0000000000000000000000000000000000000000";
 
     let test_cases: Vec<(&str, &str)> = vec![
-        ("espnet/yodas_owsmv4", "3bc62fd77f22f5bc2f116c6c21bcb12d5b85ab07"),
-        ("ppbrown/pexels-photos-janpf", "e2629eb62efab2bf1e0fa7c9ebf2a5e75acf91f4"),
-        ("tropos-labs/eigen-face-dataset-256", "341f2d0097d3a26ba4bd9e82dc8dac03b9a75f3d"),
+        ("hf-internal-testing/fixtures_ocr", "28fe12cdf7816b5dde94e22051b2ec8dc74267b7"),
+        ("hf-internal-testing/example-documents", "5a0a43c6006b31a6ddbfac7d69234925741a40f6"),
+        ("hf-internal-testing/dummy_image_text_data", "d5acb3a48d3127b59457e627c6dce975c20675b0"),
     ];
 
     for (repo_id, revision) in &test_cases {
         let dataset = repo_typed(&client, repo_id, RepoType::Dataset);
         let stream = dataset
-            .get_raw_diff_stream(
-                RepoGetRawDiffParams::builder()
-                    .compare(format!("{GIT_EMPTY_TREE_HASH}..{revision}"))
-                    .build(),
-            )
+            .get_raw_diff_stream()
+            .compare(format!("{GIT_EMPTY_TREE_HASH}..{revision}"))
+            .send()
             .await
             .expect("get_raw_diff_stream failed");
 
@@ -586,39 +563,33 @@ async fn test_create_and_delete_repo() {
     let repo_id = format!("{}/hf-hub-test-{}", username, uuid_v4_short());
 
     // Create
-    let params = CreateRepoParams::builder()
+    let url = client
+        .create_repo()
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(true)
-        .build();
-    let url = client.create_repo(params).await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert!(url.url.contains(&repo_id));
 
     // Upload a file
     let test_repo = repo(&client, &repo_id);
     let commit = test_repo
-        .upload_file(
-            RepoUploadFileParams::builder()
-                .source(AddSource::Bytes(b"hello world".to_vec()))
-                .path_in_repo("test.txt")
-                .commit_message("test upload")
-                .build(),
-        )
+        .upload_file()
+        .source(AddSource::Bytes(b"hello world".to_vec()))
+        .path_in_repo("test.txt")
+        .commit_message("test upload")
+        .send()
         .await
         .unwrap();
     assert!(commit.commit_oid.is_some());
 
     // Verify file exists
-    assert!(
-        test_repo
-            .file_exists(RepoFileExistsParams::builder().filename("test.txt").build())
-            .await
-            .unwrap()
-    );
+    assert!(test_repo.file_exists().filename("test.txt").send().await.unwrap());
 
     // Delete repo
-    let params = DeleteRepoParams::builder().repo_id(&repo_id).build();
-    client.delete_repo(params).await.unwrap();
+    client.delete_repo().repo_id(&repo_id).send().await.unwrap();
 }
 
 fn uuid_v4_short() -> String {
@@ -628,22 +599,22 @@ fn uuid_v4_short() -> String {
 async fn create_test_repo(client: &HFClient) -> String {
     let username = cached_username().await;
     let repo_id = format!("{}/hf-hub-test-{}", username, uuid_v4_short());
-    let params = CreateRepoParams::builder()
+    client
+        .create_repo()
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(false)
-        .build();
-    client.create_repo(params).await.expect("create_repo failed");
+        .send()
+        .await
+        .expect("create_repo failed");
 
     let test_repo = repo(client, &repo_id);
     test_repo
-        .upload_file(
-            RepoUploadFileParams::builder()
-                .source(AddSource::Bytes(b"initial content".to_vec()))
-                .path_in_repo("README.md")
-                .commit_message("initial commit")
-                .build(),
-        )
+        .upload_file()
+        .source(AddSource::Bytes(b"initial content".to_vec()))
+        .path_in_repo("README.md")
+        .commit_message("initial commit")
+        .send()
         .await
         .expect("seed upload failed");
 
@@ -651,8 +622,7 @@ async fn create_test_repo(client: &HFClient) -> String {
 }
 
 async fn delete_test_repo(client: &HFClient, repo_id: &str) {
-    let params = DeleteRepoParams::builder().repo_id(repo_id).build();
-    let _ = client.delete_repo(params).await;
+    let _ = client.delete_repo().repo_id(repo_id).send().await;
 }
 
 #[tokio::test]
@@ -665,20 +635,18 @@ async fn test_create_commit() {
 
     let test_repo = repo(&client, &repo_id);
     let commit = test_repo
-        .create_commit(
-            RepoCreateCommitParams::builder()
-                .operations(vec![
-                    CommitOperation::add_bytes("file_a.txt", b"content a".to_vec()),
-                    CommitOperation::add_bytes("file_b.txt", b"content b".to_vec()),
-                ])
-                .commit_message("add two files")
-                .build(),
-        )
+        .create_commit()
+        .operations(vec![
+            CommitOperation::add_bytes("file_a.txt", b"content a".to_vec()),
+            CommitOperation::add_bytes("file_b.txt", b"content b".to_vec()),
+        ])
+        .commit_message("add two files")
+        .send()
         .await
         .unwrap();
     assert!(commit.commit_oid.is_some());
 
-    let files = test_repo.list_files(RepoListFilesParams::default()).await.unwrap();
+    let files = test_repo.list_files().send().await.unwrap();
     assert!(files.contains(&"file_a.txt".to_string()));
     assert!(files.contains(&"file_b.txt".to_string()));
 
@@ -700,17 +668,15 @@ async fn test_upload_folder() {
 
     let test_repo = repo(&client, &repo_id);
     let commit = test_repo
-        .upload_folder(
-            RepoUploadFolderParams::builder()
-                .folder_path(dir.path().to_path_buf())
-                .commit_message("upload folder")
-                .build(),
-        )
+        .upload_folder()
+        .folder_path(dir.path().to_path_buf())
+        .commit_message("upload folder")
+        .send()
         .await
         .unwrap();
     assert!(commit.commit_oid.is_some());
 
-    let files = test_repo.list_files(RepoListFilesParams::default()).await.unwrap();
+    let files = test_repo.list_files().send().await.unwrap();
     assert!(files.contains(&"hello.txt".to_string()));
     assert!(files.contains(&"subdir/nested.txt".to_string()));
 
@@ -727,32 +693,23 @@ async fn test_delete_file() {
 
     let test_repo = repo(&client, &repo_id);
     test_repo
-        .upload_file(
-            RepoUploadFileParams::builder()
-                .source(AddSource::Bytes(b"to delete".to_vec()))
-                .path_in_repo("deleteme.txt")
-                .commit_message("add file to delete")
-                .build(),
-        )
+        .upload_file()
+        .source(AddSource::Bytes(b"to delete".to_vec()))
+        .path_in_repo("deleteme.txt")
+        .commit_message("add file to delete")
+        .send()
         .await
         .unwrap();
 
     test_repo
-        .delete_file(
-            RepoDeleteFileParams::builder()
-                .path_in_repo("deleteme.txt")
-                .commit_message("delete file")
-                .build(),
-        )
+        .delete_file()
+        .path_in_repo("deleteme.txt")
+        .commit_message("delete file")
+        .send()
         .await
         .unwrap();
 
-    assert!(
-        !test_repo
-            .file_exists(RepoFileExistsParams::builder().filename("deleteme.txt").build())
-            .await
-            .unwrap()
-    );
+    assert!(!test_repo.file_exists().filename("deleteme.txt").send().await.unwrap());
 
     delete_test_repo(&client, &repo_id).await;
 }
@@ -767,34 +724,25 @@ async fn test_delete_folder() {
 
     let test_repo = repo(&client, &repo_id);
     test_repo
-        .create_commit(
-            RepoCreateCommitParams::builder()
-                .operations(vec![
-                    CommitOperation::add_bytes("folder/a.txt", b"a".to_vec()),
-                    CommitOperation::add_bytes("folder/b.txt", b"b".to_vec()),
-                ])
-                .commit_message("add folder")
-                .build(),
-        )
+        .create_commit()
+        .operations(vec![
+            CommitOperation::add_bytes("folder/a.txt", b"a".to_vec()),
+            CommitOperation::add_bytes("folder/b.txt", b"b".to_vec()),
+        ])
+        .commit_message("add folder")
+        .send()
         .await
         .unwrap();
 
     test_repo
-        .delete_folder(
-            RepoDeleteFolderParams::builder()
-                .path_in_repo("folder")
-                .commit_message("delete folder")
-                .build(),
-        )
+        .delete_folder()
+        .path_in_repo("folder")
+        .commit_message("delete folder")
+        .send()
         .await
         .unwrap();
 
-    assert!(
-        !test_repo
-            .file_exists(RepoFileExistsParams::builder().filename("folder/a.txt").build())
-            .await
-            .unwrap()
-    );
+    assert!(!test_repo.file_exists().filename("folder/a.txt").send().await.unwrap());
 
     delete_test_repo(&client, &repo_id).await;
 }
@@ -808,20 +756,14 @@ async fn test_create_and_delete_branch() {
     let repo_id = create_test_repo(&client).await;
 
     let test_repo = repo(&client, &repo_id);
-    test_repo
-        .create_branch(RepoCreateBranchParams::builder().branch("test-branch").build())
-        .await
-        .unwrap();
+    test_repo.create_branch().branch("test-branch").send().await.unwrap();
 
-    let refs = test_repo.list_refs(RepoListRefsParams::default()).await.unwrap();
+    let refs = test_repo.list_refs().send().await.unwrap();
     assert!(refs.branches.iter().any(|b| b.name == "test-branch"));
 
-    test_repo
-        .delete_branch(RepoDeleteBranchParams::builder().branch("test-branch").build())
-        .await
-        .unwrap();
+    test_repo.delete_branch().branch("test-branch").send().await.unwrap();
 
-    let refs = test_repo.list_refs(RepoListRefsParams::default()).await.unwrap();
+    let refs = test_repo.list_refs().send().await.unwrap();
     assert!(!refs.branches.iter().any(|b| b.name == "test-branch"));
 
     delete_test_repo(&client, &repo_id).await;
@@ -836,20 +778,14 @@ async fn test_create_and_delete_tag() {
     let repo_id = create_test_repo(&client).await;
 
     let test_repo = repo(&client, &repo_id);
-    test_repo
-        .create_tag(RepoCreateTagParams::builder().tag("v1.0").build())
-        .await
-        .unwrap();
+    test_repo.create_tag().tag("v1.0").send().await.unwrap();
 
-    let refs = test_repo.list_refs(RepoListRefsParams::default()).await.unwrap();
+    let refs = test_repo.list_refs().send().await.unwrap();
     assert!(refs.tags.iter().any(|t| t.name == "v1.0"));
 
-    test_repo
-        .delete_tag(RepoDeleteTagParams::builder().tag("v1.0").build())
-        .await
-        .unwrap();
+    test_repo.delete_tag().tag("v1.0").send().await.unwrap();
 
-    let refs = test_repo.list_refs(RepoListRefsParams::default()).await.unwrap();
+    let refs = test_repo.list_refs().send().await.unwrap();
     assert!(!refs.tags.iter().any(|t| t.name == "v1.0"));
 
     delete_test_repo(&client, &repo_id).await;
@@ -865,16 +801,14 @@ async fn test_update_repo_settings() {
 
     let test_repo = repo(&client, &repo_id);
     test_repo
-        .update_settings(
-            RepoUpdateSettingsParams::builder()
-                .description("test description from integration test")
-                .build(),
-        )
+        .update_settings()
+        .description("test description from integration test")
+        .send()
         .await
         .unwrap();
 
     // Verify we can still get info after update
-    let _info = test_repo.info(RepoInfoParams::default()).await.unwrap();
+    let _info = test_repo.info().send().await.unwrap();
 
     delete_test_repo(&client, &repo_id).await;
 }
@@ -889,16 +823,19 @@ async fn test_move_repo() {
     let original_name = format!("{}/hf-hub-move-src-{}", username, uuid_v4_short());
     let new_name = format!("{}/hf-hub-move-dst-{}", username, uuid_v4_short());
 
-    let create_params = CreateRepoParams::builder().repo_id(&original_name).private(true).build();
-    client.create_repo(create_params).await.unwrap();
+    client.create_repo().repo_id(&original_name).private(true).send().await.unwrap();
 
-    let move_params = MoveRepoParams::builder().from_id(&original_name).to_id(&new_name).build();
-    client.move_repo(move_params).await.unwrap();
+    client
+        .move_repo()
+        .from_id(&original_name)
+        .to_id(&new_name)
+        .send()
+        .await
+        .unwrap();
 
-    assert!(repo(&client, &new_name).exists().await.unwrap());
+    assert!(repo(&client, &new_name).exists().send().await.unwrap());
 
-    let delete_params = DeleteRepoParams::builder().repo_id(&new_name).build();
-    client.delete_repo(delete_params).await.unwrap();
+    client.delete_repo().repo_id(&new_name).send().await.unwrap();
 }
 
 // =============================================================================
@@ -910,7 +847,7 @@ async fn test_get_space_runtime() {
     let Some(client) = prod_api() else { return };
     let (owner, name) = TEST_SPACE_REPO;
     let space = client.space(owner, name);
-    let runtime = space.runtime().await.unwrap();
+    let runtime = space.runtime().send().await.unwrap();
     assert!(runtime.stage.is_some());
 }
 
@@ -924,33 +861,32 @@ async fn test_duplicate_space() {
 
     // Create a minimal source space to duplicate.
     let source_id = format!("{}/hub-rust-test-dup-src-{}", username, uuid_v4_short());
-    let create_params = CreateRepoParams::builder()
+    client
+        .create_repo()
         .repo_id(&source_id)
         .repo_type(RepoType::Space)
         .private(true)
         .space_sdk("static")
-        .build();
-    client.create_repo(create_params).await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
     let to_id = format!("{}/hub-rust-test-dup-space-{}", username, uuid_v4_short());
-    let params = DuplicateSpaceParams::builder()
+    let (owner, name) = source_id.split_once('/').unwrap();
+    let source = client.space(owner, name);
+    let result = source
+        .duplicate()
         .to_id(&to_id)
         .private(true)
         .hardware("cpu-basic")
-        .build();
-    let (owner, name) = source_id.split_once('/').unwrap();
-    let source = client.space(owner, name);
-    let result = source.duplicate(params).await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert!(result.url.contains(&to_id));
 
     // Clean up both spaces.
-    let delete_dup = DeleteRepoParams::builder().repo_id(&to_id).repo_type(RepoType::Space).build();
-    let delete_src = DeleteRepoParams::builder()
-        .repo_id(&source_id)
-        .repo_type(RepoType::Space)
-        .build();
-    let _ = client.delete_repo(delete_dup).await;
-    let _ = client.delete_repo(delete_src).await;
+    let _ = client.delete_repo().repo_id(&to_id).repo_type(RepoType::Space).send().await;
+    let _ = client.delete_repo().repo_id(&source_id).repo_type(RepoType::Space).send().await;
 }
 
 #[tokio::test]
@@ -961,29 +897,34 @@ async fn test_space_secrets_and_variables() {
     }
     let username = cached_username().await;
     let space = client.space(username, format!("hub-rust-test-space-{}", uuid_v4_short()));
-    let create_params = CreateRepoParams::builder()
+    client
+        .create_repo()
         .repo_id(space.repo_path())
         .repo_type(RepoType::Space)
         .private(true)
         .space_sdk("static")
-        .build();
-    client.create_repo(create_params).await.unwrap();
+        .send()
+        .await
+        .unwrap();
 
-    let add_secret = SpaceSecretParams::builder().key("TEST_SECRET").value("secret_value").build();
-    space.add_secret(add_secret).await.unwrap();
+    space
+        .add_secret()
+        .key("TEST_SECRET")
+        .value("secret_value")
+        .send()
+        .await
+        .unwrap();
 
-    let del_secret = SpaceSecretDeleteParams::builder().key("TEST_SECRET").build();
-    space.delete_secret(del_secret).await.unwrap();
+    space.delete_secret().key("TEST_SECRET").send().await.unwrap();
 
-    let add_var = SpaceVariableParams::builder().key("TEST_VAR").value("var_value").build();
-    space.add_variable(add_var).await.unwrap();
+    space.add_variable().key("TEST_VAR").value("var_value").send().await.unwrap();
 
-    let del_var = SpaceVariableDeleteParams::builder().key("TEST_VAR").build();
-    space.delete_variable(del_var).await.unwrap();
+    space.delete_variable().key("TEST_VAR").send().await.unwrap();
 
-    let delete_params = DeleteRepoParams::builder()
+    let _ = client
+        .delete_repo()
         .repo_id(space.repo_path())
         .repo_type(RepoType::Space)
-        .build();
-    let _ = client.delete_repo(delete_params).await;
+        .send()
+        .await;
 }

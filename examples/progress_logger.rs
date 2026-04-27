@@ -17,10 +17,7 @@ use std::time::Instant;
 
 use hf_hub::HFClient;
 use hf_hub::progress::{ProgressEvent, ProgressHandler};
-use hf_hub::repository::{
-    AddSource, CreateRepoParams, DeleteRepoParams, RepoDownloadFileParams, RepoSnapshotDownloadParams,
-    RepoUploadFileParams,
-};
+use hf_hub::repository::AddSource;
 
 /// Logs each `ProgressEvent` to stderr with a millisecond offset from when
 /// the handler was constructed, plus an event counter. Thread-safe — uses
@@ -59,13 +56,11 @@ async fn main() -> hf_hub::HFResult<()> {
     let handler: Arc<LoggingProgressHandler> = Arc::new(LoggingProgressHandler::new());
     let model = client.model("openai-community", "gpt2");
     let path = model
-        .download_file(
-            RepoDownloadFileParams::builder()
-                .filename("config.json")
-                .local_dir(tmp_dir.path().to_path_buf())
-                .progress(Some(handler))
-                .build(),
-        )
+        .download_file()
+        .filename("config.json")
+        .local_dir(tmp_dir.path().to_path_buf())
+        .progress(handler)
+        .send()
         .await?;
     println!("Saved to {}", path.display());
 
@@ -76,13 +71,11 @@ async fn main() -> hf_hub::HFResult<()> {
     let handler: Arc<LoggingProgressHandler> = Arc::new(LoggingProgressHandler::new());
     let snapshot_dir = tmp_dir.path().join("snapshot");
     model
-        .snapshot_download(
-            RepoSnapshotDownloadParams::builder()
-                .local_dir(snapshot_dir.clone())
-                .allow_patterns(vec!["*.json".to_string()])
-                .progress(Some(handler))
-                .build(),
-        )
+        .snapshot_download()
+        .local_dir(snapshot_dir.clone())
+        .allow_patterns(vec!["*.json".to_string()])
+        .progress(handler)
+        .send()
         .await?;
     println!("Snapshot saved to {}", snapshot_dir.display());
 
@@ -95,34 +88,28 @@ async fn main() -> hf_hub::HFResult<()> {
     }
 
     eprintln!("\n=== upload_file ===");
-    let user = client.whoami().await?;
+    let user = client.whoami().send().await?;
     let repo = client.model(&user.username, format!("example-progress-logger-{}", std::process::id()));
     client
-        .create_repo(
-            CreateRepoParams::builder()
-                .repo_id(repo.repo_path())
-                .private(true)
-                .exist_ok(true)
-                .build(),
-        )
+        .create_repo()
+        .repo_id(repo.repo_path())
+        .private(true)
+        .exist_ok(true)
+        .send()
         .await?;
 
     let handler: Arc<LoggingProgressHandler> = Arc::new(LoggingProgressHandler::new());
     let commit = repo
-        .upload_file(
-            RepoUploadFileParams::builder()
-                .source(AddSource::Bytes(b"hello from progress_logger".to_vec()))
-                .path_in_repo("hello.txt")
-                .commit_message("example: progress_logger")
-                .progress(Some(handler))
-                .build(),
-        )
+        .upload_file()
+        .source(AddSource::Bytes(b"hello from progress_logger".to_vec()))
+        .path_in_repo("hello.txt")
+        .commit_message("example: progress_logger")
+        .progress(handler)
+        .send()
         .await?;
     println!("Committed: {:?}", commit.commit_url);
 
-    client
-        .delete_repo(DeleteRepoParams::builder().repo_id(repo.repo_path()).missing_ok(true).build())
-        .await?;
+    client.delete_repo().repo_id(repo.repo_path()).missing_ok(true).send().await?;
 
     Ok(())
 }

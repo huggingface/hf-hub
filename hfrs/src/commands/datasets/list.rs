@@ -2,7 +2,6 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::repository::ListDatasetsParams;
 use serde_json::json;
 
 use crate::cli::OutputFormat;
@@ -47,16 +46,14 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         Some(args.filter.join(","))
     };
 
-    let params = ListDatasetsParams {
-        search: args.search,
-        author: args.author,
-        filter,
-        sort: args.sort,
-        full: None,
-        limit: Some(args.limit),
-    };
-
-    let stream = client.list_datasets(params)?;
+    let stream = client
+        .list_datasets()
+        .maybe_search(args.search)
+        .maybe_author(args.author)
+        .maybe_filter(filter)
+        .maybe_sort(args.sort)
+        .limit(args.limit)
+        .send()?;
     futures::pin_mut!(stream);
 
     let mut datasets = Vec::new();

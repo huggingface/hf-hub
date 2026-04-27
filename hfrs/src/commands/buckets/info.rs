@@ -18,7 +18,7 @@ pub struct Args {
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let (namespace, name) = parse_bucket_id(&args.bucket_id)?;
     let bucket = client.bucket(&namespace, &name);
-    let info = bucket.info().await?;
+    let info = bucket.info().send().await?;
 
     if args.quiet {
         Ok(CommandResult::Raw(info.id.clone()))

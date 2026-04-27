@@ -11,8 +11,8 @@
 //! - `prefix` scopes the remote side of the comparison. Returned operation paths are always relative to that prefix and
 //!   to `local_path`.
 //! - `include` and `exclude` glob patterns are evaluated against those relative paths. Excludes win over includes.
-//! - The returned plan reflects the operations that were executed. Set [`BucketSyncParams::verbose`] to keep explicit
-//!   skip entries in the plan.
+//! - The returned plan reflects the operations that were executed. Set the `verbose(true)` builder option on
+//!   [`HFBucket::sync`] to keep explicit skip entries in the plan.
 //! - By default, file comparisons consider both size and modification time, with a small timestamp tolerance to avoid
 //!   unnecessary transfers.
 
@@ -20,11 +20,11 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use bon::bon;
 use futures::StreamExt;
 use globset::{Glob, GlobMatcher};
-use typed_builder::TypedBuilder;
 
-use crate::buckets::{BucketTreeEntry, HFBucket, ListBucketTreeParams};
+use crate::buckets::{BucketTreeEntry, HFBucket};
 use crate::error::{HFError, HFResult};
 use crate::progress::{DownloadEvent, EmitEvent, Progress};
 
@@ -37,61 +37,21 @@ pub enum BucketSyncDirection {
     Download,
 }
 
-/// Parameters for syncing files between a local directory and a bucket.
-///
-/// Used with [`HFBucket::sync`]. `local_path` is always the local root of the
-/// sync, while `prefix` optionally scopes the remote side to a bucket
-/// subdirectory.
-#[derive(Clone, TypedBuilder)]
-pub struct BucketSyncParams {
-    /// Local directory path.
+/// Internal options struct used by [`HFBucket::sync`]'s helper functions. Public callers go
+/// through the bon-generated `sync()` builder instead.
+#[derive(Clone)]
+pub(crate) struct BucketSyncParams {
     pub local_path: PathBuf,
-    /// Sync direction.
     pub direction: BucketSyncDirection,
-    /// Optional prefix within the bucket (subdirectory).
-    #[builder(default, setter(into, strip_option))]
     pub prefix: Option<String>,
-    /// Delete destination files not present in source.
-    ///
-    /// For uploads, this removes bucket files missing from the local directory.
-    /// For downloads, this removes local files missing from the bucket.
-    #[builder(default = false)]
     pub delete: bool,
-    /// Only compare sizes, ignore modification times.
-    #[builder(default = false)]
     pub ignore_times: bool,
-    /// Only compare modification times, ignore sizes.
-    #[builder(default = false)]
     pub ignore_sizes: bool,
-    /// Only sync files that already exist at destination.
-    ///
-    /// New files that are missing on the receiving side are skipped.
-    #[builder(default = false)]
     pub existing: bool,
-    /// Skip files that already exist at destination.
-    ///
-    /// Existing receiver-side files are left untouched even if contents differ.
-    #[builder(default = false)]
     pub ignore_existing: bool,
-    /// Include patterns (fnmatch/glob-style).
-    ///
-    /// Patterns are matched against relative paths beneath `local_path` and
-    /// beneath `prefix` on the bucket side.
-    #[builder(default)]
     pub include: Vec<String>,
-    /// Exclude patterns (fnmatch/glob-style).
-    ///
-    /// Exclusions take precedence over inclusions.
-    #[builder(default)]
     pub exclude: Vec<String>,
-    /// Include skip operations in the returned plan.
-    ///
-    /// This is useful when you want a full accounting of why files were not
-    /// transferred.
-    #[builder(default = false)]
     pub verbose: bool,
-    /// Progress handler for upload/download tracking.
-    #[builder(default)]
     pub progress: Option<Progress>,
 }
 
@@ -162,8 +122,8 @@ impl BucketSyncPlan {
 
     /// Count skip operations in the plan.
     ///
-    /// Skip entries are only included when [`BucketSyncParams::verbose`] is
-    /// enabled.
+    /// Skip entries are only included when the `verbose(true)` builder option is set on
+    /// [`HFBucket::sync`].
     pub fn skips(&self) -> usize {
         self.operations.iter().filter(|op| op.action == BucketSyncAction::Skip).count()
     }
@@ -469,12 +429,7 @@ impl HFBucket {
         include: &[GlobMatcher],
         exclude: &[GlobMatcher],
     ) -> HFResult<(HashMap<String, (u64, f64)>, HashMap<String, BucketTreeEntry>)> {
-        let tree_params = ListBucketTreeParams {
-            prefix: prefix.clone(),
-            recursive: Some(true),
-        };
-
-        let stream = self.list_tree(tree_params)?;
+        let stream = self.list_tree().maybe_prefix(prefix.clone()).recursive(true).send()?;
         futures::pin_mut!(stream);
 
         let mut files: HashMap<String, (u64, f64)> = HashMap::new();
@@ -674,10 +629,14 @@ impl HFBucket {
             .collect();
 
         if !upload_files.is_empty() {
-            self.upload_files(&upload_files, &params.progress).await?;
+            self.upload_files()
+                .files(upload_files)
+                .maybe_progress(params.progress.clone())
+                .send()
+                .await?;
         }
         if !delete_paths.is_empty() {
-            self.delete_files(&delete_paths).await?;
+            self.delete_files().paths(delete_paths).send().await?;
         }
 
         Ok(())
@@ -770,33 +729,7 @@ impl HFBucket {
         Ok(())
     }
 
-    /// Synchronize a local directory with this bucket.
-    ///
-    /// The sync is one-way and controlled by [`BucketSyncParams::direction`]:
-    ///
-    /// - [`BucketSyncDirection::Upload`] compares `local_path` against the bucket (optionally scoped by `prefix`) and
-    ///   uploads changed or missing files.
-    /// - [`BucketSyncDirection::Download`] compares the bucket against `local_path` and downloads changed or missing
-    ///   files.
-    ///
-    /// When [`BucketSyncParams::delete`] is enabled, files that only exist on
-    /// the receiving side are removed as part of the sync.
-    ///
-    /// The returned [`BucketSyncPlan`] describes the operations that were
-    /// executed. Use [`BucketSyncParams::verbose`] if you also want explicit
-    /// `Skip` entries explaining why untouched files were not transferred.
-    ///
-    /// # Comparison behavior
-    ///
-    /// By default, files are considered different when their sizes differ or
-    /// when the source file is newer than the destination file. Modification
-    /// times are compared with a small tolerance to avoid unnecessary transfers
-    /// caused by filesystem timestamp precision.
-    ///
-    /// `ignore_times` changes the comparison to size-only, while `ignore_sizes`
-    /// changes it to mtime-only. `existing` and `ignore_existing` further limit
-    /// which files are eligible to transfer.
-    pub async fn sync(&self, params: BucketSyncParams) -> HFResult<BucketSyncPlan> {
+    async fn sync_impl(&self, params: BucketSyncParams) -> HFResult<BucketSyncPlan> {
         validate_params(&params)?;
 
         let include = compile_patterns(&params.include)?;
@@ -833,15 +766,139 @@ impl HFBucket {
     }
 }
 
-sync_api! {
-    impl HFBucket -> HFBucketSync {
-        fn sync(&self, params: BucketSyncParams) -> HFResult<BucketSyncPlan>;
+#[bon]
+impl HFBucket {
+    /// Synchronize a local directory with this bucket.
+    ///
+    /// The sync is one-way and controlled by `direction`:
+    ///
+    /// - [`BucketSyncDirection::Upload`] compares `local_path` against the bucket (optionally scoped by `prefix`) and
+    ///   uploads changed or missing files.
+    /// - [`BucketSyncDirection::Download`] compares the bucket against `local_path` and downloads changed or missing
+    ///   files.
+    ///
+    /// When `delete` is enabled, files that only exist on the receiving side are removed as part
+    /// of the sync. The returned [`BucketSyncPlan`] describes the operations that were executed;
+    /// set `verbose(true)` if you also want explicit `Skip` entries explaining why untouched files
+    /// were not transferred.
+    ///
+    /// # Comparison behavior
+    ///
+    /// By default, files are considered different when their sizes differ or when the source file
+    /// is newer than the destination file. Modification times are compared with a small tolerance
+    /// to avoid unnecessary transfers caused by filesystem timestamp precision. `ignore_times`
+    /// switches the comparison to size-only; `ignore_sizes` switches it to mtime-only. `existing`
+    /// and `ignore_existing` further limit which files are eligible to transfer.
+    ///
+    /// # Parameters
+    ///
+    /// - `local_path` (required): local directory path.
+    /// - `direction` (required): sync direction (upload or download).
+    /// - `prefix`: optional prefix within the bucket (subdirectory).
+    /// - `delete`: delete destination files not present in source.
+    /// - `ignore_times`: only compare sizes, ignore modification times.
+    /// - `ignore_sizes`: only compare modification times, ignore sizes.
+    /// - `existing`: only sync files that already exist at destination.
+    /// - `ignore_existing`: skip files that already exist at destination.
+    /// - `include`: glob-style include patterns.
+    /// - `exclude`: glob-style exclude patterns. Exclusions take precedence over inclusions.
+    /// - `verbose`: include skip operations in the returned plan.
+    /// - `progress`: progress handler for upload/download tracking.
+    #[builder(finish_fn = send)]
+    pub async fn sync(
+        &self,
+        #[builder(into)] local_path: PathBuf,
+        direction: BucketSyncDirection,
+        #[builder(into)] prefix: Option<String>,
+        #[builder(default)] delete: bool,
+        #[builder(default)] ignore_times: bool,
+        #[builder(default)] ignore_sizes: bool,
+        #[builder(default)] existing: bool,
+        #[builder(default)] ignore_existing: bool,
+        #[builder(default)] include: Vec<String>,
+        #[builder(default)] exclude: Vec<String>,
+        #[builder(default)] verbose: bool,
+        progress: Option<Progress>,
+    ) -> HFResult<BucketSyncPlan> {
+        self.sync_impl(BucketSyncParams {
+            local_path,
+            direction,
+            prefix,
+            delete,
+            ignore_times,
+            ignore_sizes,
+            existing,
+            ignore_existing,
+            include,
+            exclude,
+            verbose,
+            progress,
+        })
+        .await
+    }
+}
+
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFBucketSync {
+    /// Blocking counterpart of [`HFBucket::sync`]. See the async method for parameters and
+    /// behavior.
+    #[builder(finish_fn = send)]
+    pub fn sync(
+        &self,
+        #[builder(into)] local_path: PathBuf,
+        direction: BucketSyncDirection,
+        #[builder(into)] prefix: Option<String>,
+        #[builder(default)] delete: bool,
+        #[builder(default)] ignore_times: bool,
+        #[builder(default)] ignore_sizes: bool,
+        #[builder(default)] existing: bool,
+        #[builder(default)] ignore_existing: bool,
+        #[builder(default)] include: Vec<String>,
+        #[builder(default)] exclude: Vec<String>,
+        #[builder(default)] verbose: bool,
+        progress: Option<Progress>,
+    ) -> HFResult<BucketSyncPlan> {
+        self.runtime.block_on(
+            self.inner
+                .sync()
+                .local_path(local_path)
+                .direction(direction)
+                .maybe_prefix(prefix)
+                .delete(delete)
+                .ignore_times(ignore_times)
+                .ignore_sizes(ignore_sizes)
+                .existing(existing)
+                .ignore_existing(ignore_existing)
+                .include(include)
+                .exclude(exclude)
+                .verbose(verbose)
+                .maybe_progress(progress)
+                .send(),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_params(direction: BucketSyncDirection) -> BucketSyncParams {
+        BucketSyncParams {
+            local_path: PathBuf::from("/tmp"),
+            direction,
+            prefix: None,
+            delete: false,
+            ignore_times: false,
+            ignore_sizes: false,
+            existing: false,
+            ignore_existing: false,
+            include: Vec::new(),
+            exclude: Vec::new(),
+            verbose: false,
+            progress: None,
+        }
+    }
 
     fn make_plan(ops: Vec<(BucketSyncAction, Option<u64>)>) -> BucketSyncPlan {
         BucketSyncPlan {
@@ -987,33 +1044,30 @@ mod tests {
 
     #[test]
     fn test_validate_params_conflicting_times_sizes() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Download)
-            .ignore_times(true)
-            .ignore_sizes(true)
-            .build();
+        let params = BucketSyncParams {
+            ignore_times: true,
+            ignore_sizes: true,
+            ..make_params(BucketSyncDirection::Download)
+        };
         assert!(validate_params(&params).is_err());
     }
 
     #[test]
     fn test_validate_params_conflicting_existing() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Download)
-            .existing(true)
-            .ignore_existing(true)
-            .build();
+        let params = BucketSyncParams {
+            existing: true,
+            ignore_existing: true,
+            ..make_params(BucketSyncDirection::Download)
+        };
         assert!(validate_params(&params).is_err());
     }
 
     #[test]
     fn test_compare_files_identical() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Upload)
-            .verbose(true)
-            .build();
+        let params = BucketSyncParams {
+            verbose: true,
+            ..make_params(BucketSyncDirection::Upload)
+        };
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 5000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
@@ -1022,10 +1076,7 @@ mod tests {
 
     #[test]
     fn test_compare_files_identical_not_verbose() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Upload)
-            .build();
+        let params = make_params(BucketSyncDirection::Upload);
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 5000.0, 100, 5000.0, &params);
         assert!(op.is_none());
@@ -1033,10 +1084,7 @@ mod tests {
 
     #[test]
     fn test_compare_files_size_differs() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Upload)
-            .build();
+        let params = make_params(BucketSyncDirection::Upload);
 
         let op = compare_files(String::new(), CompareRole::Upload, 200, 5000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Upload);
@@ -1045,10 +1093,7 @@ mod tests {
 
     #[test]
     fn test_compare_files_source_newer() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Upload)
-            .build();
+        let params = make_params(BucketSyncDirection::Upload);
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 7000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Upload);
@@ -1057,10 +1102,7 @@ mod tests {
 
     #[test]
     fn test_compare_files_download_source_newer() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Download)
-            .build();
+        let params = make_params(BucketSyncDirection::Download);
 
         let op = compare_files(String::new(), CompareRole::Download, 100, 7000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Download);
@@ -1069,11 +1111,10 @@ mod tests {
 
     #[test]
     fn test_compare_files_within_safety_window() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Upload)
-            .verbose(true)
-            .build();
+        let params = BucketSyncParams {
+            verbose: true,
+            ..make_params(BucketSyncDirection::Upload)
+        };
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 5500.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
@@ -1082,12 +1123,11 @@ mod tests {
 
     #[test]
     fn test_compare_files_ignore_times() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Upload)
-            .ignore_times(true)
-            .verbose(true)
-            .build();
+        let params = BucketSyncParams {
+            ignore_times: true,
+            verbose: true,
+            ..make_params(BucketSyncDirection::Upload)
+        };
 
         let op = compare_files(String::new(), CompareRole::Upload, 100, 9000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
@@ -1100,12 +1140,11 @@ mod tests {
 
     #[test]
     fn test_compare_files_ignore_sizes() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Upload)
-            .ignore_sizes(true)
-            .verbose(true)
-            .build();
+        let params = BucketSyncParams {
+            ignore_sizes: true,
+            verbose: true,
+            ..make_params(BucketSyncDirection::Upload)
+        };
 
         let op = compare_files(String::new(), CompareRole::Upload, 200, 5000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
@@ -1118,12 +1157,11 @@ mod tests {
 
     #[test]
     fn test_compare_files_ignore_sizes_download() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Download)
-            .ignore_sizes(true)
-            .verbose(true)
-            .build();
+        let params = BucketSyncParams {
+            ignore_sizes: true,
+            verbose: true,
+            ..make_params(BucketSyncDirection::Download)
+        };
 
         let op = compare_files(String::new(), CompareRole::Download, 100, 3000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
@@ -1132,12 +1170,11 @@ mod tests {
 
     #[test]
     fn test_compare_files_ignore_existing() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Upload)
-            .ignore_existing(true)
-            .verbose(true)
-            .build();
+        let params = BucketSyncParams {
+            ignore_existing: true,
+            verbose: true,
+            ..make_params(BucketSyncDirection::Upload)
+        };
 
         let op = compare_files(String::new(), CompareRole::Upload, 200, 9000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
@@ -1146,11 +1183,10 @@ mod tests {
 
     #[test]
     fn test_compare_files_ignore_existing_not_verbose() {
-        let params = BucketSyncParams::builder()
-            .local_path(PathBuf::from("/tmp"))
-            .direction(BucketSyncDirection::Upload)
-            .ignore_existing(true)
-            .build();
+        let params = BucketSyncParams {
+            ignore_existing: true,
+            ..make_params(BucketSyncDirection::Upload)
+        };
 
         let op = compare_files(String::new(), CompareRole::Upload, 200, 9000.0, 100, 5000.0, &params);
         assert!(op.is_none());

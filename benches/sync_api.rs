@@ -1,5 +1,4 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use hf_hub::repository::{RepoDownloadFileParams, RepoGetFileMetadataParams, RepoInfoParams};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -23,7 +22,9 @@ fn bench_download_small_file(c: &mut Criterion) {
             |(_tmp, client)| {
                 client
                     .model("julien-c", "dummy-unknown")
-                    .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
+                    .download_file()
+                    .filename("config.json")
+                    .send()
                     .unwrap();
             },
         );
@@ -49,12 +50,10 @@ fn bench_download_with_revision(c: &mut Criterion) {
             |(_tmp, client)| {
                 client
                     .model("julien-c", "dummy-unknown")
-                    .download_file(
-                        RepoDownloadFileParams::builder()
-                            .revision("main")
-                            .filename("config.json")
-                            .build(),
-                    )
+                    .download_file()
+                    .revision("main")
+                    .filename("config.json")
+                    .send()
                     .unwrap();
             },
         );
@@ -76,7 +75,9 @@ fn bench_get_warm_cache(c: &mut Criterion) {
         .unwrap();
     client
         .model("julien-c", "dummy-unknown")
-        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file()
+        .filename("config.json")
+        .send()
         .unwrap();
 
     let mut group = c.benchmark_group("cache");
@@ -85,7 +86,9 @@ fn bench_get_warm_cache(c: &mut Criterion) {
         b.iter(|| {
             client
                 .model("julien-c", "dummy-unknown")
-                .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
+                .download_file()
+                .filename("config.json")
+                .send()
                 .unwrap();
         });
     });
@@ -102,7 +105,9 @@ fn bench_cache_repo_get(c: &mut Criterion) {
         .unwrap();
     client
         .model("julien-c", "dummy-unknown")
-        .download_file(RepoDownloadFileParams::builder().filename("config.json").build())
+        .download_file()
+        .filename("config.json")
+        .send()
         .unwrap();
 
     let mut group = c.benchmark_group("cache");
@@ -111,12 +116,10 @@ fn bench_cache_repo_get(c: &mut Criterion) {
         b.iter(|| {
             client
                 .model("julien-c", "dummy-unknown")
-                .download_file(
-                    RepoDownloadFileParams::builder()
-                        .local_files_only(true)
-                        .filename("config.json")
-                        .build(),
-                )
+                .download_file()
+                .local_files_only(true)
+                .filename("config.json")
+                .send()
                 .unwrap();
         });
     });
@@ -136,10 +139,7 @@ fn bench_info(c: &mut Criterion) {
 
     group.bench_function("info", |b| {
         b.iter(|| {
-            client
-                .model("julien-c", "dummy-unknown")
-                .info(RepoInfoParams::default())
-                .unwrap();
+            client.model("julien-c", "dummy-unknown").info().send().unwrap();
         });
     });
 
@@ -155,8 +155,7 @@ fn bench_metadata(c: &mut Criterion) {
 
     group.bench_function("metadata", |b| {
         b.iter(|| {
-            repo.get_file_metadata(RepoGetFileMetadataParams::builder().filepath("config.json").build())
-                .unwrap();
+            repo.get_file_metadata().filepath("config.json").send().unwrap();
         });
     });
 
