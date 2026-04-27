@@ -28,6 +28,7 @@ struct DownloadFileStreamParams {
     filename: String,
     revision: Option<String>,
     range: Option<std::ops::Range<u64>>,
+    progress: Option<Progress>,
 }
 
 /// Internal options struct used by `snapshot_download_impl`.
@@ -110,7 +111,14 @@ impl HFRepository {
                 .xet_download_stream(revision, &xet_hash, file_size, params.range.clone())
                 .await?;
 
-            return Ok((content_length, Box::new(Box::pin(stream))));
+            let total_bytes = content_length.unwrap_or(0);
+            params.progress.emit(DownloadEvent::Start {
+                total_files: 1,
+                total_bytes,
+            });
+            let wrapped =
+                wrap_stream_with_progress(Box::new(Box::pin(stream)), params.progress, params.filename, total_bytes);
+            return Ok((content_length, wrapped));
         }
 
         let range_header = params
@@ -137,8 +145,15 @@ impl HFRepository {
             .await?;
 
         let content_length = extract_file_size(&response);
+        let total_bytes = content_length.unwrap_or(0);
         let stream = response.bytes_stream().map(|r| r.map_err(HFError::from));
-        Ok((content_length, Box::new(Box::pin(stream))))
+        params.progress.emit(DownloadEvent::Start {
+            total_files: 1,
+            total_bytes,
+        });
+        let wrapped =
+            wrap_stream_with_progress(Box::new(Box::pin(stream)), params.progress, params.filename, total_bytes);
+        Ok((content_length, wrapped))
     }
 
     async fn download_file_to_bytes_impl(&self, params: DownloadFileStreamParams) -> HFResult<bytes::Bytes> {
@@ -892,6 +907,46 @@ async fn stream_response_to_file_with_progress(
     Ok(())
 }
 
+fn wrap_stream_with_progress(
+    stream: Box<dyn Stream<Item = HFResult<bytes::Bytes>> + Send + Unpin>,
+    progress: Option<Progress>,
+    filename: String,
+    total_bytes: u64,
+) -> Box<dyn Stream<Item = HFResult<bytes::Bytes>> + Send + Unpin> {
+    if progress.is_none() {
+        return stream;
+    }
+    let wrapped = futures::stream::unfold((stream, 0u64, false), move |(mut inner, bytes_completed, ended)| {
+        let progress = progress.clone();
+        let filename = filename.clone();
+        async move {
+            if ended {
+                return None;
+            }
+            match inner.next().await {
+                Some(Ok(chunk)) => {
+                    let bytes_completed = bytes_completed + chunk.len() as u64;
+                    progress.emit(DownloadEvent::Progress {
+                        files: vec![FileProgress {
+                            filename,
+                            bytes_completed,
+                            total_bytes,
+                            status: FileStatus::InProgress,
+                        }],
+                    });
+                    Some((Ok(chunk), (inner, bytes_completed, false)))
+                },
+                Some(Err(e)) => Some((Err(e), (inner, bytes_completed, true))),
+                None => {
+                    progress.emit(DownloadEvent::Complete);
+                    None
+                },
+            }
+        }
+    });
+    Box::new(Box::pin(wrapped))
+}
+
 #[bon]
 impl HFRepository {
     /// Download a single file from a repository.
@@ -924,7 +979,7 @@ impl HFRepository {
         #[builder(into)] revision: Option<String>,
         force_download: Option<bool>,
         local_files_only: Option<bool>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.download_file_impl(DownloadFileParams {
             filename,
@@ -949,18 +1004,22 @@ impl HFRepository {
     /// - `filename` (required): path of the file to stream within the repository.
     /// - `revision`: Git revision. Defaults to the main branch.
     /// - `range`: byte range to request (HTTP Range header).
+    /// - `progress`: optional progress handler. `Start` is emitted before the stream is returned; `Progress` is emitted
+    ///   as the caller polls each chunk; `Complete` is emitted when the stream is exhausted.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file_stream(
         &self,
         #[builder(into)] filename: String,
         #[builder(into)] revision: Option<String>,
         range: Option<std::ops::Range<u64>>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
     {
         self.download_file_stream_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
+            progress,
         })
         .await
     }
@@ -970,17 +1029,22 @@ impl HFRepository {
     /// This is a convenience wrapper around
     /// [`download_file_stream`](Self::download_file_stream) that collects the entire stream into
     /// a single buffer. When `range` is set, only the specified byte range is fetched.
+    ///
+    /// `progress` (optional) emits `Start`/`Progress`/`Complete` as the underlying stream is
+    /// drained, identically to [`download_file_stream`](Self::download_file_stream).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file_to_bytes(
         &self,
         #[builder(into)] filename: String,
         #[builder(into)] revision: Option<String>,
         range: Option<std::ops::Range<u64>>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
         self.download_file_to_bytes_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
+            progress,
         })
         .await
     }
@@ -1011,7 +1075,7 @@ impl HFRepository {
         force_download: Option<bool>,
         local_files_only: Option<bool>,
         max_workers: Option<usize>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.snapshot_download_impl(SnapshotDownloadParams {
             revision,
@@ -1040,7 +1104,7 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)] revision: Option<String>,
         force_download: Option<bool>,
         local_files_only: Option<bool>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.runtime.block_on(
             self.inner
@@ -1063,6 +1127,7 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)] filename: String,
         #[builder(into)] revision: Option<String>,
         range: Option<std::ops::Range<u64>>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
         self.runtime.block_on(
             self.inner
@@ -1070,6 +1135,7 @@ impl crate::blocking::HFRepositorySync {
                 .filename(filename)
                 .maybe_revision(revision)
                 .maybe_range(range)
+                .maybe_progress(progress)
                 .send(),
         )
     }
@@ -1086,7 +1152,7 @@ impl crate::blocking::HFRepositorySync {
         force_download: Option<bool>,
         local_files_only: Option<bool>,
         max_workers: Option<usize>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.runtime.block_on(
             self.inner

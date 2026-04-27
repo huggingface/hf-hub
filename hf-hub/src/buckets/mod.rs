@@ -357,7 +357,11 @@ impl HFBucket {
     /// - `files` (required): list of `(local_path, remote_path)` pairs.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn upload_files(&self, files: Vec<(PathBuf, String)>, progress: Option<Progress>) -> HFResult<()> {
+    pub async fn upload_files(
+        &self,
+        files: Vec<(PathBuf, String)>,
+        #[builder(into)] progress: Option<Progress>,
+    ) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
         }
@@ -419,7 +423,11 @@ impl HFBucket {
     /// - `files` (required): list of `(remote_path, local_path)` pairs.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn download_files(&self, files: Vec<(String, PathBuf)>, progress: Option<Progress>) -> HFResult<()> {
+    pub async fn download_files(
+        &self,
+        files: Vec<(String, PathBuf)>,
+        #[builder(into)] progress: Option<Progress>,
+    ) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
         }
@@ -842,7 +850,11 @@ impl crate::blocking::HFBucketSync {
     /// Blocking counterpart of [`HFBucket::upload_files`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn upload_files(&self, files: Vec<(PathBuf, String)>, progress: Option<Progress>) -> HFResult<()> {
+    pub fn upload_files(
+        &self,
+        files: Vec<(PathBuf, String)>,
+        #[builder(into)] progress: Option<Progress>,
+    ) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.upload_files().files(files).maybe_progress(progress).send())
     }
@@ -850,7 +862,11 @@ impl crate::blocking::HFBucketSync {
     /// Blocking counterpart of [`HFBucket::download_files`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn download_files(&self, files: Vec<(String, PathBuf)>, progress: Option<Progress>) -> HFResult<()> {
+    pub fn download_files(
+        &self,
+        files: Vec<(String, PathBuf)>,
+        #[builder(into)] progress: Option<Progress>,
+    ) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.download_files().files(files).maybe_progress(progress).send())
     }

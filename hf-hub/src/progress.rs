@@ -48,7 +48,6 @@
 //!
 //! use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler, UploadEvent};
 //!
-//! #[derive(Debug)]
 //! struct PrintHandler;
 //!
 //! impl ProgressHandler for PrintHandler {
@@ -78,8 +77,8 @@
 //!     }
 //! }
 //!
-//! let handler: Progress = Arc::new(PrintHandler);
-//! // then: repo.upload_file().source(src).path_in_repo("x").progress(handler).send().await?
+//! // Pass the handler directly — the builder accepts any `ProgressHandler` value.
+//! // repo.upload_file().source(src).path_in_repo("x").progress(PrintHandler).send().await?
 //! ```
 //!
 //! # Thread safety and performance contract
@@ -138,7 +137,6 @@ use std::sync::Arc;
 ///
 /// use hf_hub::progress::{ProgressEvent, ProgressHandler, UploadEvent};
 ///
-/// #[derive(Debug)]
 /// struct ByteCounter {
 ///     bytes: AtomicU64,
 /// }
@@ -154,7 +152,7 @@ use std::sync::Arc;
 ///     }
 /// }
 /// ```
-pub trait ProgressHandler: Send + Sync + std::fmt::Debug {
+pub trait ProgressHandler: Send + Sync {
     /// Invoked by the library for each progress event.
     ///
     /// The `event` reference is only valid for the duration of the call — clone
@@ -165,28 +163,81 @@ pub trait ProgressHandler: Send + Sync + std::fmt::Debug {
     fn on_progress(&self, event: &ProgressEvent);
 }
 
-/// Type alias for the shared-ownership form of a [`ProgressHandler`].
+/// Shared-ownership wrapper around a [`ProgressHandler`] trait object.
 ///
 /// Method builders accept `Option<Progress>` for the `progress` parameter —
 /// not setting it (or passing `None` via `maybe_progress`) disables progress
-/// emission entirely (zero cost). The `Arc` allows the library to share the
-/// handler across concurrent tasks within a single operation.
+/// emission entirely (zero cost). Internally it holds an `Arc<dyn ProgressHandler>`,
+/// so cloning is cheap and the handler can be shared across concurrent tasks
+/// within a single operation.
+///
+/// `progress` setters are annotated with `#[builder(into)]`, so any
+/// [`ProgressHandler`] value, an `Arc<H>`, or an `Arc<dyn ProgressHandler>` can
+/// be passed directly — `From` impls below handle the conversion.
 ///
 /// ```
 /// use std::sync::Arc;
 ///
 /// use hf_hub::progress::{Progress, ProgressEvent, ProgressHandler};
 ///
-/// #[derive(Debug)]
 /// struct Noop;
 /// impl ProgressHandler for Noop {
 ///     fn on_progress(&self, _event: &ProgressEvent) {}
 /// }
 ///
-/// let handler: Progress = Arc::new(Noop);
+/// // Owned handler — most common case.
+/// let handler: Progress = Noop.into();
+/// // Pre-shared via Arc, e.g. when the caller wants to inspect events later.
+/// let shared: Progress = Arc::new(Noop).into();
+/// // Wrap explicitly via the constructor.
+/// let direct = Progress::new(Noop);
 /// let maybe: Option<Progress> = Some(handler);
 /// ```
-pub type Progress = Arc<dyn ProgressHandler>;
+pub struct Progress(Arc<dyn ProgressHandler>);
+
+impl Progress {
+    /// Wrap a handler value in a new `Progress`.
+    pub fn new<H: ProgressHandler + 'static>(handler: H) -> Self {
+        Self(Arc::new(handler))
+    }
+}
+
+impl Clone for Progress {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl std::fmt::Debug for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Progress").finish_non_exhaustive()
+    }
+}
+
+impl std::ops::Deref for Progress {
+    type Target = dyn ProgressHandler;
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl<H: ProgressHandler + 'static> From<H> for Progress {
+    fn from(handler: H) -> Self {
+        Self(Arc::new(handler))
+    }
+}
+
+impl<H: ProgressHandler + 'static> From<Arc<H>> for Progress {
+    fn from(handler: Arc<H>) -> Self {
+        Self(handler)
+    }
+}
+
+impl From<Arc<dyn ProgressHandler>> for Progress {
+    fn from(handler: Arc<dyn ProgressHandler>) -> Self {
+        Self(handler)
+    }
+}
 
 /// Top-level progress event dispatched to [`ProgressHandler::on_progress`].
 ///
@@ -475,7 +526,6 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug)]
     struct RecordingHandler {
         events: Mutex<Vec<ProgressEvent>>,
     }
@@ -513,7 +563,7 @@ mod tests {
     #[test]
     fn emit_records_events() {
         let handler = Arc::new(RecordingHandler::new());
-        let progress: Option<Progress> = Some(handler.clone());
+        let progress: Option<Progress> = Some(handler.clone().into());
 
         progress.emit(UploadEvent::Start {
             total_files: 2,
@@ -540,7 +590,7 @@ mod tests {
     #[test]
     fn download_file_lifecycle() {
         let handler = Arc::new(RecordingHandler::new());
-        let progress: Option<Progress> = Some(handler.clone());
+        let progress: Option<Progress> = Some(handler.clone().into());
 
         progress.emit(DownloadEvent::Start {
             total_files: 1,
@@ -579,7 +629,7 @@ mod tests {
     #[test]
     fn upload_event_ordering() {
         let handler = Arc::new(RecordingHandler::new());
-        let progress: Option<Progress> = Some(handler.clone());
+        let progress: Option<Progress> = Some(handler.clone().into());
 
         progress.emit(UploadEvent::Start {
             total_files: 1,
@@ -608,7 +658,7 @@ mod tests {
     #[test]
     fn upload_progress_with_per_file_data() {
         let handler = Arc::new(RecordingHandler::new());
-        let progress: Option<Progress> = Some(handler.clone());
+        let progress: Option<Progress> = Some(handler.clone().into());
 
         progress.emit(UploadEvent::Progress {
             bytes_completed: 500,

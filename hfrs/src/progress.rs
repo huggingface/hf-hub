@@ -14,12 +14,6 @@ pub struct CliProgressHandler {
     state: Mutex<ProgressState>,
 }
 
-impl std::fmt::Debug for CliProgressHandler {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CliProgressHandler").finish()
-    }
-}
-
 struct ProgressState {
     // Download state
     files_bar: Option<ProgressBar>,

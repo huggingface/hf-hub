@@ -385,7 +385,6 @@ async fn test_download_stream_range_content_matches_full_download() {
 
 // --- Progress tracking tests ---
 
-#[derive(Debug)]
 struct RecordingHandler {
     events: Mutex<Vec<ProgressEvent>>,
 }
@@ -489,6 +488,79 @@ async fn test_download_file_with_progress_to_cache() {
         matches!(events.last().unwrap(), ProgressEvent::Download(DownloadEvent::Complete)),
         "last event should be Download(Complete)"
     );
+}
+
+#[tokio::test]
+async fn test_download_file_to_bytes_with_progress() {
+    let Some(client) = prod_api() else { return };
+    let (owner, name) = TEST_MODEL_PARTS;
+    let repo = model(&client, owner, name);
+
+    let handler = Arc::new(RecordingHandler::new());
+
+    let bytes = repo
+        .download_file_to_bytes()
+        .filename("config.json")
+        .progress(handler.clone())
+        .send()
+        .await
+        .unwrap();
+    assert!(!bytes.is_empty());
+
+    let events = handler.events();
+    assert!(!events.is_empty(), "should have received progress events");
+    assert!(
+        matches!(&events[0], ProgressEvent::Download(DownloadEvent::Start { total_files: 1, .. })),
+        "first event should be Download(Start), got {:?}",
+        &events[0]
+    );
+    assert!(
+        matches!(events.last().unwrap(), ProgressEvent::Download(DownloadEvent::Complete)),
+        "last event should be Download(Complete)"
+    );
+    let has_progress = events
+        .iter()
+        .any(|e| matches!(e, ProgressEvent::Download(DownloadEvent::Progress { .. })));
+    assert!(has_progress, "should have at least one Progress event");
+}
+
+#[tokio::test]
+async fn test_download_file_stream_with_progress() {
+    let Some(client) = prod_api() else { return };
+    let (owner, name) = TEST_MODEL_PARTS;
+    let repo = model(&client, owner, name);
+
+    let handler = Arc::new(RecordingHandler::new());
+
+    let (_content_length, mut stream) = repo
+        .download_file_stream()
+        .filename("config.json")
+        .progress(handler.clone())
+        .send()
+        .await
+        .unwrap();
+
+    let mut total = 0u64;
+    while let Some(chunk) = stream.next().await {
+        total += chunk.unwrap().len() as u64;
+    }
+    assert!(total > 0);
+
+    let events = handler.events();
+    assert!(!events.is_empty(), "should have received progress events");
+    assert!(
+        matches!(&events[0], ProgressEvent::Download(DownloadEvent::Start { total_files: 1, .. })),
+        "first event should be Download(Start), got {:?}",
+        &events[0]
+    );
+    assert!(
+        matches!(events.last().unwrap(), ProgressEvent::Download(DownloadEvent::Complete)),
+        "last event should be Download(Complete)"
+    );
+    let has_progress = events
+        .iter()
+        .any(|e| matches!(e, ProgressEvent::Download(DownloadEvent::Progress { .. })));
+    assert!(has_progress, "should have at least one Progress event");
 }
 
 #[tokio::test]

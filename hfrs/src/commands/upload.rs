@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use clap::Args as ClapArgs;
@@ -85,10 +84,8 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
 
     let handler: Option<Progress> = if args.quiet {
         None
-    } else if let Some(multi) = multi {
-        Some(Arc::new(CliProgressHandler::new(multi)))
     } else {
-        None
+        multi.map(|multi| CliProgressHandler::new(multi).into())
     };
 
     let commit_info = if local_path.is_file() {

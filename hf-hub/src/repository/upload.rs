@@ -692,7 +692,7 @@ impl HFRepository {
         #[builder(into)] revision: Option<String>,
         create_pr: Option<bool>,
         #[builder(into)] parent_commit: Option<String>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
         self.create_commit_impl(CreateCommitParams {
             operations,
@@ -728,7 +728,7 @@ impl HFRepository {
         #[builder(into)] commit_description: Option<String>,
         create_pr: Option<bool>,
         #[builder(into)] parent_commit: Option<String>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
         self.upload_file_impl(UploadFileParams {
             source,
@@ -769,7 +769,7 @@ impl HFRepository {
         allow_patterns: Option<Vec<String>>,
         ignore_patterns: Option<Vec<String>>,
         delete_patterns: Option<Vec<String>>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
         self.upload_folder_impl(UploadFolderParams {
             folder_path,
@@ -857,7 +857,7 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)] revision: Option<String>,
         create_pr: Option<bool>,
         #[builder(into)] parent_commit: Option<String>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner
@@ -885,7 +885,7 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)] commit_description: Option<String>,
         create_pr: Option<bool>,
         #[builder(into)] parent_commit: Option<String>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner
@@ -916,7 +916,7 @@ impl crate::blocking::HFRepositorySync {
         allow_patterns: Option<Vec<String>>,
         ignore_patterns: Option<Vec<String>>,
         delete_patterns: Option<Vec<String>>,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner

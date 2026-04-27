@@ -5,12 +5,9 @@
 //!
 //! Run: cargo run -p examples --example progress
 
-use std::sync::Arc;
-
 use hf_hub::HFClient;
 use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
 
-#[derive(Debug)]
 struct PrintProgressHandler;
 
 impl ProgressHandler for PrintProgressHandler {
@@ -100,7 +97,7 @@ async fn main() -> hf_hub::HFResult<()> {
         .download_file()
         .filename("config.json")
         .local_dir(tmp_dir.path().to_path_buf())
-        .progress(Arc::new(PrintProgressHandler))
+        .progress(PrintProgressHandler)
         .send()
         .await?;
 

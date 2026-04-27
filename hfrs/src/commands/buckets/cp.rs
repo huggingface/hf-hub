@@ -1,6 +1,5 @@
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Args as ClapArgs;
@@ -49,10 +48,8 @@ fn filename_from_path(path: &str) -> &str {
 pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
     let handler: Option<Progress> = if args.quiet {
         None
-    } else if let Some(multi) = multi {
-        Some(Arc::new(CliProgressHandler::new(multi)))
     } else {
-        None
+        multi.map(|multi| CliProgressHandler::new(multi).into())
     };
 
     let src_is_stdin = args.src == "-";

@@ -11,7 +11,6 @@
 //! To exercise the upload code path too:
 //!   HF_TOKEN=hf_xxx HF_TEST_WRITE=1 cargo run -p examples --example progress_logger
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -23,7 +22,6 @@ use hf_hub::repository::AddSource;
 /// the handler was constructed, plus an event counter. Thread-safe — uses
 /// an atomic counter so concurrent invocations produce a coherent sequence
 /// number.
-#[derive(Debug)]
 struct LoggingProgressHandler {
     started: Instant,
     seq: AtomicU64,
@@ -54,7 +52,7 @@ async fn main() -> hf_hub::HFResult<()> {
     // --- Download a small file: shows Start → Progress* → Complete ---
 
     eprintln!("=== download_file ===");
-    let handler: Arc<LoggingProgressHandler> = Arc::new(LoggingProgressHandler::new());
+    let handler = LoggingProgressHandler::new();
     let model = client.model("openai-community", "gpt2");
     let path = model
         .download_file()
@@ -69,7 +67,7 @@ async fn main() -> hf_hub::HFResult<()> {
     //     with per-file Progress deltas ---
 
     eprintln!("\n=== snapshot_download (*.json) ===");
-    let handler: Arc<LoggingProgressHandler> = Arc::new(LoggingProgressHandler::new());
+    let handler = LoggingProgressHandler::new();
     let snapshot_dir = tmp_dir.path().join("snapshot");
     model
         .snapshot_download()
@@ -99,7 +97,7 @@ async fn main() -> hf_hub::HFResult<()> {
         .send()
         .await?;
 
-    let handler: Arc<LoggingProgressHandler> = Arc::new(LoggingProgressHandler::new());
+    let handler = LoggingProgressHandler::new();
     let commit = repo
         .upload_file()
         .source(AddSource::Bytes(b"hello from progress_logger".to_vec()))

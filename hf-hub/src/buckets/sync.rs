@@ -818,7 +818,7 @@ impl HFBucket {
         #[builder(default)] include: Vec<String>,
         #[builder(default)] exclude: Vec<String>,
         #[builder(default)] verbose: bool,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<BucketSyncPlan> {
         self.sync_impl(BucketSyncParams {
             local_path,
@@ -857,7 +857,7 @@ impl crate::blocking::HFBucketSync {
         #[builder(default)] include: Vec<String>,
         #[builder(default)] exclude: Vec<String>,
         #[builder(default)] verbose: bool,
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<BucketSyncPlan> {
         self.runtime.block_on(
             self.inner

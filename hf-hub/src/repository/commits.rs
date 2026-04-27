@@ -169,7 +169,11 @@ impl HFRepository {
     ///
     /// # Parameters
     ///
-    /// - `compare` (required): revision to compare against the parent (branch, tag, or SHA).
+    /// - `compare` (required): revision spec describing what to compare. Either:
+    ///   - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`, `"v1.0"`,
+    ///     `"abc123…"`), or
+    ///   - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
+    ///     `"<sha1>..<sha2>"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn get_commit_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
         let url = format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), compare);
@@ -197,7 +201,11 @@ impl HFRepository {
     ///
     /// # Parameters
     ///
-    /// - `compare` (required): revision to compare against the parent.
+    /// - `compare` (required): revision spec describing what to compare. Either:
+    ///   - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`, `"v1.0"`,
+    ///     `"abc123…"`), or
+    ///   - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
+    ///     `"<sha1>..<sha2>"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn get_raw_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
         let url = format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), compare);
@@ -230,7 +238,11 @@ impl HFRepository {
     ///
     /// # Parameters
     ///
-    /// - `compare` (required): revision to compare against the parent.
+    /// - `compare` (required): revision spec describing what to compare. Either:
+    ///   - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`, `"v1.0"`,
+    ///     `"abc123…"`), or
+    ///   - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
+    ///     `"<sha1>..<sha2>"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn get_raw_diff_stream(
         &self,
