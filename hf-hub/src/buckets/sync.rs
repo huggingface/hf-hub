@@ -11,8 +11,8 @@
 //! - `prefix` scopes the remote side of the comparison. Returned operation paths are always relative to that prefix and
 //!   to `local_path`.
 //! - `include` and `exclude` glob patterns are evaluated against those relative paths. Excludes win over includes.
-//! - The returned plan reflects the operations that were executed. Set the `verbose(true)` builder
-//!   option on [`HFBucket::sync`] to keep explicit skip entries in the plan.
+//! - The returned plan reflects the operations that were executed. Set the `verbose(true)` builder option on
+//!   [`HFBucket::sync`] to keep explicit skip entries in the plan.
 //! - By default, file comparisons consider both size and modification time, with a small timestamp tolerance to avoid
 //!   unnecessary transfers.
 
@@ -772,10 +772,10 @@ impl HFBucket {
     ///
     /// The sync is one-way and controlled by `direction`:
     ///
-    /// - [`BucketSyncDirection::Upload`] compares `local_path` against the bucket (optionally
-    ///   scoped by `prefix`) and uploads changed or missing files.
-    /// - [`BucketSyncDirection::Download`] compares the bucket against `local_path` and downloads
-    ///   changed or missing files.
+    /// - [`BucketSyncDirection::Upload`] compares `local_path` against the bucket (optionally scoped by `prefix`) and
+    ///   uploads changed or missing files.
+    /// - [`BucketSyncDirection::Download`] compares the bucket against `local_path` and downloads changed or missing
+    ///   files.
     ///
     /// When `delete` is enabled, files that only exist on the receiving side are removed as part
     /// of the sync. The returned [`BucketSyncPlan`] describes the operations that were executed;
