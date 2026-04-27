@@ -50,7 +50,7 @@ pub struct HFRepositorySync {
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 #[derive(Clone)]
 pub struct HFSpaceSync {
-    repo_sync: Arc<HFRepositorySync>,
+    pub(crate) repo_sync: Arc<HFRepositorySync>,
     pub(crate) inner: Arc<HFSpace>,
 }
 

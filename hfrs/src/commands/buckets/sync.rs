@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::buckets::sync::{BucketSyncAction, BucketSyncDirection, BucketSyncParams};
+use hf_hub::buckets::sync::{BucketSyncAction, BucketSyncDirection};
 use hf_hub::progress::Progress;
 
 use crate::output::CommandResult;
@@ -121,27 +121,22 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
 
     let bucket = client.bucket(&bucket_ref.namespace, &bucket_ref.bucket_name);
 
-    let params = {
-        let b = BucketSyncParams::builder()
-            .local_path(local_path)
-            .direction(direction)
-            .delete(args.delete)
-            .ignore_times(args.ignore_times)
-            .ignore_sizes(args.ignore_sizes)
-            .existing(args.existing)
-            .ignore_existing(args.ignore_existing)
-            .include(args.include)
-            .exclude(args.exclude)
-            .verbose(args.verbose)
-            .progress(handler);
-        if let Some(prefix) = bucket_ref.prefix {
-            b.prefix(prefix).build()
-        } else {
-            b.build()
-        }
-    };
-
-    let plan = bucket.sync(params).await?;
+    let plan = bucket
+        .sync()
+        .local_path(local_path)
+        .direction(direction)
+        .delete(args.delete)
+        .ignore_times(args.ignore_times)
+        .ignore_sizes(args.ignore_sizes)
+        .existing(args.existing)
+        .ignore_existing(args.ignore_existing)
+        .include(args.include)
+        .exclude(args.exclude)
+        .verbose(args.verbose)
+        .maybe_progress(handler)
+        .maybe_prefix(bucket_ref.prefix)
+        .send()
+        .await?;
 
     if args.quiet {
         return Ok(CommandResult::Silent);

@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use globset::Glob;
 use hf_hub::HFClient;
-use hf_hub::repository::{CommitOperation, RepoCreateCommitParams, RepoListFilesParams};
+use hf_hub::repository::CommitOperation;
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -42,10 +42,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let repo_type: hf_hub::RepoType = args.r#type.into();
     let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
 
-    let list_params = RepoListFilesParams {
-        revision: args.revision.clone(),
-    };
-    let all_files = repo.list_files(list_params).await?;
+    let all_files = repo.list_files().maybe_revision(args.revision.clone()).send().await?;
 
     let matchers: Vec<_> = args
         .patterns
@@ -62,17 +59,16 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         anyhow::bail!("No files matched the given patterns");
     }
 
-    let operations = matched_files.into_iter().map(CommitOperation::delete).collect();
-    let params = RepoCreateCommitParams {
-        operations,
-        commit_message: args.commit_message,
-        commit_description: args.commit_description,
-        revision: args.revision,
-        create_pr: if args.create_pr { Some(true) } else { None },
-        parent_commit: None,
-        progress: None,
-    };
-    let result = repo.create_commit(params).await?;
+    let operations: Vec<CommitOperation> = matched_files.into_iter().map(CommitOperation::delete).collect();
+    let result = repo
+        .create_commit()
+        .operations(operations)
+        .commit_message(args.commit_message)
+        .maybe_commit_description(args.commit_description)
+        .maybe_revision(args.revision)
+        .maybe_create_pr(if args.create_pr { Some(true) } else { None })
+        .send()
+        .await?;
     let url = result.commit_url.or(result.pr_url).unwrap_or_default();
     Ok(CommandResult::Raw(url))
 }

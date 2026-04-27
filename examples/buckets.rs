@@ -6,41 +6,39 @@
 
 use futures::TryStreamExt;
 use hf_hub::HFClient;
-use hf_hub::buckets::{BucketInfo, CreateBucketParams, ListBucketTreeParams};
+use hf_hub::buckets::BucketInfo;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
 
-    let whoami = client.whoami().await?;
+    let whoami = client.whoami().send().await?;
     let namespace = &whoami.username;
     let bucket_name = "example-bucket";
 
     let created = client
-        .create_bucket(
-            CreateBucketParams::builder()
-                .namespace(namespace)
-                .name(bucket_name)
-                .private(true)
-                .exist_ok(true)
-                .build(),
-        )
+        .create_bucket()
+        .namespace(namespace)
+        .name(bucket_name)
+        .private(true)
+        .exist_ok(true)
+        .send()
         .await?;
     println!("Bucket URL: {}", created.url);
 
     let bucket = client.bucket(namespace, bucket_name);
     println!("Bucket handle: owner={}, name={}", bucket.owner(), bucket.name());
 
-    let info = bucket.info().await?;
+    let info = bucket.info().send().await?;
     println!(
         "Bucket info: id={}, private={}, files={}, size={}",
         info.id, info.private, info.total_files, info.size
     );
 
-    let entries: Vec<_> = bucket.list_tree(ListBucketTreeParams::default())?.try_collect().await?;
+    let entries: Vec<_> = bucket.list_tree().send()?.try_collect().await?;
     println!("Files in bucket: {}", entries.len());
 
-    let buckets: Vec<BucketInfo> = client.list_buckets(namespace)?.try_collect().await?;
+    let buckets: Vec<BucketInfo> = client.list_buckets().namespace(namespace).send()?.try_collect().await?;
     println!("Buckets in {namespace}: {}", buckets.len());
     for b in &buckets {
         println!("  {}", b.id);

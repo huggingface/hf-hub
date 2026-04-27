@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::TryStreamExt;
-use hf_hub::buckets::{BucketDownloadFilesParams, BucketTreeEntry, CreateBucketParams, ListBucketTreeParams};
+use hf_hub::buckets::BucketTreeEntry;
 use hf_hub::{HFBucket, HFClient, HFClientBuilder};
 use integration_tests::test_utils::*;
 use rand::RngExt;
@@ -48,7 +48,7 @@ fn unique_suffix() -> String {
 
 async fn get_username(client: &HFClient) -> String {
     WHOAMI_USERNAME
-        .get_or_init(|| async { client.whoami().await.expect("whoami failed").username })
+        .get_or_init(|| async { client.whoami().send().await.expect("whoami failed").username })
         .await
         .clone()
 }
@@ -57,14 +57,12 @@ async fn create_test_bucket(client: &HFClient, suffix: &str) -> (String, String)
     let username = get_username(client).await;
     let name = format!("hfrs-xet-upload-test-{suffix}");
     client
-        .create_bucket(
-            CreateBucketParams::builder()
-                .namespace(&username)
-                .name(&name)
-                .private(true)
-                .exist_ok(true)
-                .build(),
-        )
+        .create_bucket()
+        .namespace(&username)
+        .name(&name)
+        .private(true)
+        .exist_ok(true)
+        .send()
         .await
         .expect("create_bucket failed");
     (username, name)
@@ -72,15 +70,15 @@ async fn create_test_bucket(client: &HFClient, suffix: &str) -> (String, String)
 
 async fn delete_test_bucket(client: &HFClient, namespace: &str, name: &str) {
     let bucket_id = format!("{namespace}/{name}");
-    let _ = client.delete_bucket(&bucket_id, true).await;
+    let _ = client.delete_bucket().bucket_id(bucket_id).missing_ok(true).send().await;
 }
 
 /// Poll the bucket tree until `path` is visible — the batch endpoint can
 /// return before the tree index is consistent on the CI backend.
 async fn wait_for_bucket_file(bucket: &HFBucket, path: &str) -> BucketTreeEntry {
     for _ in 0..40 {
-        let params = ListBucketTreeParams::builder().recursive(true).build();
-        let entries: Vec<BucketTreeEntry> = bucket.list_tree(params).unwrap().try_collect().await.unwrap();
+        let entries: Vec<BucketTreeEntry> =
+            bucket.list_tree().recursive(true).send().unwrap().try_collect().await.unwrap();
         if let Some(entry) = entries
             .iter()
             .find(|e| matches!(e, BucketTreeEntry::File { path: p, .. } if p == path))
@@ -115,7 +113,9 @@ async fn test_bucket_upload_small_text_file() {
     std::fs::write(&local_file, &data).unwrap();
 
     bucket
-        .upload_files(&[(local_file, "greeting.txt".to_string())], &None)
+        .upload_files()
+        .files(vec![(local_file, "greeting.txt".to_string())])
+        .send()
         .await
         .expect("bucket upload_files should succeed");
 
@@ -127,12 +127,9 @@ async fn test_bucket_upload_small_text_file() {
 
     let dl_dir = tempfile::tempdir().unwrap();
     bucket
-        .download_files(
-            BucketDownloadFilesParams {
-                files: vec![("greeting.txt".to_string(), dl_dir.path().join("greeting.txt"))],
-            },
-            &None,
-        )
+        .download_files()
+        .files(vec![("greeting.txt".to_string(), dl_dir.path().join("greeting.txt"))])
+        .send()
         .await
         .unwrap();
     assert_eq!(std::fs::read(dl_dir.path().join("greeting.txt")).unwrap(), data);
@@ -167,7 +164,9 @@ async fn test_bucket_upload_multiple_files() {
     }
 
     bucket
-        .upload_files(&upload_args, &None)
+        .upload_files()
+        .files(upload_args)
+        .send()
         .await
         .expect("bucket upload_files with multiple files should succeed");
 
@@ -184,10 +183,7 @@ async fn test_bucket_upload_multiple_files() {
         .iter()
         .map(|(remote, _)| (remote.to_string(), dl_dir.path().join(remote)))
         .collect();
-    bucket
-        .download_files(BucketDownloadFilesParams { files: download_pairs }, &None)
-        .await
-        .unwrap();
+    bucket.download_files().files(download_pairs).send().await.unwrap();
     for (remote, content) in &files {
         let downloaded = std::fs::read(dl_dir.path().join(remote)).unwrap();
         assert_eq!(downloaded.as_slice(), *content, "content mismatch for {remote}");
@@ -216,7 +212,9 @@ async fn test_bucket_upload_large_random_file() {
     drop(data);
 
     bucket
-        .upload_files(&[(local_file, "big.bin".to_string())], &None)
+        .upload_files()
+        .files(vec![(local_file, "big.bin".to_string())])
+        .send()
         .await
         .expect("large bucket upload via xet should succeed");
 
@@ -228,12 +226,9 @@ async fn test_bucket_upload_large_random_file() {
 
     let dl_dir = tempfile::tempdir().unwrap();
     bucket
-        .download_files(
-            BucketDownloadFilesParams {
-                files: vec![("big.bin".to_string(), dl_dir.path().join("big.bin"))],
-            },
-            &None,
-        )
+        .download_files()
+        .files(vec![("big.bin".to_string(), dl_dir.path().join("big.bin"))])
+        .send()
         .await
         .unwrap();
     let downloaded = std::fs::read(dl_dir.path().join("big.bin")).unwrap();
@@ -258,7 +253,9 @@ async fn test_bucket_upload_empty_file() {
     std::fs::write(&local_file, b"").unwrap();
 
     bucket
-        .upload_files(&[(local_file, "empty.bin".to_string())], &None)
+        .upload_files()
+        .files(vec![(local_file, "empty.bin".to_string())])
+        .send()
         .await
         .expect("empty-file bucket upload should succeed");
 
@@ -270,12 +267,9 @@ async fn test_bucket_upload_empty_file() {
 
     let dl_dir = tempfile::tempdir().unwrap();
     bucket
-        .download_files(
-            BucketDownloadFilesParams {
-                files: vec![("empty.bin".to_string(), dl_dir.path().join("empty.bin"))],
-            },
-            &None,
-        )
+        .download_files()
+        .files(vec![("empty.bin".to_string(), dl_dir.path().join("empty.bin"))])
+        .send()
         .await
         .unwrap();
     assert!(std::fs::read(dl_dir.path().join("empty.bin")).unwrap().is_empty());

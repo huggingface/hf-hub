@@ -5,7 +5,6 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
 use hf_hub::progress::Progress;
-use hf_hub::repository::{RepoDownloadFileParams, RepoSnapshotDownloadParams};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -66,15 +65,14 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
     };
 
     let path = if args.filenames.len() == 1 && args.include.is_empty() && args.exclude.is_empty() {
-        let params = RepoDownloadFileParams {
-            filename: args.filenames.into_iter().next().unwrap(),
-            local_dir: args.local_dir,
-            revision: args.revision,
-            force_download: if args.force_download { Some(true) } else { None },
-            local_files_only: None,
-            progress: handler.clone(),
-        };
-        repo.download_file(params).await?
+        repo.download_file()
+            .filename(args.filenames.into_iter().next().unwrap())
+            .maybe_local_dir(args.local_dir)
+            .maybe_revision(args.revision)
+            .maybe_force_download(if args.force_download { Some(true) } else { None })
+            .maybe_progress(handler.clone())
+            .send()
+            .await?
     } else {
         let allow_patterns = if !args.filenames.is_empty() {
             Some(args.filenames)
@@ -88,17 +86,15 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
         } else {
             None
         };
-        let params = RepoSnapshotDownloadParams {
-            revision: args.revision,
-            allow_patterns,
-            ignore_patterns,
-            local_dir: args.local_dir,
-            force_download: if args.force_download { Some(true) } else { None },
-            local_files_only: None,
-            max_workers: None,
-            progress: handler.clone(),
-        };
-        repo.snapshot_download(params).await?
+        repo.snapshot_download()
+            .maybe_revision(args.revision)
+            .maybe_allow_patterns(allow_patterns)
+            .maybe_ignore_patterns(ignore_patterns)
+            .maybe_local_dir(args.local_dir)
+            .maybe_force_download(if args.force_download { Some(true) } else { None })
+            .maybe_progress(handler.clone())
+            .send()
+            .await?
     };
 
     Ok(CommandResult::Raw(path.display().to_string()))

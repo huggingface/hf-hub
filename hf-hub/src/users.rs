@@ -9,6 +9,7 @@
 //! - [`HFClient::list_user_followers`] / [`HFClient::list_user_following`] / [`HFClient::list_organization_members`] —
 //!   paginated listings that yield [`User`] entries one page at a time.
 
+use bon::bon;
 use futures::Stream;
 use serde::Deserialize;
 use url::Url;
@@ -86,15 +87,16 @@ pub struct Organization {
     pub org_type: Option<String>,
 }
 
+#[bon]
 impl HFClient {
     /// Fetch the profile of the user that owns the current token.
     ///
     /// Returns the authenticated [`User`], including private fields like
-    /// [`email`](User::email) and the caller's [`orgs`](User::orgs) list.
-    /// Fails with [`HFError::AuthRequired`](crate::HFError::AuthRequired) if no
-    /// valid token is configured.
+    /// [`email`](User::email) and the caller's [`orgs`](User::orgs) list. Fails with
+    /// [`HFError::AuthRequired`](crate::HFError::AuthRequired) if no valid token is configured.
     ///
-    /// Endpoint: `GET /api/whoami-v2`
+    /// Endpoint: `GET /api/whoami-v2`.
+    #[builder(finish_fn = send)]
     pub async fn whoami(&self) -> HFResult<User> {
         let url = format!("{}/api/whoami-v2", self.endpoint());
         let headers = self.auth_headers();
@@ -109,24 +111,25 @@ impl HFClient {
     /// Verify that the current token is valid.
     ///
     /// Returns `Ok(())` if the token authenticates successfully, or
-    /// [`HFError::AuthRequired`](crate::HFError::AuthRequired) if it is missing
-    /// or rejected. Equivalent to calling [`whoami`](Self::whoami) and
-    /// discarding the response.
+    /// [`HFError::AuthRequired`](crate::HFError::AuthRequired) if it is missing or rejected.
+    /// Equivalent to calling [`whoami`](Self::whoami) and discarding the response.
     ///
-    /// Endpoint: `GET /api/whoami-v2`
+    /// Endpoint: `GET /api/whoami-v2`.
+    #[builder(finish_fn = send)]
     pub async fn auth_check(&self) -> HFResult<()> {
-        self.whoami().await?;
+        self.whoami().send().await?;
         Ok(())
     }
 
     /// Fetch the public profile of a user by Hub handle.
     ///
-    /// Private fields such as [`email`](User::email) are never populated for
-    /// other users; use [`whoami`](Self::whoami) to retrieve them for the
-    /// authenticated caller.
+    /// Endpoint: `GET /api/users/{username}/overview`.
     ///
-    /// Endpoint: `GET /api/users/{username}/overview`
-    pub async fn get_user_overview(&self, username: &str) -> HFResult<User> {
+    /// # Parameters
+    ///
+    /// - `username` (required): Hub handle (slug) of the user.
+    #[builder(finish_fn = send)]
+    pub async fn get_user_overview(&self, #[builder(into)] username: String) -> HFResult<User> {
         let url = format!("{}/api/users/{}/overview", self.endpoint(), username);
         let headers = self.auth_headers();
         let response =
@@ -139,8 +142,13 @@ impl HFClient {
 
     /// Fetch the public profile of an organization by Hub handle.
     ///
-    /// Endpoint: `GET /api/organizations/{organization}/overview`
-    pub async fn get_organization_overview(&self, organization: &str) -> HFResult<Organization> {
+    /// Endpoint: `GET /api/organizations/{organization}/overview`.
+    ///
+    /// # Parameters
+    ///
+    /// - `organization` (required): Hub handle (slug) of the organization.
+    #[builder(finish_fn = send)]
+    pub async fn get_organization_overview(&self, #[builder(into)] organization: String) -> HFResult<Organization> {
         let url = format!("{}/api/organizations/{}/overview", self.endpoint(), organization);
         let headers = self.auth_headers();
         let response =
@@ -153,15 +161,16 @@ impl HFClient {
 
     /// Stream the followers of a user.
     ///
-    /// `limit` caps the total number of items yielded across all pages; pass
-    /// `None` to iterate until the API runs out. Use the
-    /// [`futures::StreamExt`](https://docs.rs/futures) adapters to consume the
-    /// stream.
+    /// Endpoint: `GET /api/users/{username}/followers`.
     ///
-    /// Endpoint: `GET /api/users/{username}/followers`
+    /// # Parameters
+    ///
+    /// - `username` (required): Hub handle of the user.
+    /// - `limit`: cap on the total number of items yielded.
+    #[builder(finish_fn = send)]
     pub fn list_user_followers(
         &self,
-        username: &str,
+        #[builder(into)] username: String,
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<User>> + '_> {
         let url = Url::parse(&format!("{}/api/users/{}/followers", self.endpoint(), username))?;
@@ -170,13 +179,16 @@ impl HFClient {
 
     /// Stream the users that a user is following.
     ///
-    /// `limit` caps the total number of items yielded across all pages; pass
-    /// `None` to iterate until the API runs out.
+    /// Endpoint: `GET /api/users/{username}/following`.
     ///
-    /// Endpoint: `GET /api/users/{username}/following`
+    /// # Parameters
+    ///
+    /// - `username` (required): Hub handle of the user.
+    /// - `limit`: cap on the total number of items yielded.
+    #[builder(finish_fn = send)]
     pub fn list_user_following(
         &self,
-        username: &str,
+        #[builder(into)] username: String,
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<User>> + '_> {
         let url = Url::parse(&format!("{}/api/users/{}/following", self.endpoint(), username))?;
@@ -185,14 +197,16 @@ impl HFClient {
 
     /// Stream the members of an organization.
     ///
-    /// `limit` caps the total number of items yielded across all pages; pass
-    /// `None` to iterate until the API runs out. Visibility of members
-    /// depends on the organization's settings and the caller's permissions.
+    /// Endpoint: `GET /api/organizations/{organization}/members`.
     ///
-    /// Endpoint: `GET /api/organizations/{organization}/members`
+    /// # Parameters
+    ///
+    /// - `organization` (required): Hub handle of the organization.
+    /// - `limit`: cap on the total number of items yielded.
+    #[builder(finish_fn = send)]
     pub fn list_organization_members(
         &self,
-        organization: &str,
+        #[builder(into)] organization: String,
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<User>> + '_> {
         let url = Url::parse(&format!("{}/api/organizations/{}/members", self.endpoint(), organization))?;
@@ -200,19 +214,88 @@ impl HFClient {
     }
 }
 
-sync_api! {
-    impl HFClient -> HFClientSync {
-        fn whoami(&self) -> HFResult<User>;
-        fn auth_check(&self) -> HFResult<()>;
-        fn get_user_overview(&self, username: &str) -> HFResult<User>;
-        fn get_organization_overview(&self, organization: &str) -> HFResult<Organization>;
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFClientSync {
+    /// Blocking counterpart of [`HFClient::whoami`].
+    #[builder(finish_fn = send)]
+    pub fn whoami(&self) -> HFResult<User> {
+        self.runtime.block_on(self.inner.whoami().send())
     }
-}
 
-sync_api_stream! {
-    impl HFClient -> HFClientSync {
-        fn list_user_followers(&self, username: &str, limit: Option<usize>) -> User;
-        fn list_user_following(&self, username: &str, limit: Option<usize>) -> User;
-        fn list_organization_members(&self, organization: &str, limit: Option<usize>) -> User;
+    /// Blocking counterpart of [`HFClient::auth_check`].
+    #[builder(finish_fn = send)]
+    pub fn auth_check(&self) -> HFResult<()> {
+        self.runtime.block_on(self.inner.auth_check().send())
+    }
+
+    /// Blocking counterpart of [`HFClient::get_user_overview`].
+    #[builder(finish_fn = send)]
+    pub fn get_user_overview(&self, #[builder(into)] username: String) -> HFResult<User> {
+        self.runtime.block_on(self.inner.get_user_overview().username(username).send())
+    }
+
+    /// Blocking counterpart of [`HFClient::get_organization_overview`].
+    #[builder(finish_fn = send)]
+    pub fn get_organization_overview(&self, #[builder(into)] organization: String) -> HFResult<Organization> {
+        self.runtime
+            .block_on(self.inner.get_organization_overview().organization(organization).send())
+    }
+
+    /// Blocking counterpart of [`HFClient::list_user_followers`]. Collects the stream into a
+    /// `Vec<User>`.
+    #[builder(finish_fn = send)]
+    pub fn list_user_followers(&self, #[builder(into)] username: String, limit: Option<usize>) -> HFResult<Vec<User>> {
+        use futures::StreamExt;
+        self.runtime.block_on(async move {
+            let stream = self.inner.list_user_followers().username(username).maybe_limit(limit).send()?;
+            futures::pin_mut!(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item?);
+            }
+            Ok(items)
+        })
+    }
+
+    /// Blocking counterpart of [`HFClient::list_user_following`]. Collects the stream into a
+    /// `Vec<User>`.
+    #[builder(finish_fn = send)]
+    pub fn list_user_following(&self, #[builder(into)] username: String, limit: Option<usize>) -> HFResult<Vec<User>> {
+        use futures::StreamExt;
+        self.runtime.block_on(async move {
+            let stream = self.inner.list_user_following().username(username).maybe_limit(limit).send()?;
+            futures::pin_mut!(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item?);
+            }
+            Ok(items)
+        })
+    }
+
+    /// Blocking counterpart of [`HFClient::list_organization_members`]. Collects the stream into a
+    /// `Vec<User>`.
+    #[builder(finish_fn = send)]
+    pub fn list_organization_members(
+        &self,
+        #[builder(into)] organization: String,
+        limit: Option<usize>,
+    ) -> HFResult<Vec<User>> {
+        use futures::StreamExt;
+        self.runtime.block_on(async move {
+            let stream = self
+                .inner
+                .list_organization_members()
+                .organization(organization)
+                .maybe_limit(limit)
+                .send()?;
+            futures::pin_mut!(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item?);
+            }
+            Ok(items)
+        })
     }
 }

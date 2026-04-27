@@ -124,12 +124,11 @@
 //! ```rust,no_run
 //! use futures::StreamExt;
 //! use hf_hub::HFClient;
-//! use hf_hub::repository::RepoListTreeParams;
 //!
 //! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 //! let client = HFClient::new()?;
 //! let model = client.model("openai-community", "gpt2");
-//! let stream = model.list_tree(RepoListTreeParams::builder().recursive(true).build())?;
+//! let stream = model.list_tree().recursive(true).send()?;
 //! futures::pin_mut!(stream);
 //! while let Some(entry) = stream.next().await {
 //!     println!("{:?}", entry?);
@@ -197,9 +196,6 @@
 //! `blocking_*` variants.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-
-#[macro_use]
-mod macros;
 
 mod client;
 pub(crate) mod constants;

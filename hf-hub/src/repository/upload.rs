@@ -1,37 +1,75 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
+use bon::bon;
 use futures::stream::StreamExt;
 use sha2::{Digest, Sha256};
 
 use super::files::matches_any_glob;
-use super::{
-    AddSource, CommitInfo, CommitOperation, HFRepository, RepoCreateCommitParams, RepoDeleteFileParams,
-    RepoDeleteFolderParams, RepoListTreeParams, RepoTreeEntry, RepoType, RepoUploadFileParams, RepoUploadFolderParams,
-};
+use super::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoTreeEntry, RepoType};
 use crate::error::{HFError, HFResult};
-use crate::progress::{EmitEvent, UploadEvent};
+use crate::progress::{EmitEvent, Progress, UploadEvent};
 use crate::{constants, retry};
 
+/// Internal options struct for [`HFRepository::create_commit`]. Built by the bon-generated
+/// `create_commit()` builder.
+struct RepoCreateCommitParams {
+    operations: Vec<CommitOperation>,
+    commit_message: String,
+    commit_description: Option<String>,
+    revision: Option<String>,
+    create_pr: Option<bool>,
+    parent_commit: Option<String>,
+    progress: Option<Progress>,
+}
+
+/// Internal options struct for [`HFRepository::upload_file`].
+struct RepoUploadFileParams {
+    source: AddSource,
+    path_in_repo: String,
+    revision: Option<String>,
+    commit_message: Option<String>,
+    commit_description: Option<String>,
+    create_pr: Option<bool>,
+    parent_commit: Option<String>,
+    progress: Option<Progress>,
+}
+
+/// Internal options struct for [`HFRepository::upload_folder`].
+struct RepoUploadFolderParams {
+    folder_path: PathBuf,
+    path_in_repo: Option<String>,
+    revision: Option<String>,
+    commit_message: Option<String>,
+    commit_description: Option<String>,
+    create_pr: Option<bool>,
+    allow_patterns: Option<Vec<String>>,
+    ignore_patterns: Option<Vec<String>>,
+    delete_patterns: Option<Vec<String>>,
+    progress: Option<Progress>,
+}
+
+/// Internal options struct for [`HFRepository::delete_file`].
+struct RepoDeleteFileParams {
+    path_in_repo: String,
+    revision: Option<String>,
+    commit_message: Option<String>,
+    create_pr: Option<bool>,
+}
+
+/// Internal options struct for [`HFRepository::delete_folder`].
+struct RepoDeleteFolderParams {
+    path_in_repo: String,
+    revision: Option<String>,
+    commit_message: Option<String>,
+    create_pr: Option<bool>,
+}
+
 impl HFRepository {
-    /// Create a commit with multiple operations.
-    ///
-    /// This is the lowest-level public mutation API in the files module. Use it
-    /// when you need an explicit mix of add and delete operations in one
-    /// commit. For one-shot workflows, prefer [`HFRepository::upload_file`],
-    /// [`HFRepository::upload_folder`], [`HFRepository::delete_file`], or
-    /// [`HFRepository::delete_folder`].
-    ///
-    /// Added files are checked against the Hub's preupload endpoint to
-    /// determine upload mode. Files marked as `"lfs"` are uploaded via xet and
-    /// referenced by SHA-256 OID in the commit; files marked as `"regular"` are
-    /// sent inline as base64.
-    ///
-    /// Endpoint: POST /api/{repo_type}s/{repo_id}/commit/{revision}
-    pub async fn create_commit(&self, params: RepoCreateCommitParams) -> HFResult<CommitInfo> {
+    async fn create_commit_impl(&self, params: RepoCreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = format!("{}/commit/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
 
@@ -163,18 +201,13 @@ impl HFRepository {
         }))
     }
 
-    /// Upload a single file to a repository.
-    ///
-    /// This is a convenience wrapper around [`HFRepository::create_commit`]. If
-    /// `commit_message` is omitted, a default `"Upload {path}"` message is
-    /// used.
-    pub async fn upload_file(&self, params: RepoUploadFileParams) -> HFResult<CommitInfo> {
+    async fn upload_file_impl(&self, params: RepoUploadFileParams) -> HFResult<CommitInfo> {
         let commit_message = params
             .commit_message
             .clone()
             .unwrap_or_else(|| format!("Upload {}", params.path_in_repo));
 
-        self.create_commit(RepoCreateCommitParams {
+        self.create_commit_impl(RepoCreateCommitParams {
             operations: vec![CommitOperation::Add {
                 path_in_repo: params.path_in_repo.clone(),
                 source: params.source.clone(),
@@ -189,12 +222,7 @@ impl HFRepository {
         .await
     }
 
-    /// Upload a local folder to a repository.
-    ///
-    /// The folder is walked recursively and converted into add operations.
-    /// When `delete_patterns` is set, matching remote files are also deleted in
-    /// the same commit.
-    pub async fn upload_folder(&self, params: RepoUploadFolderParams) -> HFResult<CommitInfo> {
+    async fn upload_folder_impl(&self, params: RepoUploadFolderParams) -> HFResult<CommitInfo> {
         let mut operations = Vec::new();
 
         let folder = &params.folder_path;
@@ -211,12 +239,7 @@ impl HFRepository {
 
         if let Some(ref delete_patterns) = params.delete_patterns {
             let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-            let stream = self.list_tree(RepoListTreeParams {
-                revision: Some(revision.to_string()),
-                recursive: true,
-                expand: false,
-                limit: None,
-            })?;
+            let stream = self.list_tree().revision(revision.to_string()).recursive(true).send()?;
             futures::pin_mut!(stream);
             while let Some(entry) = stream.next().await {
                 let entry = entry?;
@@ -230,7 +253,7 @@ impl HFRepository {
 
         let commit_message = params.commit_message.clone().unwrap_or_else(|| "Upload folder".to_string());
 
-        self.create_commit(RepoCreateCommitParams {
+        self.create_commit_impl(RepoCreateCommitParams {
             operations,
             commit_message,
             commit_description: params.commit_description.clone(),
@@ -242,18 +265,13 @@ impl HFRepository {
         .await
     }
 
-    /// Delete a file from a repository.
-    ///
-    /// This is a convenience wrapper around [`HFRepository::create_commit`]. If
-    /// `commit_message` is omitted, a default `"Delete {path}"` message is
-    /// used.
-    pub async fn delete_file(&self, params: RepoDeleteFileParams) -> HFResult<CommitInfo> {
+    async fn delete_file_impl(&self, params: RepoDeleteFileParams) -> HFResult<CommitInfo> {
         let commit_message = params
             .commit_message
             .clone()
             .unwrap_or_else(|| format!("Delete {}", params.path_in_repo));
 
-        self.create_commit(RepoCreateCommitParams {
+        self.create_commit_impl(RepoCreateCommitParams {
             operations: vec![CommitOperation::delete(params.path_in_repo.clone())],
             commit_message,
             commit_description: None,
@@ -265,20 +283,10 @@ impl HFRepository {
         .await
     }
 
-    /// Delete all files under a repository path.
-    ///
-    /// The current tree is listed recursively and every file at or below
-    /// `path_in_repo` is turned into a delete operation. Directories disappear
-    /// as a consequence of deleting their contents.
-    pub async fn delete_folder(&self, params: RepoDeleteFolderParams) -> HFResult<CommitInfo> {
+    async fn delete_folder_impl(&self, params: RepoDeleteFolderParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
 
-        let stream = self.list_tree(RepoListTreeParams {
-            revision: Some(revision.to_string()),
-            recursive: true,
-            expand: false,
-            limit: None,
-        })?;
+        let stream = self.list_tree().revision(revision.to_string()).recursive(true).send()?;
         futures::pin_mut!(stream);
 
         let mut operations = Vec::new();
@@ -302,7 +310,7 @@ impl HFRepository {
             .clone()
             .unwrap_or_else(|| format!("Delete {}", params.path_in_repo));
 
-        self.create_commit(RepoCreateCommitParams {
+        self.create_commit_impl(RepoCreateCommitParams {
             operations,
             commit_message,
             commit_description: None,
@@ -655,12 +663,317 @@ fn collect_files_recursive(
     Ok(())
 }
 
-sync_api! {
-    impl HFRepository -> HFRepositorySync {
-        fn create_commit(&self, params: RepoCreateCommitParams) -> HFResult<CommitInfo>;
-        fn upload_file(&self, params: RepoUploadFileParams) -> HFResult<CommitInfo>;
-        fn upload_folder(&self, params: RepoUploadFolderParams) -> HFResult<CommitInfo>;
-        fn delete_file(&self, params: RepoDeleteFileParams) -> HFResult<CommitInfo>;
-        fn delete_folder(&self, params: RepoDeleteFolderParams) -> HFResult<CommitInfo>;
+#[bon]
+impl HFRepository {
+    /// Create a commit with multiple operations.
+    ///
+    /// This is the lowest-level public mutation API in the files module. Use it when you need an
+    /// explicit mix of add and delete operations in one commit. For one-shot workflows, prefer
+    /// [`HFRepository::upload_file`], [`HFRepository::upload_folder`],
+    /// [`HFRepository::delete_file`], or [`HFRepository::delete_folder`].
+    ///
+    /// Endpoint: `POST /api/{repo_type}s/{repo_id}/commit/{revision}`.
+    ///
+    /// # Parameters
+    ///
+    /// - `operations` (required): list of file operations to include in the commit.
+    /// - `commit_message` (required): commit message.
+    /// - `commit_description`: extended description for the commit.
+    /// - `revision`: branch to commit to. Defaults to the main branch.
+    /// - `create_pr`: create a pull request instead of committing directly.
+    /// - `parent_commit`: expected parent commit SHA. Fails if the branch head moved past it.
+    /// - `progress`: optional progress handler.
+    #[builder(finish_fn = send)]
+    pub async fn create_commit(
+        &self,
+        operations: Vec<CommitOperation>,
+        #[builder(into)] commit_message: String,
+        #[builder(into)] commit_description: Option<String>,
+        #[builder(into)] revision: Option<String>,
+        create_pr: Option<bool>,
+        #[builder(into)] parent_commit: Option<String>,
+        progress: Option<Progress>,
+    ) -> HFResult<CommitInfo> {
+        self.create_commit_impl(RepoCreateCommitParams {
+            operations,
+            commit_message,
+            commit_description,
+            revision,
+            create_pr,
+            parent_commit,
+            progress,
+        })
+        .await
+    }
+
+    /// Upload a single file to a repository.
+    ///
+    /// Convenience wrapper around [`HFRepository::create_commit`]. If `commit_message` is
+    /// omitted, a default `"Upload {path}"` message is used.
+    ///
+    /// # Parameters
+    ///
+    /// - `source` (required): file content source (bytes or local file path).
+    /// - `path_in_repo` (required): destination path within the repository.
+    /// - `revision`: branch to upload to.
+    /// - `commit_message`, `commit_description`, `create_pr`, `parent_commit`, `progress`: same as
+    ///   [`HFRepository::create_commit`].
+    #[builder(finish_fn = send)]
+    pub async fn upload_file(
+        &self,
+        source: AddSource,
+        #[builder(into)] path_in_repo: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(into)] commit_description: Option<String>,
+        create_pr: Option<bool>,
+        #[builder(into)] parent_commit: Option<String>,
+        progress: Option<Progress>,
+    ) -> HFResult<CommitInfo> {
+        self.upload_file_impl(RepoUploadFileParams {
+            source,
+            path_in_repo,
+            revision,
+            commit_message,
+            commit_description,
+            create_pr,
+            parent_commit,
+            progress,
+        })
+        .await
+    }
+
+    /// Upload a local folder to a repository.
+    ///
+    /// The folder is walked recursively and converted into add operations. When `delete_patterns`
+    /// is set, matching remote files are also deleted in the same commit.
+    ///
+    /// # Parameters
+    ///
+    /// - `folder_path` (required): local folder path to upload.
+    /// - `path_in_repo`: destination directory within the repository (default: repo root).
+    /// - `revision`: branch to upload to.
+    /// - `commit_message`, `commit_description`, `create_pr`: commit metadata.
+    /// - `allow_patterns`, `ignore_patterns`: glob filters for local files.
+    /// - `delete_patterns`: glob patterns for remote files to delete in the same commit.
+    /// - `progress`: optional progress handler.
+    #[builder(finish_fn = send)]
+    pub async fn upload_folder(
+        &self,
+        #[builder(into)] folder_path: PathBuf,
+        #[builder(into)] path_in_repo: Option<String>,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(into)] commit_description: Option<String>,
+        create_pr: Option<bool>,
+        allow_patterns: Option<Vec<String>>,
+        ignore_patterns: Option<Vec<String>>,
+        delete_patterns: Option<Vec<String>>,
+        progress: Option<Progress>,
+    ) -> HFResult<CommitInfo> {
+        self.upload_folder_impl(RepoUploadFolderParams {
+            folder_path,
+            path_in_repo,
+            revision,
+            commit_message,
+            commit_description,
+            create_pr,
+            allow_patterns,
+            ignore_patterns,
+            delete_patterns,
+            progress,
+        })
+        .await
+    }
+
+    /// Delete a file from a repository.
+    ///
+    /// Convenience wrapper around [`HFRepository::create_commit`]. If `commit_message` is
+    /// omitted, a default `"Delete {path}"` message is used.
+    ///
+    /// # Parameters
+    ///
+    /// - `path_in_repo` (required): path of the file to delete.
+    /// - `revision`: branch to delete from.
+    /// - `commit_message`: commit message.
+    /// - `create_pr`: create a pull request instead of committing directly.
+    #[builder(finish_fn = send)]
+    pub async fn delete_file(
+        &self,
+        #[builder(into)] path_in_repo: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        create_pr: Option<bool>,
+    ) -> HFResult<CommitInfo> {
+        self.delete_file_impl(RepoDeleteFileParams {
+            path_in_repo,
+            revision,
+            commit_message,
+            create_pr,
+        })
+        .await
+    }
+
+    /// Delete all files under a repository path.
+    ///
+    /// The current tree is listed recursively and every file at or below `path_in_repo` is turned
+    /// into a delete operation. Directories disappear as a consequence of deleting their contents.
+    ///
+    /// # Parameters
+    ///
+    /// - `path_in_repo` (required): folder path within the repository.
+    /// - `revision`: branch to delete from.
+    /// - `commit_message`: commit message.
+    /// - `create_pr`: create a pull request instead of committing directly.
+    #[builder(finish_fn = send)]
+    pub async fn delete_folder(
+        &self,
+        #[builder(into)] path_in_repo: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        create_pr: Option<bool>,
+    ) -> HFResult<CommitInfo> {
+        self.delete_folder_impl(RepoDeleteFolderParams {
+            path_in_repo,
+            revision,
+            commit_message,
+            create_pr,
+        })
+        .await
+    }
+}
+
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFRepositorySync {
+    /// Blocking counterpart of [`HFRepository::create_commit`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn create_commit(
+        &self,
+        operations: Vec<CommitOperation>,
+        #[builder(into)] commit_message: String,
+        #[builder(into)] commit_description: Option<String>,
+        #[builder(into)] revision: Option<String>,
+        create_pr: Option<bool>,
+        #[builder(into)] parent_commit: Option<String>,
+        progress: Option<Progress>,
+    ) -> HFResult<CommitInfo> {
+        self.runtime.block_on(
+            self.inner
+                .create_commit()
+                .operations(operations)
+                .commit_message(commit_message)
+                .maybe_commit_description(commit_description)
+                .maybe_revision(revision)
+                .maybe_create_pr(create_pr)
+                .maybe_parent_commit(parent_commit)
+                .maybe_progress(progress)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFRepository::upload_file`]. See the async method for parameters
+    /// and behavior.
+    #[builder(finish_fn = send)]
+    pub fn upload_file(
+        &self,
+        source: AddSource,
+        #[builder(into)] path_in_repo: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(into)] commit_description: Option<String>,
+        create_pr: Option<bool>,
+        #[builder(into)] parent_commit: Option<String>,
+        progress: Option<Progress>,
+    ) -> HFResult<CommitInfo> {
+        self.runtime.block_on(
+            self.inner
+                .upload_file()
+                .source(source)
+                .path_in_repo(path_in_repo)
+                .maybe_revision(revision)
+                .maybe_commit_message(commit_message)
+                .maybe_commit_description(commit_description)
+                .maybe_create_pr(create_pr)
+                .maybe_parent_commit(parent_commit)
+                .maybe_progress(progress)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFRepository::upload_folder`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn upload_folder(
+        &self,
+        #[builder(into)] folder_path: PathBuf,
+        #[builder(into)] path_in_repo: Option<String>,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(into)] commit_description: Option<String>,
+        create_pr: Option<bool>,
+        allow_patterns: Option<Vec<String>>,
+        ignore_patterns: Option<Vec<String>>,
+        delete_patterns: Option<Vec<String>>,
+        progress: Option<Progress>,
+    ) -> HFResult<CommitInfo> {
+        self.runtime.block_on(
+            self.inner
+                .upload_folder()
+                .folder_path(folder_path)
+                .maybe_path_in_repo(path_in_repo)
+                .maybe_revision(revision)
+                .maybe_commit_message(commit_message)
+                .maybe_commit_description(commit_description)
+                .maybe_create_pr(create_pr)
+                .maybe_allow_patterns(allow_patterns)
+                .maybe_ignore_patterns(ignore_patterns)
+                .maybe_delete_patterns(delete_patterns)
+                .maybe_progress(progress)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFRepository::delete_file`]. See the async method for parameters
+    /// and behavior.
+    #[builder(finish_fn = send)]
+    pub fn delete_file(
+        &self,
+        #[builder(into)] path_in_repo: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        create_pr: Option<bool>,
+    ) -> HFResult<CommitInfo> {
+        self.runtime.block_on(
+            self.inner
+                .delete_file()
+                .path_in_repo(path_in_repo)
+                .maybe_revision(revision)
+                .maybe_commit_message(commit_message)
+                .maybe_create_pr(create_pr)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFRepository::delete_folder`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn delete_folder(
+        &self,
+        #[builder(into)] path_in_repo: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        create_pr: Option<bool>,
+    ) -> HFResult<CommitInfo> {
+        self.runtime.block_on(
+            self.inner
+                .delete_folder()
+                .path_in_repo(path_in_repo)
+                .maybe_revision(revision)
+                .maybe_commit_message(commit_message)
+                .maybe_create_pr(create_pr)
+                .send(),
+        )
     }
 }

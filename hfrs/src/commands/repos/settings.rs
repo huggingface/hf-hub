@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::repository::{GatedApprovalMode, GatedNotificationsMode, RepoUpdateSettingsParams};
+use hf_hub::repository::{GatedApprovalMode, GatedNotificationsMode};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -49,14 +49,14 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let gated_notifications_mode: Option<GatedNotificationsMode> =
         args.gated_notifications_mode.map(|m| m.parse()).transpose()?;
 
-    let params = RepoUpdateSettingsParams {
-        private: args.private,
-        gated,
-        description: args.description,
-        discussions_disabled: args.discussions_disabled,
-        gated_notifications_email: args.gated_notifications_email,
-        gated_notifications_mode,
-    };
-    repo.update_settings(params).await?;
+    repo.update_settings()
+        .maybe_private(args.private)
+        .maybe_gated(gated)
+        .maybe_description(args.description)
+        .maybe_discussions_disabled(args.discussions_disabled)
+        .maybe_gated_notifications_email(args.gated_notifications_email)
+        .maybe_gated_notifications_mode(gated_notifications_mode)
+        .send()
+        .await?;
     Ok(CommandResult::Silent)
 }

@@ -15,6 +15,8 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use bon::bon;
+
 use crate::client::HFClient;
 use crate::error::HFResult;
 use crate::repository::RepoType;
@@ -103,21 +105,26 @@ pub struct HFCacheInfo {
     pub warnings: Vec<String>,
 }
 
+#[bon]
 impl HFClient {
-    /// Scan the configured cache directory and return a summary of all cached
-    /// repositories, revisions, and files.
+    /// Scan the configured cache directory and return a summary of all cached repositories,
+    /// revisions, and files.
     ///
-    /// If the cache directory does not exist, returns an [`HFCacheInfo`] with
-    /// no repos and zero size — not an error. Unreadable blobs and dangling
-    /// snapshot pointers are reported via [`HFCacheInfo::warnings`] rather
-    /// than failing the scan.
+    /// If the cache directory does not exist, returns an [`HFCacheInfo`] with no repos and zero
+    /// size — not an error. Unreadable blobs and dangling snapshot pointers are reported via
+    /// [`HFCacheInfo::warnings`] rather than failing the scan.
+    #[builder(finish_fn = send)]
     pub async fn scan_cache(&self) -> HFResult<HFCacheInfo> {
         storage::scan_cache_dir(self.cache_dir()).await
     }
 }
 
-sync_api! {
-    impl HFClient -> HFClientSync {
-        fn scan_cache(&self) -> HFResult<HFCacheInfo>;
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFClientSync {
+    /// Blocking counterpart of [`HFClient::scan_cache`].
+    #[builder(finish_fn = send)]
+    pub fn scan_cache(&self) -> HFResult<HFCacheInfo> {
+        self.runtime.block_on(self.inner.scan_cache().send())
     }
 }

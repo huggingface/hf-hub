@@ -5,8 +5,6 @@
 //! Requires HF_TOKEN and the "blocking" + "spaces" features.
 //! Run: cargo run -p examples --features blocking --example blocking_spaces
 
-use hf_hub::repository::{CreateRepoParams, DeleteRepoParams};
-use hf_hub::spaces::{SpaceSecretDeleteParams, SpaceSecretParams, SpaceVariableDeleteParams, SpaceVariableParams};
 use hf_hub::{HFClientSync, RepoType};
 
 fn main() -> hf_hub::HFResult<()> {
@@ -15,51 +13,49 @@ fn main() -> hf_hub::HFResult<()> {
     // --- Read operations ---
 
     let reference_space = client.space("huggingface", "transformers-benchmarks");
-    let runtime = reference_space.runtime()?;
+    let runtime = reference_space.runtime().send()?;
     println!("Space runtime: {runtime:?}");
 
     // --- Write operations (creates real resources on the Hub) ---
 
-    let user = client.whoami()?;
+    let user = client.whoami().send()?;
     let unique = std::process::id();
     let space = client.space(&user.username, format!("blocking-example-space-{unique}"));
 
-    client.create_repo(
-        CreateRepoParams::builder()
-            .repo_id(space.repo_path())
-            .repo_type(RepoType::Space)
-            .private(true)
-            .space_sdk("static")
-            .exist_ok(true)
-            .build(),
-    )?;
+    client
+        .create_repo()
+        .repo_id(space.repo_path())
+        .repo_type(RepoType::Space)
+        .private(true)
+        .space_sdk("static")
+        .exist_ok(true)
+        .send()?;
     println!("\nCreated test space: {}", space.repo_path());
 
-    space.add_secret(SpaceSecretParams::builder().key("EXAMPLE_SECRET").value("secret-value").build())?;
+    space.add_secret().key("EXAMPLE_SECRET").value("secret-value").send()?;
     println!("Added secret: EXAMPLE_SECRET");
 
-    space.delete_secret(SpaceSecretDeleteParams::builder().key("EXAMPLE_SECRET").build())?;
+    space.delete_secret().key("EXAMPLE_SECRET").send()?;
     println!("Deleted secret: EXAMPLE_SECRET");
 
-    space.add_variable(SpaceVariableParams::builder().key("EXAMPLE_VAR").value("var-value").build())?;
+    space.add_variable().key("EXAMPLE_VAR").value("var-value").send()?;
     println!("Added variable: EXAMPLE_VAR");
 
-    space.delete_variable(SpaceVariableDeleteParams::builder().key("EXAMPLE_VAR").build())?;
+    space.delete_variable().key("EXAMPLE_VAR").send()?;
     println!("Deleted variable: EXAMPLE_VAR");
 
-    let paused = space.pause()?;
+    let paused = space.pause().send()?;
     println!("Paused space: {paused:?}");
 
-    let restarted = space.restart()?;
+    let restarted = space.restart().send()?;
     println!("Restarted space: {restarted:?}");
 
-    client.delete_repo(
-        DeleteRepoParams::builder()
-            .repo_id(space.repo_path())
-            .repo_type(RepoType::Space)
-            .missing_ok(true)
-            .build(),
-    )?;
+    client
+        .delete_repo()
+        .repo_id(space.repo_path())
+        .repo_type(RepoType::Space)
+        .missing_ok(true)
+        .send()?;
     println!("Cleaned up test space");
 
     Ok(())

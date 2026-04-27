@@ -11,10 +11,10 @@
 //! The same module also hosts branch and tag creation/deletion helpers because
 //! they operate on the same repository revision namespace.
 
+use bon::bon;
 use futures::TryStreamExt;
 use futures::stream::{Stream, StreamExt};
 use serde::Deserialize;
-use typed_builder::TypedBuilder;
 use url::Url;
 
 use super::HFRepository;
@@ -102,127 +102,41 @@ pub struct DiffEntry {
     pub status: Option<String>,
 }
 
-/// Parameters for listing commits on a repository revision.
-///
-/// Used with [`HFRepository::list_commits`].
-#[derive(Default, TypedBuilder)]
-pub struct RepoListCommitsParams {
-    /// Git revision (branch, tag, or commit SHA) to list commits from. Defaults to the main branch.
-    #[builder(default, setter(into, strip_option))]
-    pub revision: Option<String>,
-    /// Maximum number of commits to return.
-    #[builder(default, setter(strip_option))]
-    pub limit: Option<usize>,
-}
-
-/// Parameters for listing refs (branches, tags, ...) on a repository.
-///
-/// Used with [`HFRepository::list_refs`].
-#[derive(Default, TypedBuilder)]
-pub struct RepoListRefsParams {
-    /// Whether to include pull request refs in the listing.
-    #[builder(default)]
-    pub include_pull_requests: bool,
-}
-
-/// Parameters for fetching the Hub's non-raw compare payload between a revision
-/// and its parent.
-///
-/// Used with [`HFRepository::get_commit_diff`].
-#[derive(TypedBuilder)]
-pub struct RepoGetCommitDiffParams {
-    /// Revision to compare against the parent (branch, tag, or commit SHA).
-    #[builder(setter(into))]
-    pub compare: String,
-}
-
-/// Parameters for fetching the raw git diff between a revision and its parent.
-///
-/// Used with [`HFRepository::get_raw_diff`]
-/// and [`HFRepository::get_raw_diff_stream`].
-#[derive(TypedBuilder)]
-pub struct RepoGetRawDiffParams {
-    /// Revision to compare against the parent (branch, tag, or commit SHA).
-    #[builder(setter(into))]
-    pub compare: String,
-}
-
-/// Parameters for creating a branch on a repository.
-///
-/// Used with [`HFRepository::create_branch`].
-#[derive(TypedBuilder)]
-pub struct RepoCreateBranchParams {
-    /// Name of the branch to create.
-    #[builder(setter(into))]
-    pub branch: String,
-    /// Revision to branch from. Defaults to the current main branch head.
-    #[builder(default, setter(into, strip_option))]
-    pub revision: Option<String>,
-}
-
-/// Parameters for deleting a branch on a repository.
-///
-/// Used with [`HFRepository::delete_branch`].
-#[derive(TypedBuilder)]
-pub struct RepoDeleteBranchParams {
-    /// Name of the branch to delete.
-    #[builder(setter(into))]
-    pub branch: String,
-}
-
-/// Parameters for creating a tag on a repository.
-///
-/// Used with [`HFRepository::create_tag`].
-#[derive(TypedBuilder)]
-pub struct RepoCreateTagParams {
-    /// Name of the tag to create.
-    #[builder(setter(into))]
-    pub tag: String,
-    /// Revision to tag. Defaults to the current main branch head.
-    #[builder(default, setter(into, strip_option))]
-    pub revision: Option<String>,
-    /// Annotation message for the tag.
-    #[builder(default, setter(into, strip_option))]
-    pub message: Option<String>,
-}
-
-/// Parameters for deleting a tag on a repository.
-///
-/// Used with [`HFRepository::delete_tag`].
-#[derive(TypedBuilder)]
-pub struct RepoDeleteTagParams {
-    /// Name of the tag to delete.
-    #[builder(setter(into))]
-    pub tag: String,
-}
-
+#[bon]
 impl HFRepository {
     /// Stream commit history for the repository at a given revision.
     ///
-    /// Returns `HFResult<impl Stream<Item = HFResult<GitCommitInfo>>>`. Use `limit` to limit
-    /// the total number of commits yielded.
+    /// Returns `HFResult<impl Stream<Item = HFResult<GitCommitInfo>>>`. Pagination is automatic.
+    ///
+    /// # Parameters
+    ///
+    /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+    /// - `limit`: maximum number of commits yielded.
+    #[builder(finish_fn = send)]
     pub fn list_commits(
         &self,
-        params: RepoListCommitsParams,
+        #[builder(into)] revision: Option<String>,
+        limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<GitCommitInfo>> + '_> {
-        let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
+        let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url_str =
             format!("{}/commits/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
         let url = Url::parse(&url_str)?;
-        Ok(self.hf_client.paginate(url, vec![], params.limit))
+        Ok(self.hf_client.paginate(url, vec![], limit))
     }
 
-    /// Fetch all branches, tags, and optionally pull request refs for the
-    /// repository.
+    /// Fetch all branches, tags, and optionally pull-request refs for the repository.
     ///
-    /// Pull-request refs are omitted unless
-    /// [`RepoListRefsParams::include_pull_requests`] is enabled.
+    /// Endpoint: `GET /api/{repo_type}s/{repo_id}/refs`.
     ///
-    /// Endpoint: GET /api/{repo_type}s/{repo_id}/refs
-    pub async fn list_refs(&self, params: RepoListRefsParams) -> HFResult<GitRefs> {
+    /// # Parameters
+    ///
+    /// - `include_pull_requests` (default `false`): include pull-request refs in the listing.
+    #[builder(finish_fn = send)]
+    pub async fn list_refs(&self, #[builder(default)] include_pull_requests: bool) -> HFResult<GitRefs> {
         let url = format!("{}/refs", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()));
         let mut query: Vec<(&str, String)> = Vec::new();
-        if params.include_pull_requests {
+        if include_pull_requests {
             query.push(("include_prs", "1".into()));
         }
 
@@ -247,15 +161,18 @@ impl HFRepository {
 
     /// Fetch the Hub's non-raw compare payload as text.
     ///
-    /// This returns the response body from the standard `/compare/{compare}`
-    /// endpoint. Use [`HFRepository::get_raw_diff`] if you need raw git-style
-    /// diff text, or [`HFRepository::get_raw_diff_stream`] if you want parsed
-    /// [`HFFileDiff`] entries.
+    /// This returns the response body from the standard `/compare/{compare}` endpoint. Use
+    /// [`HFRepository::get_raw_diff`] for raw git-style diff text or
+    /// [`HFRepository::get_raw_diff_stream`] for parsed [`HFFileDiff`] entries.
     ///
-    /// Endpoint: GET /api/{repo_type}s/{repo_id}/compare/{compare}
-    pub async fn get_commit_diff(&self, params: RepoGetCommitDiffParams) -> HFResult<String> {
-        let url =
-            format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
+    /// Endpoint: `GET /api/{repo_type}s/{repo_id}/compare/{compare}`.
+    ///
+    /// # Parameters
+    ///
+    /// - `compare` (required): revision to compare against the parent (branch, tag, or SHA).
+    #[builder(finish_fn = send)]
+    pub async fn get_commit_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
+        let url = format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), compare);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -273,13 +190,17 @@ impl HFRepository {
 
     /// Fetch the raw diff payload between two revisions as a string.
     ///
-    /// Prefer [`HFRepository::get_raw_diff_stream`] when you want file-level
-    /// metadata without buffering the entire diff response in memory.
+    /// Prefer [`HFRepository::get_raw_diff_stream`] when you want file-level metadata without
+    /// buffering the entire diff response in memory.
     ///
-    /// Endpoint: GET /api/{repo_type}s/{repo_id}/compare/{compare}?raw=true
-    pub async fn get_raw_diff(&self, params: RepoGetRawDiffParams) -> HFResult<String> {
-        let url =
-            format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
+    /// Endpoint: `GET /api/{repo_type}s/{repo_id}/compare/{compare}?raw=true`.
+    ///
+    /// # Parameters
+    ///
+    /// - `compare` (required): revision to compare against the parent.
+    #[builder(finish_fn = send)]
+    pub async fn get_raw_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
+        let url = format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), compare);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -302,16 +223,20 @@ impl HFRepository {
 
     /// Fetch the raw diff between two revisions as a parsed stream of [`HFFileDiff`] entries.
     ///
-    /// Each item in the returned stream is one parsed diff entry. Parse errors
-    /// are logged as warnings and yielded as `Err` items.
+    /// Each item in the returned stream is one parsed diff entry. Parse errors are logged as
+    /// warnings and yielded as `Err` items.
     ///
-    /// Endpoint: GET /api/{repo_type}s/{repo_id}/compare/{compare}?raw=true
+    /// Endpoint: `GET /api/{repo_type}s/{repo_id}/compare/{compare}?raw=true`.
+    ///
+    /// # Parameters
+    ///
+    /// - `compare` (required): revision to compare against the parent.
+    #[builder(finish_fn = send)]
     pub async fn get_raw_diff_stream(
         &self,
-        params: RepoGetRawDiffParams,
+        #[builder(into)] compare: String,
     ) -> HFResult<impl Stream<Item = HFResult<HFFileDiff>> + '_> {
-        let url =
-            format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.compare);
+        let url = format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), compare);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -334,14 +259,24 @@ impl HFRepository {
     }
 
     /// Create a new branch, optionally starting from a specific revision.
-    /// Endpoint: POST /api/{repo_type}s/{repo_id}/branch/{branch}
-    pub async fn create_branch(&self, params: RepoCreateBranchParams) -> HFResult<()> {
-        let url =
-            format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.branch);
+    ///
+    /// Endpoint: `POST /api/{repo_type}s/{repo_id}/branch/{branch}`.
+    ///
+    /// # Parameters
+    ///
+    /// - `branch` (required): name of the branch to create.
+    /// - `revision`: revision to branch from. Defaults to the current main branch head.
+    #[builder(finish_fn = send)]
+    pub async fn create_branch(
+        &self,
+        #[builder(into)] branch: String,
+        #[builder(into)] revision: Option<String>,
+    ) -> HFResult<()> {
+        let url = format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), branch);
 
         let mut body = serde_json::Map::new();
-        if let Some(ref revision) = params.revision {
-            body.insert("startingPoint".into(), serde_json::Value::String(revision.clone()));
+        if let Some(ref rev) = revision {
+            body.insert("startingPoint".into(), serde_json::Value::String(rev.clone()));
         }
 
         let headers = self.hf_client.auth_headers();
@@ -363,10 +298,15 @@ impl HFRepository {
     }
 
     /// Delete a branch from the repository.
-    /// Endpoint: DELETE /api/{repo_type}s/{repo_id}/branch/{branch}
-    pub async fn delete_branch(&self, params: RepoDeleteBranchParams) -> HFResult<()> {
-        let url =
-            format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.branch);
+    ///
+    /// Endpoint: `DELETE /api/{repo_type}s/{repo_id}/branch/{branch}`.
+    ///
+    /// # Parameters
+    ///
+    /// - `branch` (required): name of the branch to delete.
+    #[builder(finish_fn = send)]
+    pub async fn delete_branch(&self, #[builder(into)] branch: String) -> HFResult<()> {
+        let url = format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), branch);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -382,14 +322,27 @@ impl HFRepository {
     }
 
     /// Create a lightweight or annotated tag, optionally at a specific revision.
-    /// Endpoint: POST /api/{repo_type}s/{repo_id}/tag/{revision}
-    pub async fn create_tag(&self, params: RepoCreateTagParams) -> HFResult<()> {
-        let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
+    ///
+    /// Endpoint: `POST /api/{repo_type}s/{repo_id}/tag/{revision}`.
+    ///
+    /// # Parameters
+    ///
+    /// - `tag` (required): name of the tag to create.
+    /// - `revision`: revision to tag. Defaults to the current main branch head.
+    /// - `message`: annotation message for the tag.
+    #[builder(finish_fn = send)]
+    pub async fn create_tag(
+        &self,
+        #[builder(into)] tag: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] message: Option<String>,
+    ) -> HFResult<()> {
+        let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = format!("{}/tag/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
 
-        let mut body = serde_json::json!({ "tag": params.tag });
-        if let Some(ref message) = params.message {
-            body["message"] = serde_json::Value::String(message.clone());
+        let mut body = serde_json::json!({ "tag": tag });
+        if let Some(ref m) = message {
+            body["message"] = serde_json::Value::String(m.clone());
         }
 
         let headers = self.hf_client.auth_headers();
@@ -411,9 +364,15 @@ impl HFRepository {
     }
 
     /// Delete a tag from the repository.
-    /// Endpoint: DELETE /api/{repo_type}s/{repo_id}/tag/{tag}
-    pub async fn delete_tag(&self, params: RepoDeleteTagParams) -> HFResult<()> {
-        let url = format!("{}/tag/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), params.tag);
+    ///
+    /// Endpoint: `DELETE /api/{repo_type}s/{repo_id}/tag/{tag}`.
+    ///
+    /// # Parameters
+    ///
+    /// - `tag` (required): name of the tag to delete.
+    #[builder(finish_fn = send)]
+    pub async fn delete_tag(&self, #[builder(into)] tag: String) -> HFResult<()> {
+        let url = format!("{}/tag/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), tag);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -429,26 +388,107 @@ impl HFRepository {
     }
 }
 
-sync_api! {
-    impl HFRepository -> HFRepositorySync {
-        fn list_refs(&self, params: RepoListRefsParams) -> HFResult<GitRefs>;
-        fn get_commit_diff(&self, params: RepoGetCommitDiffParams) -> HFResult<String>;
-        fn get_raw_diff(&self, params: RepoGetRawDiffParams) -> HFResult<String>;
-        fn create_branch(&self, params: RepoCreateBranchParams) -> HFResult<()>;
-        fn delete_branch(&self, params: RepoDeleteBranchParams) -> HFResult<()>;
-        fn create_tag(&self, params: RepoCreateTagParams) -> HFResult<()>;
-        fn delete_tag(&self, params: RepoDeleteTagParams) -> HFResult<()>;
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFRepositorySync {
+    /// Blocking counterpart of [`HFRepository::list_commits`]. Collects the stream into a
+    /// `Vec<GitCommitInfo>`.
+    #[builder(finish_fn = send)]
+    pub fn list_commits(
+        &self,
+        #[builder(into)] revision: Option<String>,
+        limit: Option<usize>,
+    ) -> HFResult<Vec<GitCommitInfo>> {
+        self.runtime.block_on(async move {
+            let stream = self.inner.list_commits().maybe_revision(revision).maybe_limit(limit).send()?;
+            futures::pin_mut!(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item?);
+            }
+            Ok(items)
+        })
     }
-}
 
-sync_api_stream! {
-    impl HFRepository -> HFRepositorySync {
-        fn list_commits(&self, params: RepoListCommitsParams) -> GitCommitInfo;
+    /// Blocking counterpart of [`HFRepository::list_refs`]. See the async method for parameters
+    /// and behavior.
+    #[builder(finish_fn = send)]
+    pub fn list_refs(&self, #[builder(default)] include_pull_requests: bool) -> HFResult<GitRefs> {
+        self.runtime
+            .block_on(self.inner.list_refs().include_pull_requests(include_pull_requests).send())
     }
-}
 
-sync_api_async_stream! {
-    impl HFRepository -> HFRepositorySync {
-        fn get_raw_diff_stream(&self, params: RepoGetRawDiffParams) -> HFFileDiff;
+    /// Blocking counterpart of [`HFRepository::get_commit_diff`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn get_commit_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
+        self.runtime.block_on(self.inner.get_commit_diff().compare(compare).send())
+    }
+
+    /// Blocking counterpart of [`HFRepository::get_raw_diff`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn get_raw_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
+        self.runtime.block_on(self.inner.get_raw_diff().compare(compare).send())
+    }
+
+    /// Blocking counterpart of [`HFRepository::get_raw_diff_stream`]. Collects the parsed stream
+    /// into a `Vec<HFFileDiff>`.
+    #[builder(finish_fn = send)]
+    pub fn get_raw_diff_stream(&self, #[builder(into)] compare: String) -> HFResult<Vec<HFFileDiff>> {
+        self.runtime.block_on(async move {
+            let stream = self.inner.get_raw_diff_stream().compare(compare).send().await?;
+            futures::pin_mut!(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item?);
+            }
+            Ok(items)
+        })
+    }
+
+    /// Blocking counterpart of [`HFRepository::create_branch`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn create_branch(
+        &self,
+        #[builder(into)] branch: String,
+        #[builder(into)] revision: Option<String>,
+    ) -> HFResult<()> {
+        self.runtime
+            .block_on(self.inner.create_branch().branch(branch).maybe_revision(revision).send())
+    }
+
+    /// Blocking counterpart of [`HFRepository::delete_branch`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn delete_branch(&self, #[builder(into)] branch: String) -> HFResult<()> {
+        self.runtime.block_on(self.inner.delete_branch().branch(branch).send())
+    }
+
+    /// Blocking counterpart of [`HFRepository::create_tag`]. See the async method for parameters
+    /// and behavior.
+    #[builder(finish_fn = send)]
+    pub fn create_tag(
+        &self,
+        #[builder(into)] tag: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] message: Option<String>,
+    ) -> HFResult<()> {
+        self.runtime.block_on(
+            self.inner
+                .create_tag()
+                .tag(tag)
+                .maybe_revision(revision)
+                .maybe_message(message)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFRepository::delete_tag`]. See the async method for parameters
+    /// and behavior.
+    #[builder(finish_fn = send)]
+    pub fn delete_tag(&self, #[builder(into)] tag: String) -> HFResult<()> {
+        self.runtime.block_on(self.inner.delete_tag().tag(tag).send())
     }
 }
