@@ -1,5 +1,4 @@
 use std::fmt;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::client::HFClient;
@@ -52,6 +51,14 @@ pub struct HFRepositorySync {
 pub struct HFSpaceSync {
     pub(crate) repo_sync: Arc<HFRepositorySync>,
     pub(crate) inner: Arc<HFSpace>,
+}
+
+impl std::ops::Deref for HFSpaceSync {
+    type Target = HFRepositorySync;
+
+    fn deref(&self) -> &Self::Target {
+        &self.repo_sync
+    }
 }
 
 /// Synchronous/blocking counterpart to [`crate::buckets::HFBucket`].
@@ -157,14 +164,6 @@ impl HFClientSync {
     }
 }
 
-impl Deref for HFClientSync {
-    type Target = HFClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
 impl HFRepositorySync {
     /// Creates a blocking repository handle.
     ///
@@ -175,13 +174,27 @@ impl HFRepositorySync {
             runtime: client.runtime.clone(),
         }
     }
-}
 
-impl Deref for HFRepositorySync {
-    type Target = HFRepository;
+    /// The repository owner (user or organization name).
+    pub fn owner(&self) -> &str {
+        self.inner.owner()
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+    /// The repository name (without owner prefix).
+    pub fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    /// The full `"owner/name"` identifier used in Hub API calls.
+    ///
+    /// If no owner is set, returns just the name (for repos using short-form IDs like `"gpt2"`).
+    pub fn repo_path(&self) -> String {
+        self.inner.repo_path()
+    }
+
+    /// The type of this repository (model, dataset, or space).
+    pub fn repo_type(&self) -> RepoType {
+        self.inner.repo_type()
     }
 }
 
@@ -205,14 +218,6 @@ impl HFSpaceSync {
     }
 }
 
-impl Deref for HFSpaceSync {
-    type Target = HFRepositorySync;
-
-    fn deref(&self) -> &Self::Target {
-        &self.repo_sync
-    }
-}
-
 impl HFBucketSync {
     /// Creates a blocking bucket handle.
     ///
@@ -222,14 +227,6 @@ impl HFBucketSync {
             inner: Arc::new(crate::buckets::HFBucket::new(client.inner.clone(), owner, name)),
             runtime: client.runtime.clone(),
         }
-    }
-}
-
-impl Deref for HFBucketSync {
-    type Target = crate::buckets::HFBucket;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
     }
 }
 

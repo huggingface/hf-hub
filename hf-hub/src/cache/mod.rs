@@ -113,7 +113,7 @@ impl HFClient {
     /// If the cache directory does not exist, returns an [`HFCacheInfo`] with no repos and zero
     /// size — not an error. Unreadable blobs and dangling snapshot pointers are reported via
     /// [`HFCacheInfo::warnings`] rather than failing the scan.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn scan_cache(&self) -> HFResult<HFCacheInfo> {
         storage::scan_cache_dir(self.cache_dir()).await
     }
@@ -123,7 +123,7 @@ impl HFClient {
 #[bon]
 impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::scan_cache`].
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn scan_cache(&self) -> HFResult<HFCacheInfo> {
         self.runtime.block_on(self.inner.scan_cache().send())
     }

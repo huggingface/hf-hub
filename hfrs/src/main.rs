@@ -247,6 +247,7 @@ fn format_hf_error(err: &HFError) -> String {
             format!("Failed to parse diff: {e}")
         },
         HFError::Other(msg) => msg.clone(),
+        _ => err.to_string(),
     }
 }
 

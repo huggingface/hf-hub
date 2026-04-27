@@ -147,7 +147,9 @@ Never expose it publicly.
 
 > **Agents MUST update this section when adding new crates or large modules.**
 
-Types and API methods live together per component. Each component is either a single file (for smaller components) or a folder (when the impl block needs splitting). Public types are reached via `hf_hub::<component>::…`; no `hf_hub::types` module exists.
+Types and API methods live together per component. Each component is either a single file (for smaller components) or a folder (when the impl block needs splitting). The user-facing types are re-exported flat at `hf_hub::<component>::…` (e.g. `hf_hub::repository::CommitOperation`); no `hf_hub::types` module exists.
+
+Submodules inside a component folder are declared `pub mod` rather than `mod`. This makes the bon-generated builder structs (e.g. `HFRepositoryListCommitsBuilder` from `repository/commits.rs`) reachable through their canonical path so rustdoc renders them. The user-visible types still appear flat at `hf_hub::<component>::…` via the existing `pub use` re-exports — `pub mod` just adds the per-submodule path as an additional location where rustdoc documents items.
 
 ```txt
 hf-hub/

@@ -10,7 +10,12 @@ use thiserror::Error;
 /// request id, error code, and server message come from the Hub's
 /// `X-Request-Id`, `X-Error-Code`, and `X-Error-Message` headers when
 /// present; `server_message` falls back to the JSON body's `"error"` field.
+///
+/// This struct is `#[non_exhaustive]`: external crates cannot construct it
+/// directly and must use `..` when destructuring, so new fields can be added
+/// without a SemVer break.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct HttpErrorContext {
     /// HTTP status code returned by the server.
     pub status: reqwest::StatusCode,
@@ -77,7 +82,11 @@ fn format_http_suffix(ctx: &HttpErrorContext) -> String {
 /// authentication, missing repos/files/revisions, forbidden access, and rate
 /// limiting. Lower-level transport failures use [`HFError::Request`], while
 /// unmapped HTTP responses use [`HFError::Http`].
+///
+/// This enum is `#[non_exhaustive]`: external matches must include a wildcard
+/// arm so new variants can be added without a SemVer break.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum HFError {
     /// Non-success HTTP response that was not mapped to a more specific
     /// variant.

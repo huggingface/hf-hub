@@ -17,7 +17,7 @@ impl HFRepository {
     /// # Parameters
     ///
     /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn list_files(&self, #[builder(into)] revision: Option<String>) -> HFResult<Vec<String>> {
         let stream = self.list_tree().maybe_revision(revision).recursive(true).send()?;
         futures::pin_mut!(stream);
@@ -46,7 +46,7 @@ impl HFRepository {
     /// - `recursive` (default `false`): traverse subdirectories.
     /// - `expand` (default `false`): include per-file metadata such as size, LFS info, and last-commit summaries.
     /// - `limit`: cap the total number of entries yielded.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_tree(
         &self,
         #[builder(into)] revision: Option<String>,
@@ -80,7 +80,7 @@ impl HFRepository {
     ///
     /// - `paths` (required): paths in the repository to fetch info for.
     /// - `revision`: Git revision. Defaults to the main branch.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn get_paths_info(
         &self,
         paths: Vec<String>,
@@ -122,7 +122,7 @@ impl HFRepository {
     ///
     /// - `filepath` (required): path of the file to inspect within the repository.
     /// - `revision`: Git revision. Defaults to the main branch.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn get_file_metadata(
         &self,
         #[builder(into)] filepath: String,
@@ -173,14 +173,14 @@ impl HFRepository {
 impl crate::blocking::HFRepositorySync {
     /// Blocking counterpart of [`HFRepository::list_files`]. See the async method for parameters
     /// and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_files(&self, #[builder(into)] revision: Option<String>) -> HFResult<Vec<String>> {
         self.runtime.block_on(self.inner.list_files().maybe_revision(revision).send())
     }
 
     /// Blocking counterpart of [`HFRepository::list_tree`]. Returns the collected stream as a
     /// `Vec<RepoTreeEntry>`.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_tree(
         &self,
         #[builder(into)] revision: Option<String>,
@@ -208,7 +208,7 @@ impl crate::blocking::HFRepositorySync {
 
     /// Blocking counterpart of [`HFRepository::get_paths_info`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn get_paths_info(
         &self,
         paths: Vec<String>,
@@ -220,7 +220,7 @@ impl crate::blocking::HFRepositorySync {
 
     /// Blocking counterpart of [`HFRepository::get_file_metadata`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn get_file_metadata(
         &self,
         #[builder(into)] filepath: String,

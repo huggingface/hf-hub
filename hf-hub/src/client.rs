@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,6 +35,19 @@ impl Clone for HFClient {
         Self {
             inner: Arc::clone(&self.inner),
         }
+    }
+}
+
+impl fmt::Debug for HFClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut s = f.debug_struct("HFClient");
+        s.field("endpoint", &self.inner.endpoint);
+        s.field("token_set", &self.inner.token.is_some());
+        s.field("cache_enabled", &self.inner.cache_enabled);
+        if self.inner.cache_enabled {
+            s.field("cache_dir", &self.inner.cache_dir);
+        }
+        s.finish()
     }
 }
 

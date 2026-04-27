@@ -23,6 +23,7 @@ use hf_hub::repository::AddSource;
 /// the handler was constructed, plus an event counter. Thread-safe — uses
 /// an atomic counter so concurrent invocations produce a coherent sequence
 /// number.
+#[derive(Debug)]
 struct LoggingProgressHandler {
     started: Instant,
     seq: AtomicU64,

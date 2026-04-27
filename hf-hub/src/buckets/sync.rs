@@ -804,7 +804,7 @@ impl HFBucket {
     /// - `exclude`: glob-style exclude patterns. Exclusions take precedence over inclusions.
     /// - `verbose`: include skip operations in the returned plan.
     /// - `progress`: progress handler for upload/download tracking.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn sync(
         &self,
         #[builder(into)] local_path: PathBuf,
@@ -843,7 +843,7 @@ impl HFBucket {
 impl crate::blocking::HFBucketSync {
     /// Blocking counterpart of [`HFBucket::sync`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn sync(
         &self,
         #[builder(into)] local_path: PathBuf,

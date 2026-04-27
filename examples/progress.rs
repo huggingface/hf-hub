@@ -10,6 +10,7 @@ use std::sync::Arc;
 use hf_hub::HFClient;
 use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
 
+#[derive(Debug)]
 struct PrintProgressHandler;
 
 impl ProgressHandler for PrintProgressHandler {

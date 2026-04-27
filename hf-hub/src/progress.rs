@@ -48,6 +48,7 @@
 //!
 //! use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler, UploadEvent};
 //!
+//! #[derive(Debug)]
 //! struct PrintHandler;
 //!
 //! impl ProgressHandler for PrintHandler {
@@ -137,6 +138,7 @@ use std::sync::Arc;
 ///
 /// use hf_hub::progress::{ProgressEvent, ProgressHandler, UploadEvent};
 ///
+/// #[derive(Debug)]
 /// struct ByteCounter {
 ///     bytes: AtomicU64,
 /// }
@@ -152,7 +154,7 @@ use std::sync::Arc;
 ///     }
 /// }
 /// ```
-pub trait ProgressHandler: Send + Sync {
+pub trait ProgressHandler: Send + Sync + std::fmt::Debug {
     /// Invoked by the library for each progress event.
     ///
     /// The `event` reference is only valid for the duration of the call — clone
@@ -175,6 +177,7 @@ pub trait ProgressHandler: Send + Sync {
 ///
 /// use hf_hub::progress::{Progress, ProgressEvent, ProgressHandler};
 ///
+/// #[derive(Debug)]
 /// struct Noop;
 /// impl ProgressHandler for Noop {
 ///     fn on_progress(&self, _event: &ProgressEvent) {}
@@ -472,6 +475,7 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug)]
     struct RecordingHandler {
         events: Mutex<Vec<ProgressEvent>>,
     }

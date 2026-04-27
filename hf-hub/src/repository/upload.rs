@@ -683,7 +683,7 @@ impl HFRepository {
     /// - `create_pr`: create a pull request instead of committing directly.
     /// - `parent_commit`: expected parent commit SHA. Fails if the branch head moved past it.
     /// - `progress`: optional progress handler.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn create_commit(
         &self,
         operations: Vec<CommitOperation>,
@@ -718,7 +718,7 @@ impl HFRepository {
     /// - `revision`: branch to upload to.
     /// - `commit_message`, `commit_description`, `create_pr`, `parent_commit`, `progress`: same as
     ///   [`HFRepository::create_commit`].
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_file(
         &self,
         source: AddSource,
@@ -757,7 +757,7 @@ impl HFRepository {
     /// - `allow_patterns`, `ignore_patterns`: glob filters for local files.
     /// - `delete_patterns`: glob patterns for remote files to delete in the same commit.
     /// - `progress`: optional progress handler.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_folder(
         &self,
         #[builder(into)] folder_path: PathBuf,
@@ -797,7 +797,7 @@ impl HFRepository {
     /// - `revision`: branch to delete from.
     /// - `commit_message`: commit message.
     /// - `create_pr`: create a pull request instead of committing directly.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn delete_file(
         &self,
         #[builder(into)] path_in_repo: String,
@@ -825,7 +825,7 @@ impl HFRepository {
     /// - `revision`: branch to delete from.
     /// - `commit_message`: commit message.
     /// - `create_pr`: create a pull request instead of committing directly.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn delete_folder(
         &self,
         #[builder(into)] path_in_repo: String,
@@ -848,7 +848,7 @@ impl HFRepository {
 impl crate::blocking::HFRepositorySync {
     /// Blocking counterpart of [`HFRepository::create_commit`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_commit(
         &self,
         operations: Vec<CommitOperation>,
@@ -875,7 +875,7 @@ impl crate::blocking::HFRepositorySync {
 
     /// Blocking counterpart of [`HFRepository::upload_file`]. See the async method for parameters
     /// and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn upload_file(
         &self,
         source: AddSource,
@@ -904,7 +904,7 @@ impl crate::blocking::HFRepositorySync {
 
     /// Blocking counterpart of [`HFRepository::upload_folder`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn upload_folder(
         &self,
         #[builder(into)] folder_path: PathBuf,
@@ -937,7 +937,7 @@ impl crate::blocking::HFRepositorySync {
 
     /// Blocking counterpart of [`HFRepository::delete_file`]. See the async method for parameters
     /// and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_file(
         &self,
         #[builder(into)] path_in_repo: String,
@@ -958,7 +958,7 @@ impl crate::blocking::HFRepositorySync {
 
     /// Blocking counterpart of [`HFRepository::delete_folder`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_folder(
         &self,
         #[builder(into)] path_in_repo: String,

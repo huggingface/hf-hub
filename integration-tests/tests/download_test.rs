@@ -385,6 +385,7 @@ async fn test_download_stream_range_content_matches_full_download() {
 
 // --- Progress tracking tests ---
 
+#[derive(Debug)]
 struct RecordingHandler {
     events: Mutex<Vec<ProgressEvent>>,
 }

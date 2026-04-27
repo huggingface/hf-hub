@@ -916,11 +916,11 @@ impl HFRepository {
     /// - `force_download`: re-download the file even if a cached copy exists.
     /// - `local_files_only`: only return the file if cached locally; never make a network request.
     /// - `progress`: optional progress handler.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file(
         &self,
         #[builder(into)] filename: String,
-        local_dir: Option<PathBuf>,
+        #[builder(into)] local_dir: Option<PathBuf>,
         #[builder(into)] revision: Option<String>,
         force_download: Option<bool>,
         local_files_only: Option<bool>,
@@ -949,7 +949,7 @@ impl HFRepository {
     /// - `filename` (required): path of the file to stream within the repository.
     /// - `revision`: Git revision. Defaults to the main branch.
     /// - `range`: byte range to request (HTTP Range header).
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file_stream(
         &self,
         #[builder(into)] filename: String,
@@ -970,7 +970,7 @@ impl HFRepository {
     /// This is a convenience wrapper around
     /// [`download_file_stream`](Self::download_file_stream) that collects the entire stream into
     /// a single buffer. When `range` is set, only the specified byte range is fetched.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file_to_bytes(
         &self,
         #[builder(into)] filename: String,
@@ -1001,13 +1001,13 @@ impl HFRepository {
     /// - `local_files_only`: resolve only from the local cache.
     /// - `max_workers`: maximum concurrent file downloads (default 8).
     /// - `progress`: optional progress handler.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn snapshot_download(
         &self,
         #[builder(into)] revision: Option<String>,
         allow_patterns: Option<Vec<String>>,
         ignore_patterns: Option<Vec<String>>,
-        local_dir: Option<PathBuf>,
+        #[builder(into)] local_dir: Option<PathBuf>,
         force_download: Option<bool>,
         local_files_only: Option<bool>,
         max_workers: Option<usize>,
@@ -1032,11 +1032,11 @@ impl HFRepository {
 impl crate::blocking::HFRepositorySync {
     /// Blocking counterpart of [`HFRepository::download_file`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn download_file(
         &self,
         #[builder(into)] filename: String,
-        local_dir: Option<PathBuf>,
+        #[builder(into)] local_dir: Option<PathBuf>,
         #[builder(into)] revision: Option<String>,
         force_download: Option<bool>,
         local_files_only: Option<bool>,
@@ -1057,7 +1057,7 @@ impl crate::blocking::HFRepositorySync {
 
     /// Blocking counterpart of [`HFRepository::download_file_to_bytes`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn download_file_to_bytes(
         &self,
         #[builder(into)] filename: String,
@@ -1076,13 +1076,13 @@ impl crate::blocking::HFRepositorySync {
 
     /// Blocking counterpart of [`HFRepository::snapshot_download`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn snapshot_download(
         &self,
         #[builder(into)] revision: Option<String>,
         allow_patterns: Option<Vec<String>>,
         ignore_patterns: Option<Vec<String>>,
-        local_dir: Option<PathBuf>,
+        #[builder(into)] local_dir: Option<PathBuf>,
         force_download: Option<bool>,
         local_files_only: Option<bool>,
         max_workers: Option<usize>,

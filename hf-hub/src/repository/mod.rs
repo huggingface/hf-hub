@@ -1,11 +1,11 @@
 //! Repository handles, metadata types, and list/create/delete/move APIs.
 
-mod commits;
-mod diff;
-mod download;
-mod files;
-mod listing;
-mod upload;
+pub mod commits;
+pub mod diff;
+pub mod download;
+pub mod files;
+pub mod listing;
+pub mod upload;
 
 use std::fmt;
 use std::str::FromStr;
@@ -334,7 +334,7 @@ impl HFClient {
     /// - `fetch_config`: include the model configuration in the response.
     /// - `limit`: cap on the total number of items yielded by the stream. When less than 1000, also used as the server
     ///   page size.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_models(
         &self,
         #[builder(into)] search: Option<String>,
@@ -393,7 +393,7 @@ impl HFClient {
     /// - `full`: fetch the full dataset information including all fields.
     /// - `limit`: cap on the total number of items yielded by the stream. When less than 1000, also used as the server
     ///   page size.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_datasets(
         &self,
         #[builder(into)] search: Option<String>,
@@ -438,7 +438,7 @@ impl HFClient {
     /// - `full`: fetch the full Space information including all fields.
     /// - `limit`: cap on the total number of items yielded by the stream. When less than 1000, also used as the server
     ///   page size.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_spaces(
         &self,
         #[builder(into)] search: Option<String>,
@@ -482,7 +482,7 @@ impl HFClient {
     /// - `private`: whether the repository should be private.
     /// - `exist_ok` (default `false`): if `true`, do not error when the repository already exists.
     /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`).
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn create_repo(
         &self,
         #[builder(into)] repo_id: String,
@@ -536,7 +536,7 @@ impl HFClient {
     /// - `repo_id` (required): repository ID in `"owner/name"` or `"name"` format.
     /// - `repo_type`: type of repository.
     /// - `missing_ok` (default `false`): if `true`, do not error when the repository does not exist.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn delete_repo(
         &self,
         #[builder(into)] repo_id: String,
@@ -577,7 +577,7 @@ impl HFClient {
     /// - `from_id` (required): current repository ID in `"owner/name"` format.
     /// - `to_id` (required): new repository ID in `"owner/name"` format.
     /// - `repo_type`: type of repository to move.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn move_repo(
         &self,
         #[builder(into)] from_id: String,
@@ -715,7 +715,7 @@ impl HFRepository {
     /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
     /// - `expand`: list of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
     ///   the listed properties (plus `_id` and `id`) are returned.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn info(
         &self,
         #[builder(into)] revision: Option<String>,
@@ -732,7 +732,7 @@ impl HFRepository {
     }
 
     /// Return `true` if the repository exists and is accessible with the current credentials.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn exists(&self) -> HFResult<bool> {
         let url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
         let headers = self.hf_client.auth_headers();
@@ -754,7 +754,7 @@ impl HFRepository {
     /// # Parameters
     ///
     /// - `revision` (required): Git revision to check for existence.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn revision_exists(&self, #[builder(into)] revision: String) -> HFResult<bool> {
         let url = format!("{}/revision/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
         let headers = self.hf_client.auth_headers();
@@ -777,7 +777,7 @@ impl HFRepository {
     ///
     /// - `filename` (required): path of the file to check within the repository.
     /// - `revision`: Git revision to check. Defaults to the main branch.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn file_exists(
         &self,
         #[builder(into)] filename: String,
@@ -821,7 +821,7 @@ impl HFRepository {
     /// - `discussions_disabled`: whether discussions are disabled on this repository.
     /// - `gated_notifications_email`: email address to receive gated-access request notifications.
     /// - `gated_notifications_mode`: when to send gated-access notifications (e.g. `bulk`, `real-time`).
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn update_settings(
         &self,
         private: Option<bool>,
@@ -891,7 +891,7 @@ fn split_repo_id(repo_id: &str) -> (Option<&str>, &str) {
 impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::list_models`]. Returns the collected stream as a
     /// `Vec<ModelInfo>`.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_models(
         &self,
         #[builder(into)] search: Option<String>,
@@ -930,7 +930,7 @@ impl crate::blocking::HFClientSync {
 
     /// Blocking counterpart of [`HFClient::list_datasets`]. Returns the collected stream as a
     /// `Vec<DatasetInfo>`.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_datasets(
         &self,
         #[builder(into)] search: Option<String>,
@@ -963,7 +963,7 @@ impl crate::blocking::HFClientSync {
 
     /// Blocking counterpart of [`HFClient::list_spaces`]. Returns the collected stream as a
     /// `Vec<SpaceInfo>`.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_spaces(
         &self,
         #[builder(into)] search: Option<String>,
@@ -996,7 +996,7 @@ impl crate::blocking::HFClientSync {
 
     /// Blocking counterpart of [`HFClient::create_repo`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_repo(
         &self,
         #[builder(into)] repo_id: String,
@@ -1019,7 +1019,7 @@ impl crate::blocking::HFClientSync {
 
     /// Blocking counterpart of [`HFClient::delete_repo`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_repo(
         &self,
         #[builder(into)] repo_id: String,
@@ -1038,7 +1038,7 @@ impl crate::blocking::HFClientSync {
 
     /// Blocking counterpart of [`HFClient::move_repo`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn move_repo(
         &self,
         #[builder(into)] from_id: String,
@@ -1061,28 +1061,28 @@ impl crate::blocking::HFClientSync {
 impl crate::blocking::HFRepositorySync {
     /// Blocking counterpart of [`HFRepository::info`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn info(&self, #[builder(into)] revision: Option<String>, expand: Option<Vec<String>>) -> HFResult<RepoInfo> {
         self.runtime
             .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
     }
 
     /// Blocking counterpart of [`HFRepository::exists`].
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn exists(&self) -> HFResult<bool> {
         self.runtime.block_on(self.inner.exists().send())
     }
 
     /// Blocking counterpart of [`HFRepository::revision_exists`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn revision_exists(&self, #[builder(into)] revision: String) -> HFResult<bool> {
         self.runtime.block_on(self.inner.revision_exists().revision(revision).send())
     }
 
     /// Blocking counterpart of [`HFRepository::file_exists`]. See the async method for parameters
     /// and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn file_exists(
         &self,
         #[builder(into)] filename: String,
@@ -1094,7 +1094,7 @@ impl crate::blocking::HFRepositorySync {
 
     /// Blocking counterpart of [`HFRepository::update_settings`]. See the async method for
     /// parameters and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn update_settings(
         &self,
         private: Option<bool>,

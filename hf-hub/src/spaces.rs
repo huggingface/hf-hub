@@ -116,7 +116,7 @@ impl HFSpace {
     /// # let _ = runtime;
     /// # Ok(()) }
     /// ```
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn runtime(&self) -> HFResult<SpaceRuntime> {
         let url = format!("{}/api/spaces/{}/runtime", self.hf_client.endpoint(), self.repo_path());
         let headers = self.hf_client.auth_headers();
@@ -139,7 +139,7 @@ impl HFSpace {
     ///
     /// - `hardware` (required): hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
     /// - `sleep_time`: number of seconds of inactivity before the Space is put to sleep. `0` means never sleep.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn request_hardware(
         &self,
         #[builder(into)] hardware: String,
@@ -174,7 +174,7 @@ impl HFSpace {
     /// # Parameters
     ///
     /// - `sleep_time` (required): seconds of inactivity before the Space is put to sleep. `0` means never sleep.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn set_sleep_time(&self, sleep_time: u64) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/sleeptime", self.hf_client.endpoint(), self.repo_path());
         let body = serde_json::json!({ "seconds": sleep_time });
@@ -197,7 +197,7 @@ impl HFSpace {
     /// Pause the Space, stopping it from consuming compute resources.
     ///
     /// Endpoint: `POST /api/spaces/{repo_id}/pause`.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn pause(&self) -> HFResult<SpaceRuntime> {
         let url = format!("{}/api/spaces/{}/pause", self.hf_client.endpoint(), self.repo_path());
         let headers = self.hf_client.auth_headers();
@@ -215,7 +215,7 @@ impl HFSpace {
     /// Restart a paused or errored Space.
     ///
     /// Endpoint: `POST /api/spaces/{repo_id}/restart`.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn restart(&self) -> HFResult<SpaceRuntime> {
         let url = format!("{}/api/spaces/{}/restart", self.hf_client.endpoint(), self.repo_path());
         let headers = self.hf_client.auth_headers();
@@ -239,7 +239,7 @@ impl HFSpace {
     /// - `key` (required): secret key name.
     /// - `value` (required): secret value.
     /// - `description`: human-readable description of the secret.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn add_secret(
         &self,
         #[builder(into)] key: String,
@@ -274,7 +274,7 @@ impl HFSpace {
     /// # Parameters
     ///
     /// - `key` (required): secret key name to delete.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn delete_secret(&self, #[builder(into)] key: String) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/secrets", self.hf_client.endpoint(), self.repo_path());
         let body = serde_json::json!({ "key": key });
@@ -303,7 +303,7 @@ impl HFSpace {
     /// - `key` (required): variable key name.
     /// - `value` (required): variable value.
     /// - `description`: human-readable description of the variable.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn add_variable(
         &self,
         #[builder(into)] key: String,
@@ -338,7 +338,7 @@ impl HFSpace {
     /// # Parameters
     ///
     /// - `key` (required): variable key name to delete.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn delete_variable(&self, #[builder(into)] key: String) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/variables", self.hf_client.endpoint(), self.repo_path());
         let body = serde_json::json!({ "key": key });
@@ -373,7 +373,7 @@ impl HFSpace {
     /// - `secrets`: secrets to set on the duplicated Space (list of JSON objects with `key` and `value`).
     /// - `variables`: environment variables to set on the duplicated Space (list of JSON objects with `key` and
     ///   `value`).
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn duplicate(
         &self,
         #[builder(into)] to_id: Option<String>,
@@ -458,14 +458,14 @@ impl Deref for HFSpace {
 impl crate::blocking::HFSpaceSync {
     /// Blocking counterpart of [`HFSpace::runtime`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn runtime(&self) -> HFResult<SpaceRuntime> {
         self.repo_sync.runtime.block_on(self.inner.runtime().send())
     }
 
     /// Blocking counterpart of [`HFSpace::request_hardware`]. See the async method for parameters
     /// and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn request_hardware(
         &self,
         #[builder(into)] hardware: String,
@@ -482,7 +482,7 @@ impl crate::blocking::HFSpaceSync {
 
     /// Blocking counterpart of [`HFSpace::set_sleep_time`]. See the async method for parameters
     /// and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn set_sleep_time(&self, sleep_time: u64) -> HFResult<()> {
         self.repo_sync
             .runtime
@@ -491,21 +491,21 @@ impl crate::blocking::HFSpaceSync {
 
     /// Blocking counterpart of [`HFSpace::pause`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn pause(&self) -> HFResult<SpaceRuntime> {
         self.repo_sync.runtime.block_on(self.inner.pause().send())
     }
 
     /// Blocking counterpart of [`HFSpace::restart`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn restart(&self) -> HFResult<SpaceRuntime> {
         self.repo_sync.runtime.block_on(self.inner.restart().send())
     }
 
     /// Blocking counterpart of [`HFSpace::add_secret`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn add_secret(
         &self,
         #[builder(into)] key: String,
@@ -524,14 +524,14 @@ impl crate::blocking::HFSpaceSync {
 
     /// Blocking counterpart of [`HFSpace::delete_secret`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_secret(&self, #[builder(into)] key: String) -> HFResult<()> {
         self.repo_sync.runtime.block_on(self.inner.delete_secret().key(key).send())
     }
 
     /// Blocking counterpart of [`HFSpace::add_variable`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn add_variable(
         &self,
         #[builder(into)] key: String,
@@ -550,14 +550,14 @@ impl crate::blocking::HFSpaceSync {
 
     /// Blocking counterpart of [`HFSpace::delete_variable`]. See the async method for parameters
     /// and behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_variable(&self, #[builder(into)] key: String) -> HFResult<()> {
         self.repo_sync.runtime.block_on(self.inner.delete_variable().key(key).send())
     }
 
     /// Blocking counterpart of [`HFSpace::duplicate`]. See the async method for parameters and
     /// behavior.
-    #[builder(finish_fn = send)]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn duplicate(
         &self,
         #[builder(into)] to_id: Option<String>,
