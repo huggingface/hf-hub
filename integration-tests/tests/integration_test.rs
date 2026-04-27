@@ -508,9 +508,9 @@ async fn test_diff_against_empty_tree_all_additions() {
     const ZERO_BLOB_ID: &str = "0000000000000000000000000000000000000000";
 
     let test_cases: Vec<(&str, &str)> = vec![
-        ("espnet/yodas_owsmv4", "3bc62fd77f22f5bc2f116c6c21bcb12d5b85ab07"),
-        ("ppbrown/pexels-photos-janpf", "e2629eb62efab2bf1e0fa7c9ebf2a5e75acf91f4"),
-        ("tropos-labs/eigen-face-dataset-256", "341f2d0097d3a26ba4bd9e82dc8dac03b9a75f3d"),
+        ("hf-internal-testing/fixtures_ocr", "28fe12cdf7816b5dde94e22051b2ec8dc74267b7"),
+        ("hf-internal-testing/example-documents", "5a0a43c6006b31a6ddbfac7d69234925741a40f6"),
+        ("hf-internal-testing/dummy_image_text_data", "d5acb3a48d3127b59457e627c6dce975c20675b0"),
     ];
 
     for (repo_id, revision) in &test_cases {
