@@ -2,9 +2,5 @@
 members = ["hf-hub", "hfrs", "benches", "examples", "integration-tests"]
 resolver = "2"
 
-[profile.test]
-opt-level = 2
-debug = true
-
 [profile.bench]
 debug = true
