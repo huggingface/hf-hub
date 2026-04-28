@@ -231,8 +231,7 @@ impl HFRepository {
 
     /// Fetch the raw diff between two revisions as a parsed stream of [`HFFileDiff`] entries.
     ///
-    /// Each item in the returned stream is one parsed diff entry. Parse errors are logged as
-    /// warnings and yielded as `Err` items.
+    /// Each `Ok` item is one parsed diff entry; malformed lines are `Err` items.
     ///
     /// Endpoint: `GET /api/{repo_type}s/{repo_id}/compare/{compare}?raw=true`.
     ///

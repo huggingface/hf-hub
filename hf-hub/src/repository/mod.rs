@@ -1,4 +1,21 @@
 //! Repository handles, metadata types, and list/create/delete/move APIs.
+//!
+//! Start from [`crate::HFClient`] — [`crate::HFClient::model`], [`crate::HFClient::dataset`],
+//! [`crate::HFClient::space`], and [`crate::HFClient::repo`] return a repo handle ([`HFRepository`]
+//! or [`crate::HFSpace`], which derefs to [`HFRepository`]). All read/write file and revision APIs
+//! hang off that value.
+//!
+//! Submodule pages group related builders and types:
+//!
+//! - [`commits`] — history, refs, compare/diff, branches, tags
+//! - [`listing`] — list files/tree, path metadata
+//! - [`download`] — single-file and snapshot download builders
+//! - [`upload`] — uploads, deletes, and [`CommitOperation`] batches
+//! - [`diff`] — parsed raw diff lines ([`HFFileDiff`])
+//! - [`files`] — shared types such as [`CommitOperation`] and [`RepoTreeEntry`]
+//!
+//! Most items are also re-exported at [`crate::repository`] for a flat `hf_hub::repository::…`
+//! path in addition to the submodule paths rustdoc lists.
 
 pub mod commits;
 pub mod diff;

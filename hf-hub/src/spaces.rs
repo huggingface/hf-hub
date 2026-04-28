@@ -1,4 +1,15 @@
 //! Space handles, response types, and runtime/hardware/secrets APIs.
+//!
+//! Obtain a handle with [`HFClient::space`](crate::HFClient::space). It is an [`HFSpace`], which
+//! wraps an [`HFRepository`] pinned to [`RepoType::Space`] and adds
+//! Space-only methods (runtime, hardware, secrets, variables, pause/restart, duplicate).
+//!
+//! [`HFSpace`] implements [`Deref`] to [`HFRepository`], so every repo method (`info`,
+//! `download_file`, `list_tree`, `create_commit`, …) is available on the same value without
+//! switching handles.
+//!
+//! Response structs such as [`SpaceRuntime`] and [`SpaceVariable`] live in this module; bon-generated
+//! `*Builder` types for each Space API appear here for rustdoc.
 
 use std::fmt;
 use std::ops::Deref;

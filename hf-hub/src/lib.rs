@@ -6,7 +6,7 @@
 //! The crate exposes a high-level, ergonomic API built around a single entry point,
 //! [`HFClient`], and a family of typed handles ([`HFRepository`], [`HFSpace`],
 //! [`HFBucket`]) that scope operations to a specific resource. All network I/O is
-//! async and driven by [`reqwest`] with built-in retries on transient failures.
+//! async and driven by the [`reqwest`](https://docs.rs/reqwest) HTTP client with built-in retries on transient failures.
 //!
 //! ## Quick start
 //!
@@ -146,12 +146,18 @@
 //! hf-hub = { version = "1", features = ["blocking"] }
 //! ```
 //!
-//! ```rust,ignore
-//! use hf_hub::HFClientSync;
+//! ```rust,no_run
+//! #[cfg(feature = "blocking")]
+//! fn main() -> Result<(), hf_hub::HFError> {
+//!     use hf_hub::HFClientSync;
 //!
-//! let client = HFClientSync::new()?;
-//! let info = client.model("openai-community", "gpt2").info().send()?;
-//! # Ok::<(), hf_hub::HFError>(())
+//!     let client = HFClientSync::new()?;
+//!     let _info = client.model("openai-community", "gpt2").info().send()?;
+//!     Ok(())
+//! }
+//!
+//! #[cfg(not(feature = "blocking"))]
+//! fn main() {}
 //! ```
 //!
 //! The blocking handles ([`HFClientSync`], [`HFRepositorySync`], [`HFSpaceSync`],
@@ -186,13 +192,6 @@
 //! ## Cargo features
 //!
 //! - `blocking` — enables the synchronous `*Sync` handles.
-//!
-//! ## Further reading
-//!
-//! The `examples/` directory in the repository contains runnable end-to-end
-//! programs for every area covered above: `repo`, `repo_handles`, `files`,
-//! `download_upload`, `commits`, `diff`, `buckets`, `spaces`, `users`, and the
-//! `blocking_*` variants.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

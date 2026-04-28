@@ -1,10 +1,10 @@
 //! Progress reporting for upload and download operations.
 //!
-//! Consumers implement [`ProgressHandler`], wrap it in [`Progress`] (an
-//! `Arc<dyn ProgressHandler>`), and pass it to the `.progress(...)` setter of any
-//! method builder that supports progress reporting (upload, download, snapshot
-//! download, create_commit, bucket sync, etc.). When no handler is provided, the
-//! library emits nothing — there is no runtime cost.
+//! Implement [`ProgressHandler`] and pass the handler to the `.progress(...)` setter on any
+//! method builder that supports progress reporting (upload, download, snapshot download,
+//! `create_commit`, bucket sync, etc.). Each `.progress(...)` argument is converted to [`Progress`]
+//! via [`Into`]: an owned handler, an `Arc<H>`, [`Progress::new`], or a [`Progress`] value. When no handler is set,
+//! the library emits nothing — there is no runtime cost.
 //!
 //! # Event model
 //!
@@ -76,9 +76,6 @@
 //!         }
 //!     }
 //! }
-//!
-//! // Pass the handler directly — the builder accepts any `ProgressHandler` value.
-//! // repo.upload_file().source(src).path_in_repo("x").progress(PrintHandler).send().await?
 //! ```
 //!
 //! # Thread safety and performance contract
