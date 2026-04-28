@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2024"
 description = "Rust client for the Hugging Face Hub API"
 license = "Apache-2.0"
+repository = "https://github.com/huggingface/hf-hub"
+homepage = "https://github.com/huggingface/hf-hub"
+documentation = "https://docs.rs/hf-hub"
 
 [package.metadata.docs.rs]
 features = ["blocking"]
