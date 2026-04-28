@@ -455,6 +455,8 @@ fn resolve_token() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
+
     use super::HFClientBuilder;
 
     #[test]
@@ -463,7 +465,10 @@ mod tests {
         assert_eq!(client.cache_dir(), std::path::Path::new("/tmp/my-cache"));
     }
 
+    // `#[serial]` because the precedence tests below mutate `HF_HOME`, and the default
+    // cache dir is derived from it.
     #[test]
+    #[serial]
     fn test_builder_cache_dir_default() {
         let client = HFClientBuilder::new().build().unwrap();
         let path_str = client.cache_dir().to_string_lossy();
@@ -577,5 +582,148 @@ mod tests {
         assert_eq!(g1, g2);
         assert!(s1.new_file_download_group().is_ok());
         assert!(s2.new_file_download_group().is_ok());
+    }
+
+    /// Token resolution precedence tests.
+    ///
+    /// These tests mutate process-wide environment variables, so they must run
+    /// serially. Each test isolates `HF_HOME` to a tempdir so the developer's
+    /// real `~/.cache/huggingface/token` cannot leak into the result.
+    mod token_precedence {
+        use std::io::Write;
+
+        use serial_test::serial;
+        use tempfile::TempDir;
+
+        use super::HFClientBuilder;
+        use crate::constants::{HF_HOME, HF_HUB_DISABLE_IMPLICIT_TOKEN, HF_TOKEN, HF_TOKEN_PATH, TOKEN_FILENAME};
+
+        struct EnvGuard {
+            saved: Vec<(&'static str, Option<String>)>,
+            _hf_home: TempDir,
+        }
+
+        impl EnvGuard {
+            fn new() -> Self {
+                let hf_home = tempfile::tempdir().expect("tempdir for HF_HOME");
+                let keys = [HF_TOKEN, HF_TOKEN_PATH, HF_HOME, HF_HUB_DISABLE_IMPLICIT_TOKEN];
+                let saved = keys.iter().map(|k| (*k, std::env::var(*k).ok())).collect();
+                for k in keys {
+                    unsafe { std::env::remove_var(k) };
+                }
+                unsafe { std::env::set_var(HF_HOME, hf_home.path()) };
+                Self {
+                    saved,
+                    _hf_home: hf_home,
+                }
+            }
+        }
+
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                for (k, v) in &self.saved {
+                    match v {
+                        Some(val) => unsafe { std::env::set_var(k, val) },
+                        None => unsafe { std::env::remove_var(k) },
+                    }
+                }
+            }
+        }
+
+        fn write_token_file(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
+            let path = dir.join(name);
+            let mut f = std::fs::File::create(&path).unwrap();
+            f.write_all(contents.as_bytes()).unwrap();
+            path
+        }
+
+        #[test]
+        #[serial]
+        fn test_explicit_token_overrides_env() {
+            let _g = EnvGuard::new();
+            unsafe { std::env::set_var(HF_TOKEN, "env-token") };
+
+            let client = HFClientBuilder::new().token("explicit-token").build().unwrap();
+            assert_eq!(client.inner.token.as_deref(), Some("explicit-token"));
+        }
+
+        #[test]
+        #[serial]
+        fn test_env_token_used_when_no_explicit() {
+            let _g = EnvGuard::new();
+            unsafe { std::env::set_var(HF_TOKEN, "env-token") };
+
+            let client = HFClientBuilder::new().build().unwrap();
+            assert_eq!(client.inner.token.as_deref(), Some("env-token"));
+        }
+
+        #[test]
+        #[serial]
+        fn test_env_token_overrides_token_path_file() {
+            let g = EnvGuard::new();
+            let dir = tempfile::tempdir().unwrap();
+            let token_file = write_token_file(dir.path(), "tok", "file-token");
+            unsafe { std::env::set_var(HF_TOKEN, "env-token") };
+            unsafe { std::env::set_var(HF_TOKEN_PATH, &token_file) };
+
+            let client = HFClientBuilder::new().build().unwrap();
+            assert_eq!(client.inner.token.as_deref(), Some("env-token"));
+            drop(g);
+        }
+
+        #[test]
+        #[serial]
+        fn test_token_path_file_used_when_no_env() {
+            let _g = EnvGuard::new();
+            let dir = tempfile::tempdir().unwrap();
+            let token_file = write_token_file(dir.path(), "tok", "file-token\n");
+            unsafe { std::env::set_var(HF_TOKEN_PATH, &token_file) };
+
+            let client = HFClientBuilder::new().build().unwrap();
+            assert_eq!(client.inner.token.as_deref(), Some("file-token"));
+        }
+
+        #[test]
+        #[serial]
+        fn test_token_from_hf_home_file() {
+            let g = EnvGuard::new();
+            // HF_HOME was set to a tempdir by EnvGuard. Place a token file inside it.
+            let hf_home = std::env::var(HF_HOME).unwrap();
+            write_token_file(std::path::Path::new(&hf_home), TOKEN_FILENAME, "home-token");
+
+            let client = HFClientBuilder::new().build().unwrap();
+            assert_eq!(client.inner.token.as_deref(), Some("home-token"));
+            drop(g);
+        }
+
+        #[test]
+        #[serial]
+        fn test_disable_implicit_token_returns_none() {
+            let _g = EnvGuard::new();
+            unsafe { std::env::set_var(HF_TOKEN, "env-token") };
+            unsafe { std::env::set_var(HF_HUB_DISABLE_IMPLICIT_TOKEN, "1") };
+
+            let client = HFClientBuilder::new().build().unwrap();
+            assert!(client.inner.token.is_none());
+        }
+
+        #[test]
+        #[serial]
+        fn test_disable_implicit_token_does_not_block_explicit() {
+            let _g = EnvGuard::new();
+            unsafe { std::env::set_var(HF_HUB_DISABLE_IMPLICIT_TOKEN, "1") };
+
+            let client = HFClientBuilder::new().token("explicit-token").build().unwrap();
+            assert_eq!(client.inner.token.as_deref(), Some("explicit-token"));
+        }
+
+        #[test]
+        #[serial]
+        fn test_no_token_anywhere_is_none() {
+            let _g = EnvGuard::new();
+            // EnvGuard isolates HF_HOME to a fresh tempdir with no token file inside.
+            let client = HFClientBuilder::new().build().unwrap();
+            assert!(client.inner.token.is_none());
+        }
     }
 }

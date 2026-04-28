@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::TryStreamExt;
 use hf_hub::buckets::BucketTreeEntry;
-use hf_hub::{HFBucket, HFClient, HFClientBuilder};
+use hf_hub::{HFBucket, HFClient, HFClientBuilder, HFError};
 use integration_tests::test_utils::*;
 use rand::RngExt;
 use tokio::sync::OnceCell;
@@ -275,4 +275,67 @@ async fn test_bucket_upload_empty_file() {
     assert!(std::fs::read(dl_dir.path().join("empty.bin")).unwrap().is_empty());
 
     delete_test_bucket(&client, &namespace, &name).await;
+}
+
+/// `delete_bucket` should remove a bucket even when it still contains uploaded files.
+/// After deletion, follow-up operations against the same bucket id must surface a
+/// `BucketNotFound` (or `Http`) error rather than appearing to succeed.
+#[tokio::test]
+async fn test_delete_bucket_with_files() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+
+    let (namespace, name) = create_test_bucket(&client, &unique_suffix()).await;
+    let bucket = client.bucket(&namespace, &name);
+    let bucket_id = format!("{namespace}/{name}");
+
+    let tmp = tempfile::tempdir().unwrap();
+    let files: Vec<(&str, &[u8])> = vec![
+        ("first.txt", b"first contents"),
+        ("nested/second.bin", b"second contents"),
+    ];
+    let mut upload_args: Vec<(std::path::PathBuf, String)> = Vec::new();
+    for (remote, content) in &files {
+        let local = tmp.path().join(remote);
+        if let Some(parent) = local.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&local, content).unwrap();
+        upload_args.push((local, remote.to_string()));
+    }
+    bucket
+        .upload_files()
+        .files(upload_args)
+        .send()
+        .await
+        .expect("upload to bucket failed");
+    for (remote, _) in &files {
+        wait_for_bucket_file(&bucket, remote).await;
+    }
+
+    // Delete the bucket while it still has files.
+    client
+        .delete_bucket()
+        .bucket_id(&bucket_id)
+        .send()
+        .await
+        .expect("delete_bucket should succeed even when the bucket has files");
+
+    // A second delete (without missing_ok) must surface BucketNotFound.
+    let err = client.delete_bucket().bucket_id(&bucket_id).send().await.unwrap_err();
+    assert!(
+        matches!(err, HFError::BucketNotFound { .. } | HFError::Http { .. }),
+        "expected BucketNotFound after deletion, got {err:?}",
+    );
+
+    // missing_ok=true should still succeed against the now-deleted bucket.
+    client
+        .delete_bucket()
+        .bucket_id(&bucket_id)
+        .missing_ok(true)
+        .send()
+        .await
+        .expect("delete_bucket with missing_ok should succeed when bucket is gone");
 }

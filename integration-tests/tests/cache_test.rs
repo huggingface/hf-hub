@@ -577,6 +577,76 @@ async fn test_snapshot_download_ignore_patterns() {
     assert!(files.iter().any(|f| f.ends_with(".json")), "Should have .json files: {files:?}");
 }
 
+/// Verify the set-difference semantics when `allow_patterns` and `ignore_patterns` overlap:
+/// the downloaded set must be `(matches any allow) AND (matches no ignore)`.
+///
+/// Concretely, we allow all `*.json`, then ignore `tokenizer*.json`. Files matching the
+/// allow but also the ignore must not be downloaded; files matching only the allow must be.
+#[tokio::test]
+async fn test_snapshot_download_allow_and_ignore_set_difference() {
+    let Some(_) = api() else { return };
+    let cache_dir = tempfile::tempdir().unwrap();
+    let client = api_with_cache(cache_dir.path());
+
+    // First, fetch the full file list so we can derive the expected set independently.
+    let repo_files: Vec<String> = client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+        .list_files()
+        .send()
+        .await
+        .unwrap();
+
+    let allowed_jsons: Vec<&String> = repo_files.iter().filter(|f| f.ends_with(".json")).collect();
+    let expected_present: Vec<&String> = allowed_jsons
+        .iter()
+        .copied()
+        .filter(|f| {
+            let name = f.rsplit('/').next().unwrap_or(f);
+            !name.starts_with("tokenizer")
+        })
+        .collect();
+    let expected_absent: Vec<&String> = allowed_jsons
+        .iter()
+        .copied()
+        .filter(|f| {
+            let name = f.rsplit('/').next().unwrap_or(f);
+            name.starts_with("tokenizer")
+        })
+        .collect();
+
+    // Skip if the repo doesn't contain enough variety to make the assertion meaningful.
+    if expected_present.is_empty() || expected_absent.is_empty() {
+        eprintln!(
+            "skipping: {} doesn't have both an allowed-and-included and an allowed-and-ignored \
+             json file (present={expected_present:?}, absent={expected_absent:?})",
+            TEST_MODEL_REPO_ID,
+        );
+        return;
+    }
+
+    let snapshot_dir = client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+        .snapshot_download()
+        .allow_patterns(vec!["*.json".to_string()])
+        .ignore_patterns(vec!["tokenizer*.json".to_string()])
+        .send()
+        .await
+        .unwrap();
+
+    let files = list_files_recursive(&snapshot_dir);
+
+    for f in &expected_present {
+        assert!(files.iter().any(|got| got == *f), "expected {f} to be present, got {files:?}");
+    }
+    for f in &expected_absent {
+        assert!(files.iter().all(|got| got != *f), "expected {f} to be absent (matches ignore), got {files:?}",);
+    }
+    // Nothing outside the allow set should be downloaded either.
+    for got in &files {
+        assert!(got.ends_with(".json"), "non-allow-matching file in snapshot: {got}");
+    }
+}
+
 #[tokio::test]
 async fn test_snapshot_download_local_files_only_miss() {
     let cache_dir = tempfile::tempdir().unwrap();
@@ -759,6 +829,77 @@ async fn test_blob_deduplication_across_downloads() {
 
     let blob_count_after = std::fs::read_dir(repo_folder.join("blobs")).unwrap().count();
     assert_eq!(blob_count_before, blob_count_after, "Blob should be reused, not duplicated");
+}
+
+/// When the same file is downloaded from two different revisions where its content is
+/// unchanged, the cache should store one blob and write a separate snapshot directory
+/// per revision, both linking to that single blob.
+#[cfg(not(windows))]
+#[tokio::test]
+async fn test_blob_shared_across_revisions() {
+    use futures::StreamExt;
+
+    let Some(_) = api() else { return };
+    let cache_dir = tempfile::tempdir().unwrap();
+    let client = api_with_cache(cache_dir.path());
+
+    let repo = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+
+    // Walk the commit history and find two commits where some candidate file has matching
+    // etag — that's a file stable across an interval of history. We try a handful of typical
+    // files and cap the number of commits inspected so the test stays fast.
+    let commit_ids: Vec<String> = {
+        let stream = repo.list_commits().send().unwrap();
+        futures::pin_mut!(stream);
+        let mut ids = Vec::new();
+        while let Some(commit) = stream.next().await {
+            ids.push(commit.unwrap().id);
+            if ids.len() >= 12 {
+                break;
+            }
+        }
+        ids
+    };
+
+    let candidate_files = ["config.json", "README.md", "tokenizer_config.json", ".gitattributes"];
+    let mut stable: Option<(String, String, String)> = None;
+    'outer: for filename in &candidate_files {
+        let mut by_etag: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for cid in &commit_ids {
+            if let Ok(meta) = repo.get_file_metadata().filepath(*filename).revision(cid).send().await {
+                by_etag.entry(meta.etag).or_default().push(cid.clone());
+                if let Some(ids) = by_etag.values().find(|v| v.len() >= 2) {
+                    stable = Some((filename.to_string(), ids[0].clone(), ids[1].clone()));
+                    break 'outer;
+                }
+            }
+        }
+    }
+    let Some((filename, rev_a, rev_b)) = stable else {
+        eprintln!("skipping: no candidate file is stable across two recent commits in {TEST_MODEL_REPO_ID}");
+        return;
+    };
+    assert_ne!(rev_a, rev_b);
+
+    // Download the same file at each revision into the (currently empty) cache.
+    let path_a = repo.download_file().filename(&filename).revision(&rev_a).send().await.unwrap();
+    let path_b = repo.download_file().filename(&filename).revision(&rev_b).send().await.unwrap();
+
+    // Each revision gets its own snapshot directory, but both must resolve to the same blob.
+    assert_ne!(path_a, path_b, "expected distinct snapshot paths per revision");
+    let blob_a = std::fs::canonicalize(&path_a).unwrap();
+    let blob_b = std::fs::canonicalize(&path_b).unwrap();
+    assert_eq!(blob_a, blob_b, "snapshots from {rev_a} and {rev_b} should resolve to the same blob");
+
+    let repo_folder = find_repo_folder(cache_dir.path(), TEST_MODEL_CACHE_FRAGMENT);
+    let blob_count = std::fs::read_dir(repo_folder.join("blobs")).unwrap().count();
+    assert_eq!(blob_count, 1, "expected exactly one blob shared between revisions");
+
+    let snapshot_dirs: Vec<_> = std::fs::read_dir(repo_folder.join("snapshots"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(snapshot_dirs.len(), 2, "expected one snapshot dir per revision");
 }
 
 #[tokio::test]

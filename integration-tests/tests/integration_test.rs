@@ -188,6 +188,129 @@ async fn test_list_models() {
 }
 
 #[tokio::test]
+async fn test_list_models_with_pipeline_tag() {
+    let Some(client) = prod_api() else { return };
+    let stream = client
+        .list_models()
+        .pipeline_tag("text-classification")
+        .limit(5_usize)
+        .send()
+        .unwrap();
+    futures::pin_mut!(stream);
+
+    let mut count = 0;
+    while let Some(model) = stream.next().await {
+        model.unwrap();
+        count += 1;
+    }
+    assert!(count > 0, "pipeline_tag=text-classification should return at least one model");
+}
+
+#[tokio::test]
+async fn test_list_models_with_filter_tag() {
+    let Some(client) = prod_api() else { return };
+    let stream = client.list_models().filter("transformers").limit(5_usize).send().unwrap();
+    futures::pin_mut!(stream);
+
+    let mut count = 0;
+    while let Some(model) = stream.next().await {
+        model.unwrap();
+        count += 1;
+    }
+    assert!(count > 0, "filter=transformers should return at least one model");
+}
+
+#[tokio::test]
+async fn test_list_models_with_search() {
+    let Some(client) = prod_api() else { return };
+    let stream = client.list_models().search("bert").limit(5_usize).send().unwrap();
+    futures::pin_mut!(stream);
+
+    let mut count = 0;
+    let mut any_match = false;
+    while let Some(model) = stream.next().await {
+        let model = model.unwrap();
+        if model.id.to_lowercase().contains("bert") {
+            any_match = true;
+        }
+        count += 1;
+    }
+    assert!(count > 0, "search=bert should return at least one model");
+    assert!(any_match, "at least one returned id should contain the search term");
+}
+
+#[tokio::test]
+async fn test_list_models_sort_by_downloads() {
+    let Some(client) = prod_api() else { return };
+    let stream = client.list_models().sort("downloads").full(true).limit(3_usize).send().unwrap();
+    futures::pin_mut!(stream);
+
+    let mut downloads: Vec<u64> = Vec::new();
+    while let Some(model) = stream.next().await {
+        let model = model.unwrap();
+        if let Some(d) = model.downloads {
+            downloads.push(d);
+        }
+    }
+    assert!(!downloads.is_empty(), "sort=downloads with full=true should return populated download counts");
+    let sorted = {
+        let mut s = downloads.clone();
+        s.sort_by(|a, b| b.cmp(a));
+        s
+    };
+    assert_eq!(downloads, sorted, "results should be in descending download order");
+}
+
+#[tokio::test]
+async fn test_list_models_full_includes_siblings() {
+    let Some(client) = prod_api() else { return };
+    let stream = client.list_models().full(true).limit(1_usize).send().unwrap();
+    futures::pin_mut!(stream);
+
+    let model = stream.next().await.expect("stream should yield at least one model").unwrap();
+    let siblings = model.siblings.as_ref().expect("full=true should populate siblings");
+    assert!(!siblings.is_empty(), "siblings should not be empty when full=true");
+}
+
+#[tokio::test]
+async fn test_list_datasets_with_filter() {
+    let Some(client) = prod_api() else { return };
+    let stream = client
+        .list_datasets()
+        .filter("task_categories:text-classification")
+        .limit(5_usize)
+        .send()
+        .unwrap();
+    futures::pin_mut!(stream);
+
+    let mut count = 0;
+    while let Some(ds) = stream.next().await {
+        ds.unwrap();
+        count += 1;
+    }
+    assert!(count > 0, "filter=task_categories:text-classification should return at least one dataset");
+}
+
+#[tokio::test]
+async fn test_list_spaces_with_sdk_filter() {
+    let Some(client) = prod_api() else { return };
+    let stream = client.list_spaces().filter("gradio").limit(5_usize).send().unwrap();
+    futures::pin_mut!(stream);
+
+    let mut count = 0;
+    let mut any_with_sdk = false;
+    while let Some(space) = stream.next().await {
+        let space = space.unwrap();
+        if space.sdk.as_deref() == Some("gradio") {
+            any_with_sdk = true;
+        }
+        count += 1;
+    }
+    assert!(count > 0, "filter=gradio should return at least one Space");
+    assert!(any_with_sdk, "expected at least one returned Space to have sdk=gradio");
+}
+
+#[tokio::test]
 async fn test_list_repo_files() {
     let Some(client) = prod_api() else { return };
     let files = repo(&client, TEST_MODEL_REPO).list_files().send().await.unwrap();
@@ -402,6 +525,92 @@ async fn test_get_paths_info() {
 }
 
 #[tokio::test]
+async fn test_get_paths_info_mixed_inputs() {
+    let Some(client) = prod_api() else { return };
+    let r = repo(&client, TEST_MODEL_REPO);
+
+    // Find an actual directory in the repo tree so the test isn't pinned to a specific
+    // layout. tiny-gemma3 has subdirectories (e.g. `1_Pooling`); fall back gracefully if
+    // it doesn't.
+    let stream = r.list_tree().recursive(false).send().unwrap();
+    futures::pin_mut!(stream);
+    let mut directory_path: Option<String> = None;
+    while let Some(entry) = stream.next().await {
+        if let RepoTreeEntry::Directory { path, .. } = entry.unwrap() {
+            directory_path = Some(path);
+            break;
+        }
+    }
+
+    let mut requested = vec!["config.json".to_string(), "this-path-does-not-exist.bin".to_string()];
+    if let Some(ref dir) = directory_path {
+        requested.push(dir.clone());
+    }
+    let entries = r.get_paths_info().paths(requested.clone()).send().await.unwrap();
+
+    // The Hub silently drops missing paths, so we expect the file plus any directory we asked about.
+    let expected_count = if directory_path.is_some() { 2 } else { 1 };
+    assert_eq!(entries.len(), expected_count, "got {entries:?}");
+
+    let returned_paths: Vec<&str> = entries
+        .iter()
+        .map(|e| match e {
+            RepoTreeEntry::File { path, .. } => path.as_str(),
+            RepoTreeEntry::Directory { path, .. } => path.as_str(),
+        })
+        .collect();
+    assert!(returned_paths.contains(&"config.json"));
+    assert!(!returned_paths.contains(&"this-path-does-not-exist.bin"));
+    if let Some(ref dir) = directory_path {
+        assert!(returned_paths.contains(&dir.as_str()));
+        let dir_entry = entries
+            .iter()
+            .find(|e| matches!(e, RepoTreeEntry::Directory { path, .. } if path == dir));
+        assert!(dir_entry.is_some(), "expected RepoTreeEntry::Directory for {dir}");
+    }
+}
+
+#[tokio::test]
+async fn test_get_paths_info_returns_lfs_metadata() {
+    let Some(client) = prod_api() else { return };
+    let r = repo(&client, TEST_MODEL_REPO);
+
+    // Discover a file that has either LFS or Xet metadata so we have something concrete to assert.
+    let stream = r.list_tree().recursive(true).expand(true).send().unwrap();
+    futures::pin_mut!(stream);
+    let mut large_file: Option<String> = None;
+    while let Some(entry) = stream.next().await {
+        if let RepoTreeEntry::File {
+            path, lfs, xet_hash, ..
+        } = entry.unwrap()
+            && (lfs.is_some() || xet_hash.is_some())
+        {
+            large_file = Some(path);
+            break;
+        }
+    }
+    let Some(filepath) = large_file else {
+        eprintln!("skipping: no LFS/xet-backed file found in {TEST_MODEL_REPO}");
+        return;
+    };
+
+    let entries = r.get_paths_info().paths(vec![filepath.clone()]).send().await.unwrap();
+    assert_eq!(entries.len(), 1);
+    match &entries[0] {
+        RepoTreeEntry::File {
+            path, lfs, xet_hash, ..
+        } => {
+            assert_eq!(path, &filepath);
+            assert!(
+                lfs.is_some() || xet_hash.is_some(),
+                "expected LFS or xet metadata for {filepath}, got entry without either",
+            );
+        },
+        other => panic!("expected File entry, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_get_file_metadata() {
     let Some(client) = prod_api() else { return };
     let meta = repo(&client, TEST_MODEL_REPO)
@@ -456,6 +665,29 @@ async fn test_get_file_metadata_missing() {
         },
         other => panic!("expected EntryNotFound, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn test_get_file_metadata_bogus_revision() {
+    let Some(client) = prod_api() else { return };
+    let err = repo(&client, TEST_MODEL_REPO)
+        .get_file_metadata()
+        .filepath("config.json")
+        .revision("definitely-not-a-real-revision-xyz")
+        .send()
+        .await
+        .unwrap_err();
+    // The HEAD endpoint returns 404 either for a missing entry or a missing revision; both
+    // are reasonable mappings.
+    assert!(
+        matches!(
+            err,
+            hf_hub::HFError::EntryNotFound { .. }
+                | hf_hub::HFError::RevisionNotFound { .. }
+                | hf_hub::HFError::Http { .. }
+        ),
+        "unexpected error variant: {err:?}",
+    );
 }
 
 // --- Commit and diff tests ---
@@ -765,6 +997,75 @@ async fn test_create_and_delete_branch() {
 
     let refs = test_repo.list_refs().send().await.unwrap();
     assert!(!refs.branches.iter().any(|b| b.name == "test-branch"));
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+#[tokio::test]
+async fn test_delete_branch_missing_returns_error() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+
+    let test_repo = repo(&client, &repo_id);
+    let err = test_repo
+        .delete_branch()
+        .branch("definitely-not-a-real-branch-xyz")
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, hf_hub::HFError::RepoNotFound { .. } | hf_hub::HFError::Http { .. }),
+        "unexpected error variant: {err:?}",
+    );
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+#[tokio::test]
+async fn test_delete_tag_missing_returns_error() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+
+    let test_repo = repo(&client, &repo_id);
+    let err = test_repo
+        .delete_tag()
+        .tag("definitely-not-a-real-tag-xyz")
+        .send()
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, hf_hub::HFError::RepoNotFound { .. } | hf_hub::HFError::Http { .. }),
+        "unexpected error variant: {err:?}",
+    );
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+#[tokio::test]
+async fn test_create_tag_invalid_name_returns_error() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+
+    let test_repo = repo(&client, &repo_id);
+    // Tag names with whitespace/control characters are rejected by the Hub.
+    let err = test_repo.create_tag().tag("invalid tag with spaces").send().await.unwrap_err();
+    // The Hub may return 400 (Http) or 422 (Http) — assert it's a non-success error.
+    assert!(
+        matches!(
+            err,
+            hf_hub::HFError::Http { .. } | hf_hub::HFError::Conflict { .. } | hf_hub::HFError::RepoNotFound { .. }
+        ),
+        "unexpected error variant: {err:?}",
+    );
 
     delete_test_repo(&client, &repo_id).await;
 }
