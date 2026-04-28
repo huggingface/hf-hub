@@ -367,12 +367,41 @@ impl HFSpace {
     /// - `to_id`: destination repository ID in `"owner/name"` format. Defaults to the authenticated user's namespace
     ///   with the same name.
     /// - `private`: whether the duplicated Space should be private.
-    /// - `hardware`: hardware to run the duplicated Space on (e.g. `"cpu-basic"`, `"t4-small"`).
-    /// - `storage`: persistent storage tier (e.g. `"small"`, `"medium"`, `"large"`).
+    /// - `hardware`: hardware flavor identifier the duplicated Space should run on (see `Hardware values` below). When
+    ///   omitted, the Hub picks a default (typically `"cpu-basic"`) — pass a value explicitly to mirror the source
+    ///   Space's hardware.
+    /// - `storage`: persistent storage tier identifier. One of `"small"`, `"medium"`, or `"large"`. Omit to duplicate
+    ///   without persistent storage. See the [Spaces storage docs](https://huggingface.co/docs/hub/spaces-storage) for
+    ///   current sizes.
     /// - `sleep_time`: seconds of inactivity before the Space is put to sleep. `0` means never.
-    /// - `secrets`: secrets to set on the duplicated Space (list of JSON objects with `key` and `value`).
-    /// - `variables`: environment variables to set on the duplicated Space (list of JSON objects with `key` and
-    ///   `value`).
+    /// - `secrets`: encrypted environment variables to set on the duplicated Space (see `Secret/variable shape` below).
+    /// - `variables`: public (non-secret) environment variables to set on the duplicated Space (see `Secret/variable
+    ///   shape` below).
+    ///
+    /// # Hardware values
+    ///
+    /// The Hub uses lowercase, hyphenated identifiers. Common values include `"cpu-basic"`, `"cpu-upgrade"`,
+    /// `"t4-small"`, `"t4-medium"`, `"l4x1"`, `"l4x4"`, `"a10g-small"`, `"a10g-large"`, `"a10g-largex2"`,
+    /// `"a10g-largex4"`, `"a100-large"`, `"h100"`, `"h100x8"`, and `"zero-a10g"`. The authoritative, current list lives
+    /// in the [Spaces GPU hardware docs](https://huggingface.co/docs/hub/spaces-gpus).
+    ///
+    /// # Secret/variable shape
+    ///
+    /// Each entry in `secrets` or `variables` is a JSON object with the following keys:
+    ///
+    /// - `key` (string, required): variable/secret name.
+    /// - `value` (string, required): variable/secret value.
+    /// - `description` (string, optional): human-readable description.
+    ///
+    /// ```rust,no_run
+    /// use serde_json::json;
+    ///
+    /// let secrets = vec![
+    ///     json!({ "key": "HF_TOKEN", "value": "hf_...", "description": "API token" }),
+    ///     json!({ "key": "DB_PASSWORD", "value": "s3cret" }),
+    /// ];
+    /// let variables = vec![json!({ "key": "MODEL_NAME", "value": "bert-base-uncased" })];
+    /// ```
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn duplicate(
         &self,

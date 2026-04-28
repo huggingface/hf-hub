@@ -1,3 +1,16 @@
+//! Repository commit, upload, and delete builders.
+//!
+//! Builders on [`HFRepository`] for mutating repo contents. Every change goes through a single
+//! commit:
+//!
+//! - [`HFRepository::create_commit`] — low-level: arbitrary mix of [`CommitOperation`] entries in one commit.
+//! - [`HFRepository::upload_file`] — upload one file (bytes or local path) as a single-add commit.
+//! - [`HFRepository::upload_folder`] — recursively upload a local folder, with allow/ignore globs matched against
+//!   `folder_path`-relative paths and a `delete_patterns` glob matched against repo-root paths.
+//! - [`HFRepository::delete_file`] / [`HFRepository::delete_folder`] — single-delete and recursive-delete commits.
+//!
+//! See each builder's docs for the exact path / glob format rules.
+
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Read;
@@ -748,14 +761,23 @@ impl HFRepository {
     /// The folder is walked recursively and converted into add operations. When `delete_patterns`
     /// is set, matching remote files are also deleted in the same commit.
     ///
+    /// All pattern arguments use [`globset`](https://docs.rs/globset) syntax (`*`, `?`, `**`,
+    /// character classes, etc.). Path strings are forward-slash-joined regardless of platform.
+    ///
     /// # Parameters
     ///
     /// - `folder_path` (required): local folder path to upload.
     /// - `path_in_repo`: destination directory within the repository (default: repo root).
     /// - `revision`: branch to upload to.
     /// - `commit_message`, `commit_description`, `create_pr`: commit metadata.
-    /// - `allow_patterns`, `ignore_patterns`: glob filters for local files.
-    /// - `delete_patterns`: glob patterns for remote files to delete in the same commit.
+    /// - `allow_patterns`: globs selecting which local files to include. Matched against each discovered file's path
+    ///   relative to `folder_path` (e.g. `data/train.bin`, not the absolute path and not prefixed with `path_in_repo`).
+    ///   When set, only files matching at least one pattern are uploaded.
+    /// - `ignore_patterns`: globs of local files to skip. Matched against the same `folder_path`-relative paths as
+    ///   `allow_patterns`.
+    /// - `delete_patterns`: globs of *remote* files to delete in the same commit. Matched against each existing file's
+    ///   full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g. `old/*.bin` to remove
+    ///   every `.bin` directly under `old/` at the repo root.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_folder(

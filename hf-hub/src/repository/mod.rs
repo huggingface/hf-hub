@@ -324,11 +324,18 @@ impl HFClient {
     ///
     /// # Parameters
     ///
-    /// - `search`: filter models by a text query (matches model IDs and descriptions).
-    /// - `author`: filter models by author or organization name.
-    /// - `filter`: filter models by tags (e.g. `"text-generation"`, `"pytorch"`).
-    /// - `sort`: property to sort results by (e.g. `"downloads"`, `"lastModified"`).
-    /// - `pipeline_tag`: filter models by pipeline tag.
+    /// - `search`: free-text query forwarded as the `?search=` parameter. The Hub matches it substring-style against
+    ///   the model `id` and (when present) the model card description — it is **not** a tag filter.
+    /// - `author`: namespace owner to filter on, forwarded as `?author=`. Pass a Hub user or organization name (e.g.
+    ///   `"google"`, `"meta-llama"`) — bare names, not paths.
+    /// - `filter`: a single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+    ///   `"pytorch"`, `"text-generation"`, `"license:apache-2.0"`, `"language:en"`, `"dataset:wikipedia"`,
+    ///   `"region:us"`. To combine tags, narrow the results client-side (only one `filter` value is sent).
+    /// - `sort`: API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
+    ///   `"createdAt"`, `"lastModified"`, and `"trendingScore"`. Use the camelCase Hub field names (not Rust struct
+    ///   field names).
+    /// - `pipeline_tag`: pipeline-tag filter (e.g. `"text-classification"`, `"automatic-speech-recognition"`),
+    ///   forwarded as `?pipeline_tag=`. Same vocabulary as the `pipeline_tag` field on a model card.
     /// - `full`: fetch the full model information including all fields.
     /// - `card_data`: include the model card metadata in the response.
     /// - `fetch_config`: include the model configuration in the response.
@@ -389,7 +396,15 @@ impl HFClient {
     ///
     /// # Parameters
     ///
-    /// - `search`, `author`, `filter`, `sort`: query filters and sort key.
+    /// - `search`: free-text query forwarded as `?search=`. The Hub matches it substring-style against the dataset `id`
+    ///   and card description — not a tag filter.
+    /// - `author`: namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g.
+    ///   `"HuggingFaceH4"`, `"allenai"`).
+    /// - `filter`: a single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+    ///   `"task_categories:text-classification"`, `"language:en"`, `"size_categories:10K<n<100K"`, `"license:mit"`. To
+    ///   combine tags, narrow client-side — only one `filter` value is sent.
+    /// - `sort`: API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
+    ///   `"createdAt"`, `"lastModified"`, and `"trendingScore"` (Hub camelCase field names).
     /// - `full`: fetch the full dataset information including all fields.
     /// - `limit`: cap on the total number of items yielded by the stream. When less than 1000, also used as the server
     ///   page size.
@@ -434,7 +449,15 @@ impl HFClient {
     ///
     /// # Parameters
     ///
-    /// - `search`, `author`, `filter`, `sort`: query filters and sort key.
+    /// - `search`: free-text query forwarded as `?search=`. The Hub matches it substring-style against the Space `id`
+    ///   and card description — not a tag filter.
+    /// - `author`: namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g. `"openai"`,
+    ///   `"stabilityai"`).
+    /// - `filter`: a single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+    ///   `"sdk:gradio"`, `"sdk:streamlit"`, `"sdk:docker"`, `"language:en"`, `"license:mit"`. To combine tags, narrow
+    ///   client-side — only one `filter` value is sent.
+    /// - `sort`: API field name to sort by, forwarded as `?sort=`. Common values are `"likes"`, `"createdAt"`,
+    ///   `"lastModified"`, and `"trendingScore"` (Hub camelCase field names).
     /// - `full`: fetch the full Space information including all fields.
     /// - `limit`: cap on the total number of items yielded by the stream. When less than 1000, also used as the server
     ///   page size.
@@ -731,7 +754,11 @@ impl HFRepository {
         }
     }
 
-    /// Return `true` if the repository exists and is accessible with the current credentials.
+    /// Return `true` if the repository exists.
+    ///
+    /// Returns `Ok(false)` only when the Hub responds with 404. If the repo exists but the current
+    /// credentials don't have access (private/gated), this returns an error
+    /// ([`HFError::AuthRequired`] or [`HFError::Forbidden`]), not `Ok(false)`.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn exists(&self) -> HFResult<bool> {
         let url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
@@ -750,6 +777,10 @@ impl HFRepository {
     }
 
     /// Return `true` if the given revision (branch, tag, or commit SHA) exists.
+    ///
+    /// Returns `Ok(false)` only when the Hub responds with 404. If the repo exists but the current
+    /// credentials don't have access (private/gated), this returns an error
+    /// ([`HFError::AuthRequired`] or [`HFError::Forbidden`]), not `Ok(false)`.
     ///
     /// # Parameters
     ///

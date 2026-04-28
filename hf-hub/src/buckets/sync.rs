@@ -81,7 +81,7 @@ pub struct BucketSyncOperation {
     pub reason: String,
 }
 
-/// The computed sync plan — describes what will happen (or has happened) during a sync.
+/// The result of a sync — describes the operations that were executed.
 ///
 /// Returned by [`HFBucket::sync`].
 #[derive(Debug, Clone)]

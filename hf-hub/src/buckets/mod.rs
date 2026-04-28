@@ -259,11 +259,26 @@ impl HFBucket {
     /// Endpoint: `POST /api/buckets/{bucket_id}/batch` (NDJSON). Operations are chunked at 1000
     /// entries per request.
     ///
+    /// All paths in `add`, `delete`, and `copy` are **bucket-relative**, slash-separated paths
+    /// (e.g. `"data/train/0001.bin"`) — no leading slash, forward slashes regardless of platform,
+    /// no `bucket_id` prefix.
+    ///
     /// # Parameters
     ///
-    /// - `add`: files to add (register) in the bucket.
-    /// - `delete`: paths of files to delete from the bucket.
-    /// - `copy`: files to copy (server-side) into the bucket.
+    /// - `add`: files to register in the bucket. Each [`BucketAddFile`] requires:
+    ///   - `path` (`String`): bucket-relative destination path.
+    ///   - `xet_hash` (`String`): xet content hash from a prior xet upload — the bytes must already be in xet storage;
+    ///     this call only registers metadata.
+    ///   - `size` (`u64`): file size in bytes.
+    ///   - `mtime` (`Option<u64>`): last modification time as a Unix timestamp in seconds.
+    ///   - `content_type` (`Option<String>`): MIME type (e.g. `"text/plain"`).
+    /// - `delete`: bucket-relative paths to remove from the bucket.
+    /// - `copy`: server-side copies into this bucket. Each [`BucketCopyFile`] requires:
+    ///   - `path` (`String`): bucket-relative destination path.
+    ///   - `xet_hash` (`String`): xet content hash of the source bytes (already present in xet storage from another
+    ///     repo or bucket — copies are by-hash, no data is transferred).
+    ///   - `source_repo_type` (`String`): repo type of the source, e.g. `"bucket"`, `"model"`, `"dataset"`, `"space"`.
+    ///   - `source_repo_id` (`String`): full source identifier in `"namespace/name"` form (e.g. `"user/my-bucket"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     #[allow(clippy::should_implement_trait)]
     pub async fn batch(
@@ -354,7 +369,12 @@ impl HFBucket {
     ///
     /// # Parameters
     ///
-    /// - `files` (required): list of `(local_path, remote_path)` pairs.
+    /// - `files` (required): list of `(local_path, remote_path)` pairs, where:
+    ///   - `local_path` (`PathBuf`) is a path on the local filesystem (absolute or relative to the current working
+    ///     directory) pointing at the file to upload.
+    ///   - `remote_path` (`String`) is a **bucket-relative**, slash-separated destination path (e.g.
+    ///     `"data/train/0001.bin"`) — no leading slash, forward slashes regardless of platform, and no `bucket_id`
+    ///     prefix.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_files(
@@ -420,7 +440,12 @@ impl HFBucket {
     ///
     /// # Parameters
     ///
-    /// - `files` (required): list of `(remote_path, local_path)` pairs.
+    /// - `files` (required): list of `(remote_path, local_path)` pairs, where:
+    ///   - `remote_path` (`String`) is a **bucket-relative**, slash-separated source path (e.g.
+    ///     `"data/train/0001.bin"`) — no leading slash, forward slashes regardless of platform, and no `bucket_id`
+    ///     prefix. Must resolve to a file entry; directory entries return [`HFError::InvalidParameter`].
+    ///   - `local_path` (`PathBuf`) is the destination path on the local filesystem. Parent directories are created as
+    ///     needed.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_files(
@@ -489,6 +514,7 @@ impl HFBucket {
 ///
 /// Represents an `addFile` entry in the NDJSON batch payload.
 /// The file content must have already been uploaded to xet to obtain the `xet_hash`.
+/// Used as input to [`HFBucket::batch`].
 #[derive(Debug, Clone)]
 pub struct BucketAddFile {
     /// Destination path in the bucket.
@@ -507,6 +533,7 @@ pub struct BucketAddFile {
 ///
 /// Represents a `copyFile` entry in the NDJSON batch payload.
 /// Copies are performed by xet hash — no data transfer occurs.
+/// Used as input to [`HFBucket::batch`].
 #[derive(Debug, Clone)]
 pub struct BucketCopyFile {
     /// Destination path in the bucket.

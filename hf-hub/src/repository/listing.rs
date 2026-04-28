@@ -1,3 +1,14 @@
+//! Repository content listing and metadata lookups.
+//!
+//! Builders on [`HFRepository`] for inspecting what's in a repo without downloading file
+//! contents:
+//!
+//! - [`HFRepository::list_files`] — flat list of file paths at a revision.
+//! - [`HFRepository::list_tree`] — paginated stream of [`RepoTreeEntry`] (files and directories), optionally recursive
+//!   and prefix-filtered.
+//! - [`HFRepository::get_paths_info`] — batched lookup of metadata for a known set of paths.
+//! - [`HFRepository::get_file_metadata`] — HEAD-based metadata for one file (size, ETag, commit hash, xet hash).
+
 use bon::bon;
 use futures::stream::{Stream, StreamExt};
 use reqwest::Url;

@@ -1,3 +1,16 @@
+//! Repository file and snapshot download builders.
+//!
+//! Builders on [`HFRepository`] for fetching file contents:
+//!
+//! - [`HFRepository::download_file`] — download one file to the cache or a local directory.
+//! - [`HFRepository::download_file_stream`] — stream a file (or byte range) without buffering.
+//! - [`HFRepository::download_file_to_bytes`] — read a file (or byte range) into memory.
+//! - [`HFRepository::snapshot_download`] — download all files at a revision, optionally filtered by allow/ignore globs
+//!   matched against repo-relative paths.
+//!
+//! Range parameters use Rust `std::ops::Range<u64>` semantics (start-inclusive, end-exclusive).
+//! See each builder's docs for the exact path / range / glob format rules.
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -1003,7 +1016,10 @@ impl HFRepository {
     ///
     /// - `filename` (required): path of the file to stream within the repository.
     /// - `revision`: Git revision. Defaults to the main branch.
-    /// - `range`: byte range to request (HTTP Range header).
+    /// - `range`: byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
+    ///   `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
+    ///   `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must be
+    ///   strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
     /// - `progress`: optional progress handler. `Start` is emitted before the stream is returned; `Progress` is emitted
     ///   as the caller polls each chunk; `Complete` is emitted when the stream is exhausted.
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -1030,8 +1046,16 @@ impl HFRepository {
     /// [`download_file_stream`](Self::download_file_stream) that collects the entire stream into
     /// a single buffer. When `range` is set, only the specified byte range is fetched.
     ///
-    /// `progress` (optional) emits `Start`/`Progress`/`Complete` as the underlying stream is
-    /// drained, identically to [`download_file_stream`](Self::download_file_stream).
+    /// # Parameters
+    ///
+    /// - `filename` (required): path of the file to download within the repository.
+    /// - `revision`: Git revision. Defaults to the main branch.
+    /// - `range`: byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
+    ///   `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
+    ///   `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must be
+    ///   strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
+    /// - `progress`: optional progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
+    ///   drained, identically to [`download_file_stream`](Self::download_file_stream).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file_to_bytes(
         &self,
@@ -1055,11 +1079,17 @@ impl HFRepository {
     /// cache snapshot directory for the resolved commit. When `local_dir` is `Some`, files are
     /// written directly under that directory.
     ///
+    /// `allow_patterns` and `ignore_patterns` use [`globset`](https://docs.rs/globset) syntax
+    /// (`*`, `?`, `**`, character classes, etc.). Both are matched against each candidate file's
+    /// **repository path** — forward-slash-joined and relative to the repo root, e.g.
+    /// `tokenizer.json` or `weights/model-00001-of-00003.safetensors`.
+    ///
     /// # Parameters
     ///
     /// - `revision`: Git revision. Defaults to the main branch.
-    /// - `allow_patterns`: glob patterns of files to include.
-    /// - `ignore_patterns`: glob patterns of files to exclude.
+    /// - `allow_patterns`: globs selecting which repository files to download. When set, only files whose repo path
+    ///   matches at least one pattern are downloaded.
+    /// - `ignore_patterns`: globs of repository files to skip. Matched against the same repo paths as `allow_patterns`.
     /// - `local_dir`: local directory to download into.
     /// - `force_download`: re-download all files even if cached.
     /// - `local_files_only`: resolve only from the local cache.
