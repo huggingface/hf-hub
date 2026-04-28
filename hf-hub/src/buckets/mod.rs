@@ -47,11 +47,20 @@ pub(crate) mod _handle {
     /// # Example
     ///
     /// ```rust,no_run
+    /// # use futures::StreamExt;
     /// # use hf_hub::HFClient;
     /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
     /// let client = HFClient::builder().build()?;
     /// let bucket = client.bucket("my-org", "my-bucket");
-    /// assert_eq!(bucket.bucket_id(), "my-org/my-bucket");
+    ///
+    /// let info = bucket.info().send().await?;
+    /// println!("bucket {} ({} files)", info.id, info.total_files);
+    ///
+    /// let stream = bucket.list_tree().send()?;
+    /// futures::pin_mut!(stream);
+    /// while let Some(entry) = stream.next().await {
+    ///     println!("{:?}", entry?);
+    /// }
     /// # Ok(()) }
     /// ```
     #[derive(Clone)]
@@ -633,6 +642,7 @@ pub struct BucketFileMetadata {
     pub xet_hash: String,
 }
 
+#[bon]
 impl HFClient {
     /// Create an [`HFBucket`] handle for a bucket.
     ///
@@ -641,10 +651,7 @@ impl HFClient {
     pub fn bucket(&self, owner: impl Into<String>, name: impl Into<String>) -> HFBucket {
         HFBucket::new(self.clone(), owner, name)
     }
-}
 
-#[bon]
-impl HFClient {
     /// Create a new bucket on the Hub. Endpoint: `POST /api/buckets/{namespace}/{name}`.
     ///
     /// When `exist_ok` is `true`, an existing bucket is treated as success and a [`BucketUrl`] is

@@ -634,6 +634,7 @@ impl fmt::Debug for HFRepository {
     }
 }
 
+#[bon]
 impl HFClient {
     /// Create an [`HFRepository`] handle for any repo type.
     pub fn repo(&self, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> HFRepository {
@@ -649,10 +650,7 @@ impl HFClient {
     pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository {
         self.repo(RepoType::Dataset, owner, name)
     }
-}
 
-#[bon]
-impl HFClient {
     /// List models on the Hub. Endpoint: `GET /api/models`.
     ///
     /// Returns a stream of [`ModelInfo`] entries. Pagination is automatic.
@@ -1003,7 +1001,7 @@ impl HFRepository {
         }
     }
 
-    /// The type of this repository (model, dataset, or space).
+    /// The type of this repository (model, dataset, space, or kernel).
     pub fn repo_type(&self) -> RepoType {
         self.repo_type
     }

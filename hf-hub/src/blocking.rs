@@ -19,6 +19,13 @@ fn build_runtime() -> HFResult<Arc<tokio::runtime::Runtime>> {
 /// Wraps an [`HFClient`] together with a dedicated single-threaded tokio
 /// runtime so the async API can be used from synchronous code.
 ///
+/// Xet uploads and downloads do not run on this runtime: hf-xet requires a
+/// multi-threaded runtime with the IO and time drivers enabled, so the
+/// single-threaded runtime here does not meet its requirements. When a Xet
+/// transfer is triggered through any blocking handle, hf-xet spins up its
+/// own multi-threaded thread pool to back the `XetSession`, separate from
+/// the runtime owned by `HFClientSync`.
+///
 /// See [`HFClient`] for configuration and API semantics.
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 #[derive(Clone)]
