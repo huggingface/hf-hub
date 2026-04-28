@@ -77,7 +77,7 @@
 //! let client = HFClient::new()?;
 //!
 //! let model = client.model("openai-community", "gpt2");
-//! let dataset = client.dataset("rajpurkar", "squad");
+//! let dataset = client.dataset("HuggingFaceFW", "fineweb");
 //! let space = client.space("huggingface", "diffusers-gallery");
 //!
 //! // Or a generic repo when the type is only known at runtime:
