@@ -201,6 +201,7 @@ pub enum HFError {
     /// produced.
     #[error("HTTP request error: {source}{}", .url.as_deref().map(|u| format!(" ({u})")).unwrap_or_default())]
     Request {
+        /// Underlying `reqwest` transport error.
         #[source]
         source: reqwest::Error,
         /// Request URL, when known.

@@ -317,13 +317,22 @@ impl HFBucket {
         }
 
         for copy in &copy {
-            let obj = serde_json::json!({
+            let mut obj = serde_json::json!({
                 "type": "copyFile",
                 "path": copy.path,
                 "xetHash": copy.xet_hash,
                 "sourceRepoType": copy.source_repo_type,
                 "sourceRepoId": copy.source_repo_id,
             });
+            if let Some(size) = copy.size {
+                obj["size"] = serde_json::Value::Number(size.into());
+            }
+            if let Some(mtime) = copy.mtime {
+                obj["mtime"] = serde_json::Value::Number(mtime.into());
+            }
+            if let Some(ref ct) = copy.content_type {
+                obj["contentType"] = serde_json::Value::String(ct.clone());
+            }
             lines.push(serde_json::to_string(&obj)?);
         }
 
@@ -544,6 +553,14 @@ pub struct BucketCopyFile {
     pub source_repo_type: String,
     /// Source repo or bucket ID (e.g. `"user/my-bucket"`).
     pub source_repo_id: String,
+    /// Source file size in bytes, when known. Forwarded to the batch endpoint as `size`.
+    pub size: Option<u64>,
+    /// Modification time in milliseconds since the Unix epoch, when set. Forwarded as `mtime`.
+    /// Python's `_BucketCopyFile` defaults this to "now" at construction time; in Rust callers set
+    /// it explicitly when they want it sent.
+    pub mtime: Option<u64>,
+    /// MIME content type, when known. Forwarded as `contentType`.
+    pub content_type: Option<String>,
 }
 
 /// Metadata about a bucket on the Hugging Face Hub.
@@ -901,7 +918,7 @@ impl crate::blocking::HFBucketSync {
 
 #[cfg(test)]
 mod tests {
-    use super::HFBucket;
+    use super::{BucketCopyFile, HFBucket};
 
     #[test]
     fn test_bucket_accessors() {
@@ -911,5 +928,32 @@ mod tests {
         assert_eq!(bucket.owner(), "my-org");
         assert_eq!(bucket.name(), "my-bucket");
         assert_eq!(bucket.bucket_id(), "my-org/my-bucket");
+    }
+
+    #[test]
+    fn test_bucket_copy_file_optional_fields_construct() {
+        let with_extras = BucketCopyFile {
+            path: "p".into(),
+            xet_hash: "x".into(),
+            source_repo_type: "bucket".into(),
+            source_repo_id: "u/b".into(),
+            size: Some(42),
+            mtime: Some(1_700_000_000_000),
+            content_type: Some("text/plain".into()),
+        };
+        assert_eq!(with_extras.size, Some(42));
+        assert_eq!(with_extras.mtime, Some(1_700_000_000_000));
+        assert_eq!(with_extras.content_type.as_deref(), Some("text/plain"));
+
+        let bare = BucketCopyFile {
+            path: "p".into(),
+            xet_hash: "x".into(),
+            source_repo_type: "bucket".into(),
+            source_repo_id: "u/b".into(),
+            size: None,
+            mtime: None,
+            content_type: None,
+        };
+        assert!(bare.size.is_none() && bare.mtime.is_none() && bare.content_type.is_none());
     }
 }

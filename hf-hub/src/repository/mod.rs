@@ -48,9 +48,13 @@ pub(crate) mod _kind {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "lowercase")]
     pub enum RepoType {
+        /// A model repository.
         Model,
+        /// A dataset repository.
         Dataset,
+        /// A Space (interactive app) repository.
         Space,
+        /// A kernel repository.
         Kernel,
     }
 }
@@ -63,8 +67,11 @@ pub(crate) use _kind::RepoType;
 /// Serializes as `false` when [`GatedApprovalMode::Disabled`], or as the lowercase mode string otherwise.
 #[derive(Debug, Clone)]
 pub enum GatedApprovalMode {
+    /// Access is open; no request is required.
     Disabled,
+    /// Access requests are approved automatically once the user accepts the terms.
     Auto,
+    /// Access requests must be reviewed and approved by a repo owner.
     Manual,
 }
 
@@ -72,7 +79,9 @@ pub enum GatedApprovalMode {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GatedNotificationsMode {
+    /// Bundle notifications and deliver them periodically.
     Bulk,
+    /// Notify on every access request as it arrives.
     RealTime,
 }
 
@@ -81,18 +90,208 @@ pub enum GatedNotificationsMode {
 /// Returned by [`HFRepository::info`]; the active variant
 /// matches the repository's [`RepoType`].
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum RepoInfo {
+    /// Info for a model repository.
     Model(ModelInfo),
+    /// Info for a dataset repository.
     Dataset(DatasetInfo),
+    /// Info for a Space repository.
     Space(SpaceInfo),
 }
 
 /// A single file entry in a repository's flat "siblings" listing, as returned by the repo info endpoint.
+///
+/// Most fields are populated only when the repo info request asks for file metadata (the `files_metadata`
+/// option in the Python client / `?blobs=true` on the API). When listing repos, only `rfilename` is set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoSibling {
+    /// File path relative to the repo root.
     pub rfilename: String,
+    /// File size in bytes. Populated only when file metadata was requested.
     pub size: Option<u64>,
+    /// LFS metadata for the file. Populated only when the file is stored with Git LFS and file metadata was
+    /// requested.
     pub lfs: Option<files::BlobLfsInfo>,
+}
+
+/// SafeTensors footprint for a model: per-dtype parameter counts and total.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SafeTensorsInfo {
+    /// Parameter counts keyed by dtype (e.g. `"F32"`, `"BF16"`, `"I8"`).
+    pub parameters: std::collections::HashMap<String, u64>,
+    /// Total number of parameters across all dtypes.
+    pub total: u64,
+}
+
+/// Transformers-specific metadata for a model (auto class, processor, etc.).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct TransformersInfo {
+    /// Name of the Transformers auto class for this model (e.g. `"AutoModelForCausalLM"`).
+    pub auto_model: String,
+    /// Custom Python class declared by the model, if any.
+    #[serde(default)]
+    pub custom_class: Option<String>,
+    /// Pipeline tag declared in `transformersInfo` (may differ from the top-level `pipeline_tag`).
+    #[serde(default)]
+    pub pipeline_tag: Option<String>,
+    /// Processor name declared by the model, if any.
+    #[serde(default)]
+    pub processor: Option<String>,
+}
+
+/// Inference-providers mapping for a model.
+///
+/// Mirrors `huggingface_hub.InferenceProviderMapping`. Each entry describes how a single provider
+/// serves the model.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InferenceProviderMapping {
+    /// Provider name (e.g. `"hf-inference"`, `"together"`).
+    pub provider: String,
+    /// ID of the model on the provider's side.
+    pub provider_id: String,
+    /// Status of the mapping: `"error"`, `"live"`, or `"staging"`.
+    pub status: String,
+    /// Task served by this provider (e.g. `"text-generation"`).
+    pub task: String,
+    /// Adapter name, if the mapping uses an adapter.
+    #[serde(default)]
+    pub adapter: Option<String>,
+    /// Path to adapter weights, if applicable.
+    #[serde(default)]
+    pub adapter_weights_path: Option<String>,
+    /// Mapping kind: `"single-model"` or `"tag-filter"`.
+    #[serde(default, rename = "type")]
+    pub r#type: Option<String>,
+}
+
+fn deserialize_inference_provider_mapping<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<InferenceProviderMapping>>, D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    let Some(value) = value else { return Ok(None) };
+    match value {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(serde_json::from_value(item).map_err(D::Error::custom)?);
+            }
+            Ok(Some(out))
+        },
+        serde_json::Value::Object(map) => {
+            let mut out = Vec::with_capacity(map.len());
+            for (provider, mut value) in map {
+                if let serde_json::Value::Object(ref mut obj) = value {
+                    obj.insert("provider".to_string(), serde_json::Value::String(provider));
+                }
+                out.push(serde_json::from_value(value).map_err(D::Error::custom)?);
+            }
+            Ok(Some(out))
+        },
+        _ => Err(D::Error::custom("expected list or object for inferenceProviderMapping")),
+    }
+}
+
+/// One evaluation-result entry from the `.eval_results/*.yaml` format.
+///
+/// Mirrors `huggingface_hub.EvalResultEntry`. The wire format nests `dataset` and `source` objects;
+/// the Rust struct flattens them for ergonomic access. See
+/// <https://huggingface.co/docs/hub/eval-results>.
+#[derive(Debug, Clone, Serialize)]
+pub struct EvalResultEntry {
+    /// Benchmark dataset ID (e.g. `"cais/hle"`).
+    pub dataset_id: String,
+    /// Task identifier within the benchmark (e.g. `"gpqa_diamond"`).
+    pub task_id: String,
+    /// The metric value (numeric, string, or other JSON shape depending on the benchmark).
+    pub value: serde_json::Value,
+    /// Git SHA of the benchmark dataset, if pinned.
+    pub dataset_revision: Option<String>,
+    /// Signature proving the evaluation is auditable and reproducible.
+    pub verify_token: Option<String>,
+    /// ISO-8601 datetime when the evaluation was run; defaults to git commit time when omitted.
+    pub date: Option<String>,
+    /// URL pointing to the evaluation source (Space, dataset, etc.).
+    pub source_url: Option<String>,
+    /// Display name for the source.
+    pub source_name: Option<String>,
+    /// HF user attributed for the evaluation.
+    pub source_user: Option<String>,
+    /// HF org attributed for the evaluation.
+    pub source_org: Option<String>,
+    /// Free-text notes about the evaluation setup.
+    pub notes: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for EvalResultEntry {
+    fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        #[derive(Deserialize)]
+        struct DatasetWire {
+            id: String,
+            task_id: String,
+            #[serde(default)]
+            revision: Option<String>,
+        }
+        #[derive(Deserialize, Default)]
+        struct SourceWire {
+            #[serde(default)]
+            url: Option<String>,
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            user: Option<String>,
+            #[serde(default)]
+            org: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct EntryWire {
+            dataset: DatasetWire,
+            value: serde_json::Value,
+            #[serde(default, rename = "verifyToken")]
+            verify_token: Option<String>,
+            #[serde(default)]
+            date: Option<String>,
+            #[serde(default)]
+            source: Option<SourceWire>,
+            #[serde(default)]
+            notes: Option<String>,
+        }
+        #[derive(Deserialize)]
+        struct OuterWire {
+            #[serde(default)]
+            data: Option<serde_json::Value>,
+            #[serde(flatten)]
+            rest: serde_json::Map<String, serde_json::Value>,
+        }
+        let outer = OuterWire::deserialize(deserializer)?;
+        let inner = match outer.data {
+            Some(v) => v,
+            None => serde_json::Value::Object(outer.rest),
+        };
+        let entry: EntryWire = serde_json::from_value(inner).map_err(D::Error::custom)?;
+        let source = entry.source.unwrap_or_default();
+        Ok(EvalResultEntry {
+            dataset_id: entry.dataset.id,
+            task_id: entry.dataset.task_id,
+            value: entry.value,
+            dataset_revision: entry.dataset.revision,
+            verify_token: entry.verify_token,
+            date: entry.date,
+            source_url: source.url,
+            source_name: source.name,
+            source_user: source.user,
+            source_org: source.org,
+            notes: entry.notes,
+        })
+    }
 }
 
 /// Metadata for a model repository on the Hub.
@@ -103,32 +302,90 @@ pub struct RepoSibling {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
+    /// Repo ID, in the form `owner/name`.
     pub id: String,
+    /// Internal Hub identifier (the API's `_id` field). Most callers should use `id` instead.
     #[serde(rename = "_id")]
-    pub mongo_id: Option<String>,
-    pub model_id: Option<String>,
+    pub internal_id: Option<String>,
+    /// Owner of the repo (the part before `/` in `id`).
     pub author: Option<String>,
-    pub sha: Option<String>,
-    pub private: Option<bool>,
-    pub gated: Option<serde_json::Value>,
+    /// Base models this model is derived from.
+    #[serde(default)]
+    pub base_models: Option<Vec<String>>,
+    /// Parsed YAML metadata from the model card (`README.md` front matter). Modeled as raw JSON
+    /// because the schema varies by library.
+    pub card_data: Option<serde_json::Value>,
+    /// Number of children (derived) models.
+    pub children_model_count: Option<u64>,
+    /// Model configuration (e.g. parsed `config.json` for Transformers models).
+    pub config: Option<serde_json::Value>,
+    /// ISO-8601 timestamp when the repo was created. The earliest possible value is
+    /// `2022-03-02T23:29:04.000Z` (when the Hub started recording creation dates).
+    pub created_at: Option<String>,
+    /// Whether the repo is disabled.
     pub disabled: Option<bool>,
+    /// Number of downloads over the last 30 days.
     pub downloads: Option<u64>,
+    /// Cumulative download count since repo creation.
     pub downloads_all_time: Option<u64>,
-    pub likes: Option<u64>,
-    pub tags: Option<Vec<String>>,
-    #[serde(rename = "pipeline_tag")]
-    pub pipeline_tag: Option<String>,
+    /// Evaluation results parsed from the model's `.eval_results/*.yaml` files.
+    #[serde(default, rename = "evalResults")]
+    pub eval_results: Option<Vec<EvalResultEntry>>,
+    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"` indicating
+    /// the approval mode for access requests. Modeled as raw JSON because the field is union-typed.
+    pub gated: Option<serde_json::Value>,
+    /// GGUF-specific metadata, when the repo contains GGUF files.
+    pub gguf: Option<serde_json::Value>,
+    /// Inference-providers status. Currently `Some("warm")` when the model is served by at least one
+    /// provider, `None` otherwise.
+    pub inference: Option<String>,
+    /// Per-provider inference mappings, ordered by the user's provider preference.
+    ///
+    /// The Hub returns this either as a list (modern shape) or as an object keyed by provider name
+    /// (legacy shape); both are accepted.
+    #[serde(default, deserialize_with = "deserialize_inference_provider_mapping")]
+    pub inference_provider_mapping: Option<Vec<InferenceProviderMapping>>,
+    /// ISO-8601 timestamp of the most recent commit to the repo.
+    pub last_modified: Option<String>,
+    /// Library this model is associated with (e.g. `"transformers"`, `"diffusers"`).
     #[serde(rename = "library_name")]
     pub library_name: Option<String>,
-    pub created_at: Option<String>,
-    pub last_modified: Option<String>,
+    /// Number of likes on the repo.
+    pub likes: Option<u64>,
+    /// Mask token used by the model (for fill-mask tasks).
+    #[serde(rename = "mask_token")]
+    pub mask_token: Option<String>,
+    /// Model-index data describing benchmark results in the `model-index` format.
+    #[serde(rename = "model-index")]
+    pub model_index: Option<serde_json::Value>,
+    /// Primary task tag (e.g. `"text-generation"`, `"image-classification"`).
+    #[serde(rename = "pipeline_tag")]
+    pub pipeline_tag: Option<String>,
+    /// Whether the repo is private.
+    pub private: Option<bool>,
+    /// Resource-group information, when the repo belongs to one.
+    pub resource_group: Option<serde_json::Value>,
+    /// Per-dtype parameter counts produced from the model's safetensors files, if any.
+    pub safetensors: Option<SafeTensorsInfo>,
+    /// Security-scan summary for the repo.
+    pub security_repo_status: Option<serde_json::Value>,
+    /// Git commit SHA at the revision the response describes.
+    pub sha: Option<String>,
+    /// Files in the repo. Only populated when file metadata is requested; otherwise only `rfilename`
+    /// is set on each entry. See [`RepoSibling`].
     pub siblings: Option<Vec<RepoSibling>>,
-    pub card_data: Option<serde_json::Value>,
-    pub config: Option<serde_json::Value>,
-    pub trending_score: Option<f64>,
-    pub gguf: Option<serde_json::Value>,
+    /// IDs of Spaces that use this model.
     pub spaces: Option<Vec<String>>,
+    /// Hub tags. Includes both author-provided tags from the model card and tags computed by the Hub
+    /// (e.g. supported libraries, arXiv references).
+    pub tags: Option<Vec<String>>,
+    /// Transformers-specific metadata declared by the model.
+    pub transformers_info: Option<TransformersInfo>,
+    /// Trending score used to rank the repo on the Hub's trending lists.
+    pub trending_score: Option<f64>,
+    /// Total size of the repo on disk, in bytes.
     pub used_storage: Option<u64>,
+    /// Inference-widget configuration declared in the model card.
     pub widget_data: Option<serde_json::Value>,
 }
 
@@ -140,24 +397,52 @@ pub struct ModelInfo {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatasetInfo {
+    /// Repo ID, in the form `owner/name`.
     pub id: String,
+    /// Internal Hub identifier (the API's `_id` field). Most callers should use `id` instead.
     #[serde(rename = "_id")]
-    pub mongo_id: Option<String>,
+    pub internal_id: Option<String>,
+    /// Owner of the repo (the part before `/` in `id`).
     pub author: Option<String>,
+    /// Git commit SHA at the revision the response describes.
     pub sha: Option<String>,
+    /// Whether the repo is private.
     pub private: Option<bool>,
+    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"` indicating
+    /// the approval mode for access requests. Modeled as raw JSON because the field is union-typed.
     pub gated: Option<serde_json::Value>,
+    /// Whether the repo is disabled.
     pub disabled: Option<bool>,
+    /// Number of downloads over the last 30 days.
     pub downloads: Option<u64>,
+    /// Cumulative download count since repo creation.
     pub downloads_all_time: Option<u64>,
+    /// Number of likes on the repo.
     pub likes: Option<u64>,
+    /// Hub tags declared on the dataset.
     pub tags: Option<Vec<String>>,
+    /// ISO-8601 timestamp when the repo was created. The earliest possible value is
+    /// `2022-03-02T23:29:04.000Z` (when the Hub started recording creation dates).
     pub created_at: Option<String>,
+    /// ISO-8601 timestamp of the most recent commit to the repo.
     pub last_modified: Option<String>,
+    /// Files in the repo. Only populated when file metadata is requested; otherwise only `rfilename`
+    /// is set on each entry. See [`RepoSibling`].
     pub siblings: Option<Vec<RepoSibling>>,
+    /// Parsed YAML metadata from the dataset card (`README.md` front matter).
     pub card_data: Option<serde_json::Value>,
+    /// Citation information for the dataset.
+    pub citation: Option<String>,
+    /// Papers-with-code identifier, when the dataset is registered there.
+    #[serde(rename = "paperswithcode_id")]
+    pub paperswithcode_id: Option<String>,
+    /// Resource-group information, when the repo belongs to one.
+    pub resource_group: Option<serde_json::Value>,
+    /// Trending score used to rank the repo on the Hub's trending lists.
     pub trending_score: Option<f64>,
+    /// Free-text description of the dataset.
     pub description: Option<String>,
+    /// Total size of the repo on disk, in bytes.
     pub used_storage: Option<u64>,
 }
 
@@ -169,31 +454,63 @@ pub struct DatasetInfo {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceInfo {
+    /// Repo ID, in the form `owner/name`.
     pub id: String,
+    /// Internal Hub identifier (the API's `_id` field). Most callers should use `id` instead.
     #[serde(rename = "_id")]
-    pub mongo_id: Option<String>,
+    pub internal_id: Option<String>,
+    /// Owner of the repo (the part before `/` in `id`).
     pub author: Option<String>,
+    /// Git commit SHA at the revision the response describes.
     pub sha: Option<String>,
+    /// Whether the repo is private.
     pub private: Option<bool>,
+    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"` indicating
+    /// the approval mode for access requests. Modeled as raw JSON because the field is union-typed.
     pub gated: Option<serde_json::Value>,
+    /// Whether the Space is disabled.
     pub disabled: Option<bool>,
+    /// Number of likes on the Space.
     pub likes: Option<u64>,
+    /// Hub tags declared on the Space.
     pub tags: Option<Vec<String>>,
+    /// ISO-8601 timestamp when the repo was created. The earliest possible value is
+    /// `2022-03-02T23:29:04.000Z` (when the Hub started recording creation dates).
     pub created_at: Option<String>,
+    /// ISO-8601 timestamp of the most recent commit to the repo.
     pub last_modified: Option<String>,
+    /// Files in the repo. Only populated when file metadata is requested; otherwise only `rfilename`
+    /// is set on each entry. See [`RepoSibling`].
     pub siblings: Option<Vec<RepoSibling>>,
+    /// Parsed YAML metadata from the Space card (`README.md` front matter).
     pub card_data: Option<serde_json::Value>,
+    /// SDK powering the Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`, `"static"`).
     pub sdk: Option<String>,
+    /// Trending score used to rank the Space on the Hub's trending lists.
     pub trending_score: Option<f64>,
+    /// Hostname serving the Space.
     pub host: Option<String>,
+    /// Subdomain serving the Space.
     pub subdomain: Option<String>,
-    pub runtime: Option<serde_json::Value>,
+    /// Runtime state of the Space (stage, hardware, sleep time, volumes, etc.).
+    ///
+    /// Populated when the repo info request expands the `runtime` field. The same shape is also
+    /// returned by [`HFSpace::runtime`](crate::HFSpace::runtime).
+    pub runtime: Option<crate::spaces::SpaceRuntime>,
+    /// Datasets used by the Space, declared in the Space card.
+    pub datasets: Option<Vec<String>>,
+    /// Models used by the Space, declared in the Space card.
+    pub models: Option<Vec<String>>,
+    /// Resource-group information, when the repo belongs to one.
+    pub resource_group: Option<serde_json::Value>,
+    /// Total size of the repo on disk, in bytes.
     pub used_storage: Option<u64>,
 }
 
-/// URL returned by create_repo/move_repo
+/// URL of a repository, returned by create/move endpoints.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RepoUrl {
+    /// Absolute URL of the repository on the Hub.
     pub url: String,
 }
 
@@ -297,6 +614,7 @@ impl FromStr for GatedNotificationsMode {
 }
 
 impl RepoInfo {
+    /// The [`RepoType`] of the active variant.
     pub fn repo_type(&self) -> RepoType {
         match self {
             RepoInfo::Model(_) => RepoType::Model,
@@ -1170,7 +1488,10 @@ impl crate::blocking::HFRepositorySync {
 mod tests {
     use futures::StreamExt;
 
-    use super::{HFRepository, RepoType, split_repo_id};
+    use super::{
+        DatasetInfo, EvalResultEntry, HFRepository, InferenceProviderMapping, ModelInfo, RepoType, SafeTensorsInfo,
+        SpaceInfo, TransformersInfo, split_repo_id,
+    };
     use crate::client::HFClient;
 
     #[test]
@@ -1232,5 +1553,118 @@ mod tests {
         let stream = client.list_spaces().limit(0_usize).send().unwrap();
         futures::pin_mut!(stream);
         assert!(stream.next().await.is_none());
+    }
+
+    #[test]
+    fn test_safetensors_info_deserialize() {
+        let json = r#"{"parameters":{"F32":124000000,"BF16":1000000},"total":125000000}"#;
+        let info: SafeTensorsInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.total, 125_000_000);
+        assert_eq!(info.parameters.get("F32"), Some(&124_000_000));
+    }
+
+    #[test]
+    fn test_transformers_info_deserialize() {
+        let json = r#"{"auto_model":"AutoModelForCausalLM","pipeline_tag":"text-generation"}"#;
+        let info: TransformersInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.auto_model, "AutoModelForCausalLM");
+        assert_eq!(info.pipeline_tag.as_deref(), Some("text-generation"));
+        assert!(info.processor.is_none());
+    }
+
+    #[test]
+    fn test_eval_result_entry_minimal() {
+        let json = r#"{"dataset":{"id":"cais/hle","task_id":"default"},"value":20.9}"#;
+        let entry: EvalResultEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.dataset_id, "cais/hle");
+        assert_eq!(entry.task_id, "default");
+        assert_eq!(entry.value.as_f64(), Some(20.9));
+        assert!(entry.source_url.is_none());
+    }
+
+    #[test]
+    fn test_eval_result_entry_with_source_and_data_wrapper() {
+        let json = r#"{"data":{"dataset":{"id":"d/x","task_id":"t","revision":"abc"},"value":0.5,"source":{"url":"u","name":"n","org":"o"},"verifyToken":"vt","notes":"n"}}"#;
+        let entry: EvalResultEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.dataset_id, "d/x");
+        assert_eq!(entry.dataset_revision.as_deref(), Some("abc"));
+        assert_eq!(entry.source_url.as_deref(), Some("u"));
+        assert_eq!(entry.source_org.as_deref(), Some("o"));
+        assert_eq!(entry.verify_token.as_deref(), Some("vt"));
+    }
+
+    #[test]
+    fn test_inference_provider_mapping_list_form() {
+        let json = r#"{
+            "id":"o/m",
+            "inferenceProviderMapping":[
+                {"provider":"hf-inference","providerId":"o/m","status":"live","task":"text-generation"}
+            ]
+        }"#;
+        let info: ModelInfo = serde_json::from_str(json).unwrap();
+        let mappings = info.inference_provider_mapping.unwrap();
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].provider, "hf-inference");
+        assert_eq!(mappings[0].provider_id, "o/m");
+        assert_eq!(mappings[0].status, "live");
+    }
+
+    #[test]
+    fn test_inference_provider_mapping_dict_form() {
+        let json = r#"{
+            "id":"o/m",
+            "inferenceProviderMapping":{
+                "together":{"providerId":"o/m","status":"live","task":"text-generation"}
+            }
+        }"#;
+        let info: ModelInfo = serde_json::from_str(json).unwrap();
+        let mappings = info.inference_provider_mapping.unwrap();
+        assert_eq!(mappings.len(), 1);
+        assert_eq!(mappings[0].provider, "together");
+        assert_eq!(mappings[0].task, "text-generation");
+    }
+
+    #[test]
+    fn test_inference_provider_mapping_helper_directly() {
+        let info_helper: InferenceProviderMapping = serde_json::from_str(
+            r#"{"provider":"x","providerId":"y","status":"live","task":"t","adapterWeightsPath":"w"}"#,
+        )
+        .unwrap();
+        assert_eq!(info_helper.adapter_weights_path.as_deref(), Some("w"));
+    }
+
+    #[test]
+    fn test_model_info_ignores_unknown_and_legacy_fields() {
+        let json = r#"{"id":"o/m","modelId":"o/m","brandNewField":42}"#;
+        let info: ModelInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.id, "o/m");
+    }
+
+    #[test]
+    fn test_dataset_info_new_fields() {
+        let json = r#"{
+            "id":"u/d",
+            "citation":"Doe et al. 2024",
+            "paperswithcode_id":"pwc-id",
+            "resourceGroup":{"id":"rg-1","name":"Team A"}
+        }"#;
+        let info: DatasetInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.citation.as_deref(), Some("Doe et al. 2024"));
+        assert_eq!(info.paperswithcode_id.as_deref(), Some("pwc-id"));
+        assert!(info.resource_group.is_some());
+    }
+
+    #[test]
+    fn test_space_info_new_fields() {
+        let json = r#"{
+            "id":"u/s",
+            "models":["org/model-a","org/model-b"],
+            "datasets":["org/dataset"],
+            "resourceGroup":{"id":"rg-2"}
+        }"#;
+        let info: SpaceInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.models.as_deref(), Some(&["org/model-a".to_string(), "org/model-b".to_string()][..]));
+        assert_eq!(info.datasets.as_deref(), Some(&["org/dataset".to_string()][..]));
+        assert!(info.resource_group.is_some());
     }
 }

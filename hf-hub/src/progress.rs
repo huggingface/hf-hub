@@ -291,7 +291,12 @@ pub enum UploadEvent {
     /// - `total_files`: number of files the operation will attempt to upload (excludes deletes and other non-add
     ///   operations in a commit).
     /// - `total_bytes`: sum of source-content sizes in bytes, before any xet deduplication.
-    Start { total_files: usize, total_bytes: u64 },
+    Start {
+        /// Number of files the operation will upload.
+        total_files: usize,
+        /// Sum of source-content sizes in bytes, before xet deduplication.
+        total_bytes: u64,
+    },
 
     /// Byte-level progress during the active upload phase.
     ///
@@ -330,12 +335,19 @@ pub enum UploadEvent {
     /// cleanup emit). Handlers that track completion should use a set keyed
     /// by filename to dedupe.
     Progress {
+        /// Logical content bytes processed so far across all files.
         bytes_completed: u64,
+        /// Total logical content bytes for the operation (matches `Start.total_bytes`).
         total_bytes: u64,
+        /// Rate of logical content processing in bytes/sec. `None` during warm-up.
         bytes_per_sec: Option<f64>,
+        /// Post-dedup network bytes actually sent so far.
         transfer_bytes_completed: u64,
+        /// Total post-dedup network bytes the operation is expected to send. Typically `≪ total_bytes`.
         transfer_bytes: u64,
+        /// Rate of network transfer in bytes/sec. `None` during warm-up.
         transfer_bytes_per_sec: Option<f64>,
+        /// Per-file snapshot of every xet-tracked file in the upload (may be empty for non-xet flows).
         files: Vec<FileProgress>,
     },
 
@@ -402,7 +414,12 @@ pub enum DownloadEvent {
     /// - `total_files`: number of files to download.
     /// - `total_bytes`: sum of remote file sizes in bytes (reported by HEAD responses). For single-file downloads, the
     ///   size of that file.
-    Start { total_files: usize, total_bytes: u64 },
+    Start {
+        /// Number of files to download.
+        total_files: usize,
+        /// Sum of remote file sizes in bytes, as reported by HEAD responses.
+        total_bytes: u64,
+    },
 
     /// Per-file progress delta for one or more files.
     ///
@@ -418,7 +435,10 @@ pub enum DownloadEvent {
     /// A single file may appear with `FileStatus::Complete` across multiple
     /// events. Handlers that want exactly-once completion handling should
     /// track a seen-set of filenames.
-    Progress { files: Vec<FileProgress> },
+    Progress {
+        /// Per-file delta — only files whose state changed since the previous `Progress` event.
+        files: Vec<FileProgress>,
+    },
 
     /// Aggregate byte-level progress for the in-flight xet batch.
     ///
@@ -429,8 +449,11 @@ pub enum DownloadEvent {
     /// `bytes_per_sec` is `None` until enough samples have accumulated to
     /// compute a rate.
     AggregateProgress {
+        /// Bytes downloaded so far across the in-flight xet batch.
         bytes_completed: u64,
+        /// Total bytes for the in-flight xet batch.
         total_bytes: u64,
+        /// Download rate in bytes/sec. `None` until enough samples accumulate to compute a rate.
         bytes_per_sec: Option<f64>,
     },
 

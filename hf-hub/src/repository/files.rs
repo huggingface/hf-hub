@@ -45,6 +45,45 @@ pub struct LastCommitInfo {
     pub date: Option<String>,
 }
 
+/// Security-scan summary for a file in a repository.
+///
+/// Populated on [`RepoTreeEntry::File`] entries when the listing was requested with `expand=true`.
+/// Mirrors `huggingface_hub.BlobSecurityInfo`. The `safe` field is computed from `status` for
+/// backward compatibility (true iff `status == "safe"`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobSecurityInfo {
+    /// Whether the file is considered safe (computed: `status == "safe"`).
+    pub safe: bool,
+    /// Status string reported by the scanner (e.g. `"safe"`, `"unsafe"`, `"suspicious"`).
+    pub status: String,
+    /// Antivirus-scan details, when present.
+    pub av_scan: Option<serde_json::Value>,
+    /// Pickle-import-scan details, when present.
+    pub pickle_import_scan: Option<serde_json::Value>,
+}
+
+impl<'de> Deserialize<'de> for BlobSecurityInfo {
+    fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire {
+            status: String,
+            #[serde(default)]
+            av_scan: Option<serde_json::Value>,
+            #[serde(default)]
+            pickle_import_scan: Option<serde_json::Value>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(BlobSecurityInfo {
+            safe: wire.status == "safe",
+            status: wire.status,
+            av_scan: wire.av_scan,
+            pickle_import_scan: wire.pickle_import_scan,
+        })
+    }
+}
+
 /// Metadata returned from a HEAD request on a file's resolve URL.
 ///
 /// Produced by [`HFRepository::get_file_metadata`]
@@ -62,6 +101,9 @@ pub struct FileMetadataInfo {
     /// File size in bytes. Falls back to `0` if neither `X-Linked-Size` nor `Content-Length`
     /// is present on the response.
     pub file_size: u64,
+    /// Final URL the HEAD request resolved to after redirects (Hub URL or CDN). `None` when no
+    /// redirect was followed and the request URL itself was not preserved.
+    pub location: Option<String>,
 }
 
 /// File or directory entry returned by repository tree/listing APIs.
@@ -81,6 +123,12 @@ pub enum RepoTreeEntry {
         /// Last-commit summary, only when expanded metadata is requested.
         #[serde(default, rename = "lastCommit")]
         last_commit: Option<LastCommitInfo>,
+        /// Xet content hash, when the file is Xet-backed.
+        #[serde(default, rename = "xetHash")]
+        xet_hash: Option<String>,
+        /// Security-scan summary for the file, only when expanded metadata is requested.
+        #[serde(default, rename = "securityFileStatus")]
+        security: Option<BlobSecurityInfo>,
     },
     /// A directory entry in the repository tree.
     Directory {
@@ -88,6 +136,9 @@ pub enum RepoTreeEntry {
         oid: String,
         /// Repository-relative path.
         path: String,
+        /// Last-commit summary, only when expanded metadata is requested.
+        #[serde(default, rename = "lastCommit")]
+        last_commit: Option<LastCommitInfo>,
     },
 }
 
@@ -96,8 +147,7 @@ pub enum RepoTreeEntry {
 /// Includes URLs for the commit and any PR that was opened, along with the commit OID
 /// when present. Returned by [`HFRepository::create_commit`]
 /// and related upload/delete helpers.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct CommitInfo {
     /// URL of the created commit on the Hub, when available.
     pub commit_url: Option<String>,
@@ -111,6 +161,48 @@ pub struct CommitInfo {
     pub pr_url: Option<String>,
     /// Pull-request number, when `create_pr` was enabled and a PR was opened.
     pub pr_num: Option<u64>,
+    /// PR-revision string of the form `refs/pr/{pr_num}`, derived from `pr_num` when a PR was opened.
+    pub pr_revision: Option<String>,
+    /// Repo-level URL, derived from `commit_url` by stripping the `/commit/{sha}` suffix.
+    pub repo_url: Option<crate::repository::RepoUrl>,
+}
+
+impl<'de> Deserialize<'de> for CommitInfo {
+    fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire {
+            #[serde(default)]
+            commit_url: Option<String>,
+            #[serde(default)]
+            commit_message: Option<String>,
+            #[serde(default)]
+            commit_description: Option<String>,
+            #[serde(default)]
+            commit_oid: Option<String>,
+            #[serde(default)]
+            pr_url: Option<String>,
+            #[serde(default)]
+            pr_num: Option<u64>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let pr_revision = wire.pr_num.map(|n| format!("refs/pr/{n}"));
+        let repo_url = wire.commit_url.as_deref().and_then(|url| {
+            url.split_once("/commit/").map(|(prefix, _)| crate::repository::RepoUrl {
+                url: prefix.to_string(),
+            })
+        });
+        Ok(CommitInfo {
+            commit_url: wire.commit_url,
+            commit_message: wire.commit_message,
+            commit_description: wire.commit_description,
+            commit_oid: wire.commit_oid,
+            pr_url: wire.pr_url,
+            pr_num: wire.pr_num,
+            pr_revision,
+            repo_url,
+        })
+    }
 }
 
 /// File mutation included in [`HFRepository::create_commit`].
@@ -211,18 +303,67 @@ pub(super) fn matches_any_glob(patterns: &[String], path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::RepoTreeEntry;
+    use super::{BlobSecurityInfo, CommitInfo, FileMetadataInfo, RepoTreeEntry};
 
     #[test]
     fn test_repo_tree_entry_deserialize_file() {
         let json = r#"{"type":"file","oid":"abc123","size":100,"path":"test.txt"}"#;
         let entry: RepoTreeEntry = serde_json::from_str(json).unwrap();
         match entry {
-            RepoTreeEntry::File { path, size, .. } => {
+            RepoTreeEntry::File {
+                path,
+                size,
+                xet_hash,
+                security,
+                ..
+            } => {
                 assert_eq!(path, "test.txt");
                 assert_eq!(size, 100);
+                assert!(xet_hash.is_none());
+                assert!(security.is_none());
             },
             _ => panic!("Expected File variant"),
+        }
+    }
+
+    #[test]
+    fn test_repo_tree_entry_file_expanded() {
+        let json = r#"{
+            "type":"file","oid":"abc123","size":100,"path":"weights.safetensors",
+            "xetHash":"xet-deadbeef",
+            "securityFileStatus":{"status":"safe","avScan":{"virusFound":false},"pickleImportScan":null},
+            "lastCommit":{"id":"sha","title":"t","date":"2025-01-01T00:00:00Z"}
+        }"#;
+        let entry: RepoTreeEntry = serde_json::from_str(json).unwrap();
+        match entry {
+            RepoTreeEntry::File {
+                xet_hash,
+                security,
+                last_commit,
+                ..
+            } => {
+                assert_eq!(xet_hash.as_deref(), Some("xet-deadbeef"));
+                let security = security.unwrap();
+                assert_eq!(security.status, "safe");
+                assert!(security.safe);
+                assert!(security.av_scan.is_some());
+                assert!(security.pickle_import_scan.is_none());
+                assert!(last_commit.is_some());
+            },
+            _ => panic!("Expected File variant"),
+        }
+    }
+
+    #[test]
+    fn test_repo_tree_entry_directory_with_last_commit() {
+        let json = r#"{"type":"directory","oid":"def456","path":"src","lastCommit":{"id":"sha","title":"t","date":"2025-01-01T00:00:00Z"}}"#;
+        let entry: RepoTreeEntry = serde_json::from_str(json).unwrap();
+        match entry {
+            RepoTreeEntry::Directory { path, last_commit, .. } => {
+                assert_eq!(path, "src");
+                assert!(last_commit.is_some());
+            },
+            _ => panic!("Expected Directory variant"),
         }
     }
 
@@ -231,10 +372,66 @@ mod tests {
         let json = r#"{"type":"directory","oid":"def456","path":"src"}"#;
         let entry: RepoTreeEntry = serde_json::from_str(json).unwrap();
         match entry {
-            RepoTreeEntry::Directory { path, .. } => {
+            RepoTreeEntry::Directory { path, last_commit, .. } => {
                 assert_eq!(path, "src");
+                assert!(last_commit.is_none());
             },
             _ => panic!("Expected Directory variant"),
         }
+    }
+
+    #[test]
+    fn test_blob_security_info_unsafe_status() {
+        let json = r#"{"status":"suspicious","avScan":null,"pickleImportScan":{"matches":[]}}"#;
+        let info: BlobSecurityInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.status, "suspicious");
+        assert!(!info.safe);
+        assert!(info.av_scan.is_none());
+        assert!(info.pickle_import_scan.is_some());
+    }
+
+    #[test]
+    fn test_commit_info_derives_pr_revision_and_repo_url() {
+        let json = r#"{
+            "commitUrl":"https://huggingface.co/owner/repo/commit/abc123",
+            "commitOid":"abc123",
+            "prUrl":"https://huggingface.co/owner/repo/discussions/7",
+            "prNum":7
+        }"#;
+        let info: CommitInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.pr_revision.as_deref(), Some("refs/pr/7"));
+        assert_eq!(info.repo_url.as_ref().map(|r| r.url.as_str()), Some("https://huggingface.co/owner/repo"));
+    }
+
+    #[test]
+    fn test_commit_info_no_pr() {
+        let json = r#"{"commitUrl":"https://huggingface.co/owner/repo/commit/abc","commitOid":"abc"}"#;
+        let info: CommitInfo = serde_json::from_str(json).unwrap();
+        assert!(info.pr_revision.is_none());
+        assert!(info.pr_url.is_none());
+        assert_eq!(info.repo_url.as_ref().map(|r| r.url.as_str()), Some("https://huggingface.co/owner/repo"));
+    }
+
+    #[test]
+    fn test_file_metadata_info_location_round_trip() {
+        let original = FileMetadataInfo {
+            filename: "config.json".into(),
+            etag: "abc".into(),
+            commit_hash: "deadbeef".into(),
+            xet_hash: None,
+            file_size: 100,
+            location: Some("https://cdn-lfs.huggingface.co/repos/.../config.json".into()),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        assert!(json.contains("location"));
+        let round_tripped: FileMetadataInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped.location, original.location);
+    }
+
+    #[test]
+    fn test_file_metadata_info_location_optional() {
+        let json = r#"{"filename":"f","etag":"e","commit_hash":"c","xet_hash":null,"file_size":0}"#;
+        let info: FileMetadataInfo = serde_json::from_str(json).unwrap();
+        assert!(info.location.is_none());
     }
 }

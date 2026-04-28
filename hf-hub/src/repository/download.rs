@@ -626,12 +626,14 @@ impl HFRepository {
                         tracing::warn!(file = %filename, "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0");
                         0
                     });
+                    let location = Some(resp.url().to_string());
                     Ok::<_, HFError>(Some(FileMetadataInfo {
                         filename,
                         etag,
                         commit_hash: commit,
                         xet_hash,
                         file_size,
+                        location,
                     }))
                 }
             });

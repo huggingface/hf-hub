@@ -49,6 +49,9 @@ pub(crate) fn dirs_or_home() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
 }
 
+/// Resolve the Hugging Face home directory.
+///
+/// Order: `HF_HOME` env var, then `XDG_CACHE_HOME/huggingface`, then `~/.cache/huggingface`.
 pub fn hf_home() -> std::path::PathBuf {
     if let Ok(path) = std::env::var(HF_HOME) {
         return std::path::PathBuf::from(path);
@@ -60,6 +63,9 @@ pub fn hf_home() -> std::path::PathBuf {
     std::path::PathBuf::from(format!("{home}/.cache/huggingface"))
 }
 
+/// Resolve the Hugging Face Hub cache directory.
+///
+/// Order: `HF_HUB_CACHE`, then `HUGGINGFACE_HUB_CACHE`, then `<hf_home>/hub`.
 pub fn resolve_cache_dir() -> std::path::PathBuf {
     if let Ok(cache) = std::env::var(HF_HUB_CACHE) {
         return std::path::PathBuf::from(cache);

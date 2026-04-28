@@ -38,8 +38,30 @@ pub struct User {
     /// Account type, typically `"user"` or `"org"`.
     #[serde(rename = "type")]
     pub user_type: Option<String>,
+    /// Free-text bio shown on the user's profile.
+    pub details: Option<String>,
+    /// Whether the authenticated caller follows this user.
+    pub is_following: Option<bool>,
     /// Whether the user is on a Pro plan.
     pub is_pro: Option<bool>,
+    /// Number of models created by the user.
+    pub num_models: Option<u64>,
+    /// Number of datasets created by the user.
+    pub num_datasets: Option<u64>,
+    /// Number of Spaces created by the user.
+    pub num_spaces: Option<u64>,
+    /// Number of discussions initiated by the user.
+    pub num_discussions: Option<u64>,
+    /// Number of papers authored by the user.
+    pub num_papers: Option<u64>,
+    /// Upvotes the user has received.
+    pub num_upvotes: Option<u64>,
+    /// Likes the user has given.
+    pub num_likes: Option<u64>,
+    /// Number of users this user is following.
+    pub num_following: Option<u64>,
+    /// Number of users following this user.
+    pub num_followers: Option<u64>,
     /// Email address — only returned by `whoami` for the authenticated user.
     pub email: Option<String>,
     /// Whether the email has been verified — only returned by `whoami`.
@@ -85,6 +107,26 @@ pub struct Organization {
     /// Account type, typically `"org"`.
     #[serde(rename = "type")]
     pub org_type: Option<String>,
+    /// Free-text description shown on the organization's profile.
+    pub details: Option<String>,
+    /// Whether the organization is verified.
+    pub is_verified: Option<bool>,
+    /// Whether the authenticated caller follows this organization.
+    pub is_following: Option<bool>,
+    /// Number of members in the organization.
+    pub num_users: Option<u64>,
+    /// Number of models owned by the organization.
+    pub num_models: Option<u64>,
+    /// Number of Spaces owned by the organization.
+    pub num_spaces: Option<u64>,
+    /// Number of datasets owned by the organization.
+    pub num_datasets: Option<u64>,
+    /// Number of followers of the organization.
+    pub num_followers: Option<u64>,
+    /// Number of papers authored by the organization.
+    pub num_papers: Option<u64>,
+    /// Plan identifier (e.g. `"enterprise"`, `"team"`).
+    pub plan: Option<String>,
 }
 
 #[bon]
@@ -297,5 +339,77 @@ impl crate::blocking::HFClientSync {
             }
             Ok(items)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Organization, User};
+
+    #[test]
+    fn test_user_full_profile() {
+        let json = r#"{
+            "user":"alice",
+            "fullname":"Alice Anderson",
+            "avatarUrl":"https://example/a.png",
+            "type":"user",
+            "details":"researcher",
+            "isFollowing":true,
+            "isPro":false,
+            "numModels":12,
+            "numDatasets":3,
+            "numSpaces":1,
+            "numDiscussions":4,
+            "numPapers":2,
+            "numUpvotes":5,
+            "numLikes":6,
+            "numFollowing":7,
+            "numFollowers":8
+        }"#;
+        let user: User = serde_json::from_str(json).unwrap();
+        assert_eq!(user.username, "alice");
+        assert_eq!(user.details.as_deref(), Some("researcher"));
+        assert_eq!(user.is_following, Some(true));
+        assert_eq!(user.num_models, Some(12));
+        assert_eq!(user.num_datasets, Some(3));
+        assert_eq!(user.num_spaces, Some(1));
+        assert_eq!(user.num_discussions, Some(4));
+        assert_eq!(user.num_papers, Some(2));
+        assert_eq!(user.num_upvotes, Some(5));
+        assert_eq!(user.num_likes, Some(6));
+        assert_eq!(user.num_following, Some(7));
+        assert_eq!(user.num_followers, Some(8));
+    }
+
+    #[test]
+    fn test_organization_full_profile() {
+        let json = r#"{
+            "name":"acme",
+            "fullname":"Acme Corp",
+            "avatarUrl":"https://example/o.png",
+            "type":"org",
+            "details":"description",
+            "isVerified":true,
+            "isFollowing":false,
+            "numUsers":42,
+            "numModels":7,
+            "numSpaces":2,
+            "numDatasets":3,
+            "numFollowers":100,
+            "numPapers":5,
+            "plan":"enterprise"
+        }"#;
+        let org: Organization = serde_json::from_str(json).unwrap();
+        assert_eq!(org.name, "acme");
+        assert_eq!(org.details.as_deref(), Some("description"));
+        assert_eq!(org.is_verified, Some(true));
+        assert_eq!(org.is_following, Some(false));
+        assert_eq!(org.num_users, Some(42));
+        assert_eq!(org.num_models, Some(7));
+        assert_eq!(org.num_spaces, Some(2));
+        assert_eq!(org.num_datasets, Some(3));
+        assert_eq!(org.num_followers, Some(100));
+        assert_eq!(org.num_papers, Some(5));
+        assert_eq!(org.plan.as_deref(), Some("enterprise"));
     }
 }

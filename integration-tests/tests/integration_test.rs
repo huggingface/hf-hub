@@ -848,7 +848,7 @@ async fn test_get_space_runtime() {
     let (owner, name) = TEST_SPACE_REPO;
     let space = client.space(owner, name);
     let runtime = space.runtime().send().await.unwrap();
-    assert!(runtime.stage.is_some());
+    assert!(!runtime.stage.is_empty());
 }
 
 #[tokio::test]

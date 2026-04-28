@@ -168,6 +168,7 @@ impl HFRepository {
             );
             0
         });
+        let location = Some(response.url().to_string());
 
         Ok(FileMetadataInfo {
             filename,
@@ -175,6 +176,7 @@ impl HFRepository {
             commit_hash,
             xet_hash,
             file_size,
+            location,
         })
     }
 }

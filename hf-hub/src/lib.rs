@@ -175,7 +175,7 @@
 //! ## Caching
 //!
 //! Downloaded files are stored in a content-addressed cache under
-//! [`HF_HUB_CACHE`][crate::resolve_cache_dir] (default:
+//! `HF_HUB_CACHE` (default:
 //! `$HF_HOME/hub` → `~/.cache/huggingface/hub`). Concurrent downloads of the same
 //! file are coordinated with an on-disk lock, and subsequent calls resolve to the
 //! existing cached blob without re-downloading.

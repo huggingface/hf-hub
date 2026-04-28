@@ -16,28 +16,115 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use bon::bon;
-use serde::Deserialize;
+use serde::de::Deserializer;
+use serde::{Deserialize, Serialize};
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
 use crate::repository::{HFRepository, RepoType, RepoUrl};
 use crate::retry;
 
-/// Runtime state of a Space: stage, hardware, storage, and replica info.
+/// Runtime state of a Space: stage, hardware, storage, and mounted volumes.
 ///
 /// Returned by Space lifecycle methods such as
-/// [`HFSpace::runtime`], [`HFSpace::pause`], and [`HFSpace::restart`]. The `raw`
-/// field preserves the full JSON payload for fields not modeled explicitly.
-#[derive(Debug, Clone, Deserialize)]
+/// [`HFSpace::runtime`], [`HFSpace::pause`], and [`HFSpace::restart`]. Mirrors the
+/// `SpaceRuntime` type from the Python `huggingface_hub` library.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceRuntime {
-    pub stage: Option<String>,
-    pub hardware: Option<serde_json::Value>,
-    pub storage: Option<serde_json::Value>,
+    /// Lifecycle stage of the Space (e.g. `"RUNNING"`, `"BUILDING"`, `"PAUSED"`, `"SLEEPING"`).
+    pub stage: String,
+    /// Hardware currently running the Space (e.g. `"cpu-basic"`, `"t4-medium"`). `None` while a
+    /// Space is `BUILDING` for the first time.
+    pub hardware: Option<String>,
+    /// Hardware most recently requested for the Space. May differ from `hardware` if a request is in
+    /// flight. `None` if no hardware has been requested yet.
+    pub requested_hardware: Option<String>,
+    /// Idle seconds before the Space is put to sleep. `None` means the default policy applies (Spaces
+    /// on free `cpu-basic` hardware sleep after 48 hours; upgraded hardware never sleeps by default).
+    ///
+    /// On the wire this is the `gcTimeout` field.
     pub sleep_time: Option<u64>,
-    pub replicas: Option<serde_json::Value>,
+    /// Persistent storage attached to the Space (`"small"`, `"medium"`, or `"large"`), if any.
+    pub storage: Option<String>,
+    /// Hot-reloading state for the Space, if a hot-reload commit is in progress.
+    pub hot_reloading: Option<SpaceHotReloading>,
+    /// Volumes mounted in the Space. `None` if none are attached.
+    pub volumes: Option<Vec<Volume>>,
+}
+
+impl<'de> Deserialize<'de> for SpaceRuntime {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize, Default)]
+        struct HardwareWire {
+            #[serde(default)]
+            current: Option<String>,
+            #[serde(default)]
+            requested: Option<String>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire {
+            stage: String,
+            #[serde(default)]
+            hardware: Option<HardwareWire>,
+            #[serde(rename = "gcTimeout", default)]
+            sleep_time: Option<u64>,
+            #[serde(default)]
+            storage: Option<String>,
+            #[serde(default)]
+            hot_reloading: Option<SpaceHotReloading>,
+            #[serde(default)]
+            volumes: Option<Vec<Volume>>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let (hardware, requested_hardware) = match wire.hardware {
+            Some(h) => (h.current, h.requested),
+            None => (None, None),
+        };
+        Ok(SpaceRuntime {
+            stage: wire.stage,
+            hardware,
+            requested_hardware,
+            sleep_time: wire.sleep_time,
+            storage: wire.storage,
+            hot_reloading: wire.hot_reloading,
+            volumes: wire.volumes,
+        })
+    }
+}
+
+/// Hot-reloading state for a Space.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceHotReloading {
+    /// Status of the hot-reload commit, e.g. `"created"` or `"canceled"`.
+    pub status: String,
+    /// Per-replica statuses, each a `[replica_hash, status]` pair.
+    pub replica_statuses: Vec<serde_json::Value>,
+}
+
+/// A volume mounted inside a Space (or Job) container.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Volume {
+    /// Volume kind: `"bucket"`, `"model"`, `"dataset"`, or `"space"`.
+    #[serde(rename = "type")]
+    pub r#type: String,
+    /// Source identifier, e.g. `"username/my-bucket"` or `"username/my-model"`.
+    pub source: String,
+    /// Mount path inside the container (must start with `/`).
+    pub mount_path: String,
+    /// Git revision for repo-backed volumes; defaults to `"main"` server-side when omitted.
     #[serde(default)]
-    pub raw: serde_json::Value,
+    pub revision: Option<String>,
+    /// Whether the mount is read-only. Forced to `true` for repo-backed volumes; defaults to `false`
+    /// for buckets.
+    #[serde(default)]
+    pub read_only: Option<bool>,
+    /// Subfolder inside the source to mount (e.g. `"path/to/dir"`).
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 /// A public environment variable set on a Space (non-secret).
@@ -46,9 +133,13 @@ pub struct SpaceRuntime {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceVariable {
+    /// Variable name (e.g. `"MODEL_REPO_ID"`).
     pub key: String,
+    /// Variable value. `None` if the Hub returns the variable without a value.
     pub value: Option<String>,
+    /// Human-readable description of what the variable is for.
     pub description: Option<String>,
+    /// ISO-8601 timestamp of the last update to this variable, if it has been updated since creation.
     pub updated_at: Option<String>,
 }
 
@@ -106,6 +197,10 @@ impl HFSpace {
         }
     }
 
+    /// Borrow the underlying [`HFRepository`].
+    ///
+    /// `HFSpace` already derefs to `HFRepository`, so this is mainly useful when you need an
+    /// explicit reference (e.g. to clone or to disambiguate trait resolution).
     pub fn repo(&self) -> &HFRepository {
         &self.repo
     }
@@ -655,19 +750,52 @@ mod tests {
     }
 
     #[test]
-    fn test_space_runtime_deserialize() {
-        let json = r#"{"stage":"RUNNING","hardware":{"current":null,"requested":null},"storage":null,"replicas":{"requested":1,"current":1}}"#;
+    fn test_space_runtime_deserialize_flattens_hardware() {
+        let json = r#"{"stage":"RUNNING","hardware":{"current":"cpu-basic","requested":"t4-medium"},"storage":null}"#;
         let runtime: SpaceRuntime = serde_json::from_str(json).unwrap();
-        assert_eq!(runtime.stage.as_deref(), Some("RUNNING"));
-        assert!(runtime.hardware.is_some());
+        assert_eq!(runtime.stage, "RUNNING");
+        assert_eq!(runtime.hardware.as_deref(), Some("cpu-basic"));
+        assert_eq!(runtime.requested_hardware.as_deref(), Some("t4-medium"));
+        assert_eq!(runtime.storage, None);
     }
 
     #[test]
     fn test_space_runtime_deserialize_minimal() {
         let json = r#"{"stage":"BUILDING"}"#;
         let runtime: SpaceRuntime = serde_json::from_str(json).unwrap();
-        assert_eq!(runtime.stage.as_deref(), Some("BUILDING"));
+        assert_eq!(runtime.stage, "BUILDING");
         assert!(runtime.hardware.is_none());
+        assert!(runtime.requested_hardware.is_none());
+    }
+
+    #[test]
+    fn test_space_runtime_sleep_time_from_gc_timeout() {
+        let json = r#"{"stage":"RUNNING","gcTimeout":172800}"#;
+        let runtime: SpaceRuntime = serde_json::from_str(json).unwrap();
+        assert_eq!(runtime.sleep_time, Some(172800));
+    }
+
+    #[test]
+    fn test_space_runtime_volumes_and_hot_reloading() {
+        let json = r#"{
+            "stage":"RUNNING",
+            "volumes":[{"type":"model","source":"u/m","mountPath":"/data","readOnly":true}],
+            "hotReloading":{"status":"created","replicaStatuses":[]}
+        }"#;
+        let runtime: SpaceRuntime = serde_json::from_str(json).unwrap();
+        let volumes = runtime.volumes.as_ref().unwrap();
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].r#type, "model");
+        assert_eq!(volumes[0].mount_path, "/data");
+        assert_eq!(volumes[0].read_only, Some(true));
+        assert_eq!(runtime.hot_reloading.as_ref().unwrap().status, "created");
+    }
+
+    #[test]
+    fn test_space_runtime_ignores_unknown_fields() {
+        let json = r#"{"stage":"RUNNING","replicas":{"current":1},"someNewField":42}"#;
+        let runtime: SpaceRuntime = serde_json::from_str(json).unwrap();
+        assert_eq!(runtime.stage, "RUNNING");
     }
 
     #[test]

@@ -51,6 +51,14 @@ pub struct GitCommitInfo {
     pub title: String,
     /// Full commit message.
     pub message: String,
+    /// HTML-formatted commit title. Returned only when the request asks the Hub to format the
+    /// message (e.g. `?formatted=true`).
+    #[serde(default, rename = "formattedTitle")]
+    pub formatted_title: Option<String>,
+    /// HTML-formatted commit message. Returned only when the request asks the Hub to format the
+    /// message (e.g. `?formatted=true`).
+    #[serde(default, rename = "formattedMessage")]
+    pub formatted_message: Option<String>,
     /// Parent commit SHAs.
     #[serde(default)]
     pub parents: Vec<String>,
@@ -501,5 +509,36 @@ impl crate::blocking::HFRepositorySync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_tag(&self, #[builder(into)] tag: String) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_tag().tag(tag).send())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GitCommitInfo;
+
+    #[test]
+    fn test_git_commit_info_with_formatted_fields() {
+        let json = r#"{
+            "id":"abc123",
+            "authors":[{"user":"u","name":"User","email":"u@x"}],
+            "date":"2025-01-01T00:00:00Z",
+            "title":"feat: add thing",
+            "message":"feat: add thing\n\nLong body.",
+            "formattedTitle":"<p>feat: add thing</p>",
+            "formattedMessage":"<p>feat: add thing</p><p>Long body.</p>",
+            "parents":["p1"]
+        }"#;
+        let info: GitCommitInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.formatted_title.as_deref(), Some("<p>feat: add thing</p>"));
+        assert_eq!(info.formatted_message.as_deref(), Some("<p>feat: add thing</p><p>Long body.</p>"));
+        assert_eq!(info.parents, vec!["p1"]);
+    }
+
+    #[test]
+    fn test_git_commit_info_without_formatted_fields() {
+        let json = r#"{"id":"abc","authors":[],"date":null,"title":"t","message":"m"}"#;
+        let info: GitCommitInfo = serde_json::from_str(json).unwrap();
+        assert!(info.formatted_title.is_none());
+        assert!(info.formatted_message.is_none());
     }
 }

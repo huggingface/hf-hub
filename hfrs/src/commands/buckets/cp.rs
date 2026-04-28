@@ -196,6 +196,9 @@ async fn server_side_copy(client: &HFClient, src: &str, dst: &str, quiet: bool) 
             xet_hash: metadata.xet_hash,
             source_repo_type: "bucket".to_string(),
             source_repo_id: format!("{}/{}", src.namespace, src.bucket_name),
+            size: Some(metadata.size),
+            mtime: None,
+            content_type: None,
         }])
         .send()
         .await?;
