@@ -1071,37 +1071,43 @@ fn python_available() -> bool {
     std::process::Command::new("python3").arg("--version").output().is_ok()
 }
 
-fn setup_python_venv(base_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    if !python_available() {
-        return None;
-    }
-    let venv_dir = base_dir.join("venv");
-    let status = std::process::Command::new("python3")
-        .args(["-m", "venv", &venv_dir.to_string_lossy()])
-        .status()
-        .ok()?;
-    if !status.success() {
-        return None;
-    }
+fn setup_python_venv() -> Option<&'static std::path::Path> {
+    static VENV: std::sync::OnceLock<Option<(tempfile::TempDir, std::path::PathBuf)>> = std::sync::OnceLock::new();
+    VENV.get_or_init(|| {
+        if !python_available() {
+            return None;
+        }
+        let dir = tempfile::tempdir().ok()?;
+        let venv_dir = dir.path().join("venv");
+        let status = std::process::Command::new("python3")
+            .args(["-m", "venv", &venv_dir.to_string_lossy()])
+            .status()
+            .ok()?;
+        if !status.success() {
+            return None;
+        }
 
-    let pip = venv_dir.join("bin").join("pip");
-    let status = std::process::Command::new(&pip)
-        .args(["install", "--upgrade", "pip"])
-        .status()
-        .ok()?;
-    if !status.success() {
-        return None;
-    }
+        let pip = venv_dir.join("bin").join("pip");
+        let status = std::process::Command::new(&pip)
+            .args(["install", "--upgrade", "pip"])
+            .status()
+            .ok()?;
+        if !status.success() {
+            return None;
+        }
 
-    let status = std::process::Command::new(&pip)
-        .args(["install", "-q", "huggingface_hub"])
-        .status()
-        .ok()?;
-    if !status.success() {
-        return None;
-    }
+        let status = std::process::Command::new(&pip)
+            .args(["install", "-q", "huggingface_hub"])
+            .status()
+            .ok()?;
+        if !status.success() {
+            return None;
+        }
 
-    Some(venv_dir)
+        Some((dir, venv_dir))
+    })
+    .as_ref()
+    .map(|(_, p)| p.as_path())
 }
 
 fn python_bin(venv_dir: &std::path::Path) -> std::path::PathBuf {
@@ -1115,10 +1121,10 @@ async fn test_interop_python_downloads_first() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     let script = format!(
@@ -1165,10 +1171,10 @@ async fn test_interop_rust_downloads_first() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     let client = api_with_cache(&cache_dir);
@@ -1208,10 +1214,10 @@ async fn test_interop_mixed_partial_downloads() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     let script = format!(
@@ -1270,10 +1276,10 @@ async fn test_interop_python_snapshot_rust_snapshot() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     let script = format!(
@@ -1324,10 +1330,10 @@ async fn test_interop_rust_writes_python_validates_cache() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust snapshot_download: multiple files into cache
@@ -1575,10 +1581,10 @@ async fn test_interop_rust_no_exist_python_reads() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust: trigger a 404 to create a .no_exist marker
@@ -1628,10 +1634,10 @@ async fn test_interop_rust_ref_python_reads() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust: download to create refs/main
@@ -1673,10 +1679,10 @@ async fn test_interop_python_no_exist_rust_reads() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Python: trigger 404 to create .no_exist marker
@@ -1721,10 +1727,10 @@ async fn test_interop_python_ref_rust_local_files_only() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Python downloads file (creates refs/main + blob + symlink)
@@ -1765,10 +1771,10 @@ async fn test_interop_rust_snapshot_python_snapshot_reuse() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust snapshot_download first
@@ -1812,10 +1818,10 @@ async fn test_interop_dataset_repo_type() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Rust downloads a dataset file
@@ -1859,10 +1865,10 @@ async fn test_interop_symlink_target_format() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Python downloads file — creates the canonical symlink format
@@ -1908,10 +1914,10 @@ async fn test_interop_conditional_request_reuse() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Python downloads file — creates blob + symlink + ref
@@ -1963,10 +1969,10 @@ async fn test_interop_scan_cache_counts_match() {
     let cache_dir = base_dir.path().join("cache");
     std::fs::create_dir_all(&cache_dir).unwrap();
 
-    let Some(venv_dir) = setup_python_venv(base_dir.path()) else {
+    let Some(venv_dir) = setup_python_venv() else {
         return;
     };
-    let python = python_bin(&venv_dir);
+    let python = python_bin(venv_dir);
     let token = resolve_prod_token().expect("HF_TOKEN or HF_PROD_TOKEN required");
 
     // Download multiple files via both libraries to populate the cache
