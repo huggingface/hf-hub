@@ -1094,7 +1094,7 @@ impl HFRepository {
         /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
         /// Optional progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
-        /// drained, identically to [`download_file_stream`](Self::download_file_stream).
+        /// drained, identically to [`HFRepository::download_file_stream`].
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
@@ -1222,7 +1222,7 @@ impl crate::blocking::HFRepositorySync {
         /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
         /// Optional progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
-        /// drained, identically to [`download_file_stream`](Self::download_file_stream).
+        /// drained, identically to [`HFRepository::download_file_stream`].
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {

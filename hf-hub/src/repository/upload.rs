@@ -740,7 +740,7 @@ impl HFRepository {
     ///
     /// - `source` (required): file content source (bytes or local file path).
     /// - `path_in_repo` (required): destination path within the repository.
-    /// - `revision`: branch to upload to.
+    /// - `revision`: branch to upload to. Defaults to the main branch.
     /// - `commit_message`, `commit_description`, `create_pr`, `parent_commit`, `progress`: same as
     ///   [`HFRepository::create_commit`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -751,7 +751,7 @@ impl HFRepository {
         /// Destination path within the repository.
         #[builder(into)]
         path_in_repo: String,
-        /// Branch to upload to.
+        /// Branch to upload to. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
         /// Commit message. Same as [`HFRepository::create_commit`].
@@ -794,7 +794,7 @@ impl HFRepository {
     ///
     /// - `folder_path` (required): local folder path to upload.
     /// - `path_in_repo`: destination directory within the repository (default: repo root).
-    /// - `revision`: branch to upload to.
+    /// - `revision`: branch to upload to. Defaults to the main branch.
     /// - `commit_message`, `commit_description`, `create_pr`: commit metadata.
     /// - `allow_patterns`: globs selecting which local files to include. Matched against each discovered file's path
     ///   relative to `folder_path` (e.g. `data/train.bin`, not the absolute path and not prefixed with `path_in_repo`).
@@ -814,7 +814,7 @@ impl HFRepository {
         /// Destination directory within the repository (default: repo root).
         #[builder(into)]
         path_in_repo: Option<String>,
-        /// Branch to upload to.
+        /// Branch to upload to. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
         /// Commit message.
@@ -863,7 +863,7 @@ impl HFRepository {
     /// # Parameters
     ///
     /// - `path_in_repo` (required): path of the file to delete.
-    /// - `revision`: branch to delete from.
+    /// - `revision`: branch to delete from. Defaults to the main branch.
     /// - `commit_message`: commit message.
     /// - `create_pr`: create a pull request instead of committing directly.
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -872,7 +872,7 @@ impl HFRepository {
         /// Path of the file to delete.
         #[builder(into)]
         path_in_repo: String,
-        /// Branch to delete from.
+        /// Branch to delete from. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
         /// Commit message.
@@ -898,7 +898,7 @@ impl HFRepository {
     /// # Parameters
     ///
     /// - `path_in_repo` (required): folder path within the repository.
-    /// - `revision`: branch to delete from.
+    /// - `revision`: branch to delete from. Defaults to the main branch.
     /// - `commit_message`: commit message.
     /// - `create_pr`: create a pull request instead of committing directly.
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -907,7 +907,7 @@ impl HFRepository {
         /// Folder path within the repository.
         #[builder(into)]
         path_in_repo: String,
-        /// Branch to delete from.
+        /// Branch to delete from. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
         /// Commit message.
@@ -978,7 +978,7 @@ impl crate::blocking::HFRepositorySync {
         /// Destination path within the repository.
         #[builder(into)]
         path_in_repo: String,
-        /// Branch to upload to.
+        /// Branch to upload to. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
         /// Commit message. Same as [`HFRepository::create_commit`].
@@ -1022,7 +1022,7 @@ impl crate::blocking::HFRepositorySync {
         /// Destination directory within the repository (default: repo root).
         #[builder(into)]
         path_in_repo: Option<String>,
-        /// Branch to upload to.
+        /// Branch to upload to. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
         /// Commit message.
@@ -1073,7 +1073,7 @@ impl crate::blocking::HFRepositorySync {
         /// Path of the file to delete.
         #[builder(into)]
         path_in_repo: String,
-        /// Branch to delete from.
+        /// Branch to delete from. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
         /// Commit message.
@@ -1101,7 +1101,7 @@ impl crate::blocking::HFRepositorySync {
         /// Folder path within the repository.
         #[builder(into)]
         path_in_repo: String,
-        /// Branch to delete from.
+        /// Branch to delete from. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
         /// Commit message.

@@ -155,11 +155,7 @@ async fn list_files(
     args: &Args,
 ) -> Result<CommandResult> {
     let bucket = client.bucket(namespace, bucket_name);
-    let stream = bucket
-        .list_tree()
-        .maybe_prefix(prefix)
-        .maybe_recursive(if args.recursive { Some(true) } else { None })
-        .send()?;
+    let stream = bucket.list_tree().maybe_prefix(prefix).recursive(args.recursive).send()?;
     futures::pin_mut!(stream);
 
     let mut entries = Vec::new();

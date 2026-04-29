@@ -140,15 +140,16 @@ impl HFBucket {
     /// # Parameters
     ///
     /// - `prefix`: filter results to entries under this prefix.
-    /// - `recursive`: if `Some(true)`, list entries recursively under the prefix.
+    /// - `recursive` (default `false`): traverse subdirectories.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_tree(
         &self,
         /// Filter results to entries under this prefix.
         #[builder(into)]
         prefix: Option<String>,
-        /// If `Some(true)`, list entries recursively under the prefix.
-        recursive: Option<bool>,
+        /// Traverse subdirectories.
+        #[builder(default)]
+        recursive: bool,
     ) -> HFResult<impl Stream<Item = HFResult<BucketTreeEntry>> + '_> {
         let bucket_id = self.bucket_id();
         let mut url_str = format!("{}/api/buckets/{}/tree", self.hf_client.endpoint(), bucket_id);
@@ -159,7 +160,7 @@ impl HFBucket {
         let url = Url::parse(&url_str)?;
 
         let mut query = vec![];
-        if recursive == Some(true) {
+        if recursive {
             query.push(("recursive".to_string(), "true".to_string()));
         }
 
@@ -926,11 +927,12 @@ impl crate::blocking::HFBucketSync {
         /// Filter results to entries under this prefix.
         #[builder(into)]
         prefix: Option<String>,
-        /// If `Some(true)`, list entries recursively under the prefix.
-        recursive: Option<bool>,
+        /// Traverse subdirectories.
+        #[builder(default)]
+        recursive: bool,
     ) -> HFResult<Vec<BucketTreeEntry>> {
         self.runtime.block_on(async move {
-            let stream = self.inner.list_tree().maybe_prefix(prefix).maybe_recursive(recursive).send()?;
+            let stream = self.inner.list_tree().maybe_prefix(prefix).recursive(recursive).send()?;
             futures::pin_mut!(stream);
             let mut items = Vec::new();
             while let Some(item) = stream.next().await {

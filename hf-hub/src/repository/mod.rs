@@ -477,7 +477,7 @@ pub struct RepoUrl {
 /// # Example
 ///
 /// ```rust,no_run
-/// # use hf_hub::{HFClient, RepoType};
+/// # use hf_hub::HFClient;
 /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 /// let client = HFClient::builder().build()?;
 /// let repo = client.model("openai-community", "gpt2");

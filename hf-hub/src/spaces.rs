@@ -205,14 +205,14 @@ impl HFSpace {
     /// # Parameters
     ///
     /// - `hardware` (required): hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
-    /// - `sleep_time`: number of seconds of inactivity before the Space is put to sleep. `0` means never sleep.
+    /// - `sleep_time`: seconds of inactivity before the Space is put to sleep. `0` means never sleep.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn request_hardware(
         &self,
         /// Hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
         #[builder(into)]
         hardware: String,
-        /// Number of seconds of inactivity before the Space is put to sleep. `0` means never sleep.
+        /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
         sleep_time: Option<u64>,
     ) -> HFResult<SpaceRuntime> {
         let url = format!("{}/api/spaces/{}/hardware", self.hf_client.endpoint(), self.repo_path());
@@ -469,7 +469,7 @@ impl HFSpace {
     /// - `storage`: persistent storage tier identifier. One of `"small"`, `"medium"`, or `"large"`. Omit to duplicate
     ///   without persistent storage. See the [Spaces storage docs](https://huggingface.co/docs/hub/spaces-storage) for
     ///   current sizes.
-    /// - `sleep_time`: seconds of inactivity before the Space is put to sleep. `0` means never.
+    /// - `sleep_time`: seconds of inactivity before the Space is put to sleep. `0` means never sleep.
     /// - `secrets`: encrypted environment variables to set on the duplicated Space (see `Secret/variable shape` below).
     /// - `variables`: public (non-secret) environment variables to set on the duplicated Space (see `Secret/variable
     ///   shape` below).
@@ -515,7 +515,7 @@ impl HFSpace {
         /// without persistent storage.
         #[builder(into)]
         storage: Option<String>,
-        /// Seconds of inactivity before the Space is put to sleep. `0` means never.
+        /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
         sleep_time: Option<u64>,
         /// Encrypted environment variables to set on the duplicated Space.
         secrets: Option<Vec<serde_json::Value>>,
@@ -609,7 +609,7 @@ impl crate::blocking::HFSpaceSync {
         /// Hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
         #[builder(into)]
         hardware: String,
-        /// Number of seconds of inactivity before the Space is put to sleep. `0` means never sleep.
+        /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
         sleep_time: Option<u64>,
     ) -> HFResult<SpaceRuntime> {
         self.repo_sync.runtime.block_on(
@@ -741,7 +741,7 @@ impl crate::blocking::HFSpaceSync {
         /// without persistent storage.
         #[builder(into)]
         storage: Option<String>,
-        /// Seconds of inactivity before the Space is put to sleep. `0` means never.
+        /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
         sleep_time: Option<u64>,
         /// Encrypted environment variables to set on the duplicated Space.
         secrets: Option<Vec<serde_json::Value>>,
