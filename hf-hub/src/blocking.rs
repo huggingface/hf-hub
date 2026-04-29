@@ -304,7 +304,7 @@ mod tests {
     fn test_sync_repo_constructors() {
         let client = HFClientSync::from_inner(HFClient::builder().build().unwrap()).unwrap();
         let repo = client.model("openai-community", "gpt2");
-        let space = client.space("huggingface", "transformers-benchmarks");
+        let space = client.space("huggingface-projects", "diffusers-gallery");
 
         assert_eq!(repo.owner(), "openai-community");
         assert_eq!(repo.name(), "gpt2");

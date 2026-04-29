@@ -16,7 +16,7 @@ fn main() -> hf_hub::HFResult<()> {
 
     let model = client.model("openai-community", "gpt2");
     let dataset = client.dataset("rajpurkar", "squad");
-    let space = client.space("huggingface", "transformers-benchmarks");
+    let space = client.space("huggingface-projects", "diffusers-gallery");
 
     let info = model.info().send()?;
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);

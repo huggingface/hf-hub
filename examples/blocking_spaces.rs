@@ -12,7 +12,7 @@ fn main() -> hf_hub::HFResult<()> {
 
     // --- Read operations ---
 
-    let reference_space = client.space("huggingface", "transformers-benchmarks");
+    let reference_space = client.space("huggingface-projects", "diffusers-gallery");
     let runtime = reference_space.runtime().send()?;
     println!("Space runtime: {runtime:?}");
 

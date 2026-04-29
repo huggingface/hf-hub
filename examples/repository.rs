@@ -20,7 +20,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let info = dataset.info().send().await?;
     println!("Dataset: {} (downloads: {:?})", info.id, info.downloads);
 
-    let space = client.space("huggingface", "transformers-benchmarks");
+    let space = client.space("huggingface-projects", "diffusers-gallery");
     let info = space.info().send().await?;
     println!("Space: {} (sdk: {:?})", info.id, info.sdk);
 

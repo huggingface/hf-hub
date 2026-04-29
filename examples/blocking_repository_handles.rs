@@ -24,13 +24,13 @@ fn main() -> hf_hub::HFResult<()> {
     let info = dataset.info().send()?;
     println!("Dataset info: {}", info.id);
 
-    let generic_space = client.repo(RepoType::Space, "huggingface", "transformers-benchmarks");
+    let generic_space = client.repo(RepoType::Space, "huggingface-projects", "diffusers-gallery");
     let space = HFSpaceSync::try_from(generic_space)?;
 
     let info = space.info().send()?;
     println!("Space info: {} (sdk: {:?})", info.id, info.sdk);
 
-    let direct_space = client.space("huggingface", "transformers-benchmarks");
+    let direct_space = client.space("huggingface-projects", "diffusers-gallery");
     println!("Direct space handle matches converted handle: {}", direct_space.repo_path() == space.repo_path());
 
     Ok(())
