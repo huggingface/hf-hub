@@ -2,7 +2,7 @@
 //!
 //! Start from [`crate::HFClient`] — [`crate::HFClient::model`], [`crate::HFClient::dataset`],
 //! [`crate::HFClient::space`], and [`crate::HFClient::repo`] return a repo handle ([`HFRepository`]
-//! or [`crate::HFSpace`], which derefs to [`HFRepository`]). All read/write file and revision APIs
+//! or [`crate::HFSpace`], which derefs to [`HFRepository`]). All read/write files and revision APIs
 //! hang off that value.
 //!
 //! Submodule pages group related builders and types:
@@ -24,6 +24,7 @@ pub mod files;
 pub mod listing;
 pub mod upload;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -41,25 +42,19 @@ use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
 
-pub(crate) mod _kind {
-    use serde::{Deserialize, Serialize};
-
-    /// The kind of repository on the Hugging Face Hub.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(rename_all = "lowercase")]
-    pub enum RepoType {
-        /// A model repository.
-        Model,
-        /// A dataset repository.
-        Dataset,
-        /// A Space (interactive app) repository.
-        Space,
-        /// A kernel repository.
-        Kernel,
-    }
+/// The kind of repository on the Hugging Face Hub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RepoType {
+    /// A model repository.
+    Model,
+    /// A dataset repository.
+    Dataset,
+    /// A Space (interactive app) repository.
+    Space,
+    /// A kernel repository.
+    Kernel,
 }
-
-pub(crate) use _kind::RepoType;
 
 /// Access-gating mode for a repository.
 ///
@@ -112,14 +107,14 @@ pub struct RepoSibling {
     pub size: Option<u64>,
     /// LFS metadata for the file. Populated only when the file is stored with Git LFS and file metadata was
     /// requested.
-    pub lfs: Option<files::BlobLfsInfo>,
+    pub lfs: Option<BlobLfsInfo>,
 }
 
 /// SafeTensors footprint for a model: per-dtype parameter counts and total.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SafeTensorsInfo {
     /// Parameter counts keyed by dtype (e.g. `"F32"`, `"BF16"`, `"I8"`).
-    pub parameters: std::collections::HashMap<String, u64>,
+    pub parameters: HashMap<String, u64>,
     /// Total number of parameters across all dtypes.
     pub total: u64,
 }
@@ -201,97 +196,54 @@ where
 
 /// One evaluation-result entry from the `.eval_results/*.yaml` format.
 ///
-/// Mirrors `huggingface_hub.EvalResultEntry`. The wire format nests `dataset` and `source` objects;
-/// the Rust struct flattens them for ergonomic access. See
-/// <https://huggingface.co/docs/hub/eval-results>.
-#[derive(Debug, Clone, Serialize)]
+/// See <https://huggingface.co/docs/hub/eval-results>.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EvalResultEntry {
-    /// Benchmark dataset ID (e.g. `"cais/hle"`).
-    pub dataset_id: String,
-    /// Task identifier within the benchmark (e.g. `"gpqa_diamond"`).
-    pub task_id: String,
+    /// Benchmark dataset and task identifiers.
+    pub dataset: EvalResultDataset,
     /// The metric value (numeric, string, or other JSON shape depending on the benchmark).
     pub value: serde_json::Value,
-    /// Git SHA of the benchmark dataset, if pinned.
-    pub dataset_revision: Option<String>,
     /// Signature proving the evaluation is auditable and reproducible.
+    #[serde(default, rename = "verifyToken")]
     pub verify_token: Option<String>,
     /// ISO-8601 datetime when the evaluation was run; defaults to git commit time when omitted.
+    #[serde(default)]
     pub date: Option<String>,
-    /// URL pointing to the evaluation source (Space, dataset, etc.).
-    pub source_url: Option<String>,
-    /// Display name for the source.
-    pub source_name: Option<String>,
-    /// HF user attributed for the evaluation.
-    pub source_user: Option<String>,
-    /// HF org attributed for the evaluation.
-    pub source_org: Option<String>,
+    /// Source attribution for the evaluation (Space, dataset, user, org), if any.
+    #[serde(default)]
+    pub source: Option<EvalResultSource>,
     /// Free-text notes about the evaluation setup.
+    #[serde(default)]
     pub notes: Option<String>,
 }
 
-impl<'de> Deserialize<'de> for EvalResultEntry {
-    fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
-        #[derive(Deserialize)]
-        struct DatasetWire {
-            id: String,
-            task_id: String,
-            #[serde(default)]
-            revision: Option<String>,
-        }
-        #[derive(Deserialize, Default)]
-        struct SourceWire {
-            #[serde(default)]
-            url: Option<String>,
-            #[serde(default)]
-            name: Option<String>,
-            #[serde(default)]
-            user: Option<String>,
-            #[serde(default)]
-            org: Option<String>,
-        }
-        #[derive(Deserialize)]
-        struct EntryWire {
-            dataset: DatasetWire,
-            value: serde_json::Value,
-            #[serde(default, rename = "verifyToken")]
-            verify_token: Option<String>,
-            #[serde(default)]
-            date: Option<String>,
-            #[serde(default)]
-            source: Option<SourceWire>,
-            #[serde(default)]
-            notes: Option<String>,
-        }
-        #[derive(Deserialize)]
-        struct OuterWire {
-            #[serde(default)]
-            data: Option<serde_json::Value>,
-            #[serde(flatten)]
-            rest: serde_json::Map<String, serde_json::Value>,
-        }
-        let outer = OuterWire::deserialize(deserializer)?;
-        let inner = match outer.data {
-            Some(v) => v,
-            None => serde_json::Value::Object(outer.rest),
-        };
-        let entry: EntryWire = serde_json::from_value(inner).map_err(D::Error::custom)?;
-        let source = entry.source.unwrap_or_default();
-        Ok(EvalResultEntry {
-            dataset_id: entry.dataset.id,
-            task_id: entry.dataset.task_id,
-            value: entry.value,
-            dataset_revision: entry.dataset.revision,
-            verify_token: entry.verify_token,
-            date: entry.date,
-            source_url: source.url,
-            source_name: source.name,
-            source_user: source.user,
-            source_org: source.org,
-            notes: entry.notes,
-        })
-    }
+/// Benchmark dataset and task identifiers for an [`EvalResultEntry`].
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EvalResultDataset {
+    /// Benchmark dataset ID (e.g. `"cais/hle"`).
+    pub id: String,
+    /// Task identifier within the benchmark (e.g. `"gpqa_diamond"`).
+    pub task_id: String,
+    /// Git SHA of the benchmark dataset, if pinned.
+    #[serde(default)]
+    pub revision: Option<String>,
+}
+
+/// Source attribution for an [`EvalResultEntry`].
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EvalResultSource {
+    /// URL pointing to the evaluation source (Space, dataset, etc.).
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Display name for the source.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// HF user attributed for the evaluation.
+    #[serde(default)]
+    pub user: Option<String>,
+    /// HF org attributed for the evaluation.
+    #[serde(default)]
+    pub org: Option<String>,
 }
 
 /// Metadata for a model repository on the Hub.
@@ -514,37 +466,31 @@ pub struct RepoUrl {
     pub url: String,
 }
 
-pub(crate) mod _handle {
-    use super::{HFClient, RepoType};
-
-    /// A handle for a single repository on the Hugging Face Hub.
-    ///
-    /// `HFRepository` is created via [`HFClient::repo`], [`HFClient::model`], or
-    /// [`HFClient::dataset`] and binds together the client, owner, repo name, and repo type.
-    /// All repo-scoped API operations are methods on this type.
-    ///
-    /// Cheap to clone — the inner [`HFClient`] is `Arc`-backed.
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use hf_hub::{HFClient, RepoType};
-    /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-    /// let client = HFClient::builder().build()?;
-    /// let repo = client.model("openai-community", "gpt2");
-    /// let info = repo.info().send().await?;
-    /// # Ok(()) }
-    /// ```
-    #[derive(Clone)]
-    pub struct HFRepository {
-        pub(crate) hf_client: HFClient,
-        pub(super) owner: String,
-        pub(super) name: String,
-        pub(crate) repo_type: RepoType,
-    }
+/// A handle for a single repository on the Hugging Face Hub.
+///
+/// `HFRepository` is created via [`HFClient::repo`], [`HFClient::model`], or
+/// [`HFClient::dataset`] and binds together the client, owner, repo name, and repo type.
+/// All repo-scoped API operations are methods on this type.
+///
+/// Cheap to clone — the inner [`HFClient`] is `Arc`-backed.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use hf_hub::{HFClient, RepoType};
+/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+/// let client = HFClient::builder().build()?;
+/// let repo = client.model("openai-community", "gpt2");
+/// let info = repo.info().send().await?;
+/// # Ok(()) }
+/// ```
+#[derive(Clone)]
+pub struct HFRepository {
+    pub(crate) hf_client: HFClient,
+    pub(super) owner: String,
+    pub(super) name: String,
+    pub(crate) repo_type: RepoType,
 }
-
-pub(crate) use _handle::HFRepository;
 
 impl fmt::Display for RepoType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -558,7 +504,7 @@ impl fmt::Display for RepoType {
 }
 
 impl FromStr for RepoType {
-    type Err = crate::error::HFError;
+    type Err = HFError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
@@ -566,7 +512,7 @@ impl FromStr for RepoType {
             "dataset" => Ok(RepoType::Dataset),
             "space" => Ok(RepoType::Space),
             "kernel" => Ok(RepoType::Kernel),
-            _ => Err(crate::error::HFError::Other(format!("Unknown repo type: {s}"))),
+            _ => Err(HFError::Other(format!("Unknown repo type: {s}"))),
         }
     }
 }
@@ -585,30 +531,28 @@ impl Serialize for GatedApprovalMode {
 }
 
 impl FromStr for GatedApprovalMode {
-    type Err = crate::error::HFError;
+    type Err = HFError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "false" | "disabled" => Ok(GatedApprovalMode::Disabled),
             "auto" => Ok(GatedApprovalMode::Auto),
             "manual" => Ok(GatedApprovalMode::Manual),
-            _ => Err(crate::error::HFError::Other(format!(
-                "Unknown gated approval mode: {s}. Expected 'auto', 'manual', or 'false'"
-            ))),
+            _ => {
+                Err(HFError::Other(format!("Unknown gated approval mode: {s}. Expected 'auto', 'manual', or 'false'")))
+            },
         }
     }
 }
 
 impl FromStr for GatedNotificationsMode {
-    type Err = crate::error::HFError;
+    type Err = HFError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "bulk" => Ok(GatedNotificationsMode::Bulk),
             "real-time" | "realtime" => Ok(GatedNotificationsMode::RealTime),
-            _ => Err(crate::error::HFError::Other(format!(
-                "Unknown gated notifications mode: {s}. Expected 'bulk' or 'real-time'"
-            ))),
+            _ => Err(HFError::Other(format!("Unknown gated notifications mode: {s}. Expected 'bulk' or 'real-time'"))),
         }
     }
 }
@@ -677,14 +621,36 @@ impl HFClient {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_models(
         &self,
-        #[builder(into)] search: Option<String>,
-        #[builder(into)] author: Option<String>,
-        #[builder(into)] filter: Option<String>,
-        #[builder(into)] sort: Option<String>,
-        #[builder(into)] pipeline_tag: Option<String>,
+        /// Free-text query forwarded as the `?search=` parameter. The Hub matches it substring-style against
+        /// the model `id` and (when present) the model card description — it is **not** a tag filter.
+        #[builder(into)]
+        search: Option<String>,
+        /// Namespace owner to filter on, forwarded as `?author=`. Pass a Hub user or organization name (e.g.
+        /// `"google"`, `"meta-llama"`) — bare names, not paths.
+        #[builder(into)]
+        author: Option<String>,
+        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+        /// `"pytorch"`, `"text-generation"`, `"license:apache-2.0"`, `"language:en"`, `"dataset:wikipedia"`,
+        /// `"region:us"`. To combine tags, narrow the results client-side (only one `filter` value is sent).
+        #[builder(into)]
+        filter: Option<String>,
+        /// API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
+        /// `"createdAt"`, `"lastModified"`, and `"trendingScore"`. Use the camelCase Hub field names (not Rust struct
+        /// field names).
+        #[builder(into)]
+        sort: Option<String>,
+        /// Pipeline-tag filter (e.g. `"text-classification"`, `"automatic-speech-recognition"`),
+        /// forwarded as `?pipeline_tag=`. Same vocabulary as the `pipeline_tag` field on a model card.
+        #[builder(into)]
+        pipeline_tag: Option<String>,
+        /// Fetch the full model information including all fields.
         full: Option<bool>,
+        /// Include the model card metadata in the response.
         card_data: Option<bool>,
+        /// Include the model configuration in the response.
         fetch_config: Option<bool>,
+        /// Cap on the total number of items yielded by the stream. When less than 1000, also used as the server
+        /// page size.
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<ModelInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/models", self.endpoint()))?;
@@ -744,11 +710,27 @@ impl HFClient {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_datasets(
         &self,
-        #[builder(into)] search: Option<String>,
-        #[builder(into)] author: Option<String>,
-        #[builder(into)] filter: Option<String>,
-        #[builder(into)] sort: Option<String>,
+        /// Free-text query forwarded as `?search=`. The Hub matches it substring-style against the dataset `id`
+        /// and card description — not a tag filter.
+        #[builder(into)]
+        search: Option<String>,
+        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g.
+        /// `"HuggingFaceH4"`, `"allenai"`).
+        #[builder(into)]
+        author: Option<String>,
+        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+        /// `"task_categories:text-classification"`, `"language:en"`, `"size_categories:10K<n<100K"`, `"license:mit"`.
+        /// To combine tags, narrow client-side — only one `filter` value is sent.
+        #[builder(into)]
+        filter: Option<String>,
+        /// API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
+        /// `"createdAt"`, `"lastModified"`, and `"trendingScore"` (Hub camelCase field names).
+        #[builder(into)]
+        sort: Option<String>,
+        /// Fetch the full dataset information including all fields.
         full: Option<bool>,
+        /// Cap on the total number of items yielded by the stream. When less than 1000, also used as the server
+        /// page size.
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<DatasetInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/datasets", self.endpoint()))?;
@@ -797,11 +779,27 @@ impl HFClient {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_spaces(
         &self,
-        #[builder(into)] search: Option<String>,
-        #[builder(into)] author: Option<String>,
-        #[builder(into)] filter: Option<String>,
-        #[builder(into)] sort: Option<String>,
+        /// Free-text query forwarded as `?search=`. The Hub matches it substring-style against the Space `id`
+        /// and card description — not a tag filter.
+        #[builder(into)]
+        search: Option<String>,
+        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g. `"openai"`,
+        /// `"stabilityai"`).
+        #[builder(into)]
+        author: Option<String>,
+        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+        /// `"sdk:gradio"`, `"sdk:streamlit"`, `"sdk:docker"`, `"language:en"`, `"license:mit"`. To combine tags,
+        /// narrow client-side — only one `filter` value is sent.
+        #[builder(into)]
+        filter: Option<String>,
+        /// API field name to sort by, forwarded as `?sort=`. Common values are `"likes"`, `"createdAt"`,
+        /// `"lastModified"`, and `"trendingScore"` (Hub camelCase field names).
+        #[builder(into)]
+        sort: Option<String>,
+        /// Fetch the full Space information including all fields.
         full: Option<bool>,
+        /// Cap on the total number of items yielded by the stream. When less than 1000, also used as the server
+        /// page size.
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<SpaceInfo>> + '_> {
         let url = Url::parse(&format!("{}/api/spaces", self.endpoint()))?;
@@ -841,11 +839,19 @@ impl HFClient {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn create_repo(
         &self,
-        #[builder(into)] repo_id: String,
+        /// Repository ID in `"owner/name"` or `"name"` format.
+        #[builder(into)]
+        repo_id: String,
+        /// Type of repository to create (model, dataset, space, kernel).
         repo_type: Option<RepoType>,
+        /// Whether the repository should be private.
         private: Option<bool>,
-        #[builder(default)] exist_ok: bool,
-        #[builder(into)] space_sdk: Option<String>,
+        /// If `true`, do not error when the repository already exists.
+        #[builder(default)]
+        exist_ok: bool,
+        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`).
+        #[builder(into)]
+        space_sdk: Option<String>,
     ) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/create", self.endpoint());
 
@@ -895,9 +901,14 @@ impl HFClient {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn delete_repo(
         &self,
-        #[builder(into)] repo_id: String,
+        /// Repository ID in `"owner/name"` or `"name"` format.
+        #[builder(into)]
+        repo_id: String,
+        /// Type of repository.
         repo_type: Option<RepoType>,
-        #[builder(default)] missing_ok: bool,
+        /// If `true`, do not error when the repository does not exist.
+        #[builder(default)]
+        missing_ok: bool,
     ) -> HFResult<()> {
         let url = format!("{}/api/repos/delete", self.endpoint());
 
@@ -936,8 +947,13 @@ impl HFClient {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn move_repo(
         &self,
-        #[builder(into)] from_id: String,
-        #[builder(into)] to_id: String,
+        /// Current repository ID in `"owner/name"` format.
+        #[builder(into)]
+        from_id: String,
+        /// New repository ID in `"owner/name"` format.
+        #[builder(into)]
+        to_id: String,
+        /// Type of repository to move.
         repo_type: Option<RepoType>,
     ) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/move", self.endpoint());
@@ -1074,7 +1090,11 @@ impl HFRepository {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn info(
         &self,
-        #[builder(into)] revision: Option<String>,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
+        /// the listed properties (plus `_id` and `id`) are returned.
         expand: Option<Vec<String>>,
     ) -> HFResult<RepoInfo> {
         match self.repo_type {
@@ -1119,7 +1139,12 @@ impl HFRepository {
     ///
     /// - `revision` (required): Git revision to check for existence.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn revision_exists(&self, #[builder(into)] revision: String) -> HFResult<bool> {
+    pub async fn revision_exists(
+        &self,
+        /// Git revision to check for existence.
+        #[builder(into)]
+        revision: String,
+    ) -> HFResult<bool> {
         let url = format!("{}/revision/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -1144,8 +1169,12 @@ impl HFRepository {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn file_exists(
         &self,
-        #[builder(into)] filename: String,
-        #[builder(into)] revision: Option<String>,
+        /// Path of the file to check within the repository.
+        #[builder(into)]
+        filename: String,
+        /// Git revision to check. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
     ) -> HFResult<bool> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = self
@@ -1188,11 +1217,19 @@ impl HFRepository {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn update_settings(
         &self,
+        /// Whether the repository should be private.
         private: Option<bool>,
+        /// Access-gating mode for the repository (e.g. `auto`, `manual`, disabled).
         gated: Option<GatedApprovalMode>,
-        #[builder(into)] description: Option<String>,
+        /// Repository description shown on the Hub page.
+        #[builder(into)]
+        description: Option<String>,
+        /// Whether discussions are disabled on this repository.
         discussions_disabled: Option<bool>,
-        #[builder(into)] gated_notifications_email: Option<String>,
+        /// Email address to receive gated-access request notifications.
+        #[builder(into)]
+        gated_notifications_email: Option<String>,
+        /// When to send gated-access notifications (e.g. `bulk`, `real-time`).
         gated_notifications_mode: Option<GatedNotificationsMode>,
     ) -> HFResult<()> {
         #[derive(Serialize)]
@@ -1258,14 +1295,36 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_models(
         &self,
-        #[builder(into)] search: Option<String>,
-        #[builder(into)] author: Option<String>,
-        #[builder(into)] filter: Option<String>,
-        #[builder(into)] sort: Option<String>,
-        #[builder(into)] pipeline_tag: Option<String>,
+        /// Free-text query forwarded as the `?search=` parameter. The Hub matches it substring-style against
+        /// the model `id` and (when present) the model card description — it is **not** a tag filter.
+        #[builder(into)]
+        search: Option<String>,
+        /// Namespace owner to filter on, forwarded as `?author=`. Pass a Hub user or organization name (e.g.
+        /// `"google"`, `"meta-llama"`) — bare names, not paths.
+        #[builder(into)]
+        author: Option<String>,
+        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+        /// `"pytorch"`, `"text-generation"`, `"license:apache-2.0"`, `"language:en"`, `"dataset:wikipedia"`,
+        /// `"region:us"`. To combine tags, narrow the results client-side (only one `filter` value is sent).
+        #[builder(into)]
+        filter: Option<String>,
+        /// API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
+        /// `"createdAt"`, `"lastModified"`, and `"trendingScore"`. Use the camelCase Hub field names (not Rust struct
+        /// field names).
+        #[builder(into)]
+        sort: Option<String>,
+        /// Pipeline-tag filter (e.g. `"text-classification"`, `"automatic-speech-recognition"`),
+        /// forwarded as `?pipeline_tag=`. Same vocabulary as the `pipeline_tag` field on a model card.
+        #[builder(into)]
+        pipeline_tag: Option<String>,
+        /// Fetch the full model information including all fields.
         full: Option<bool>,
+        /// Include the model card metadata in the response.
         card_data: Option<bool>,
+        /// Include the model configuration in the response.
         fetch_config: Option<bool>,
+        /// Cap on the total number of items yielded by the stream. When less than 1000, also used as the server
+        /// page size.
         limit: Option<usize>,
     ) -> HFResult<Vec<ModelInfo>> {
         use futures::StreamExt;
@@ -1297,11 +1356,27 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_datasets(
         &self,
-        #[builder(into)] search: Option<String>,
-        #[builder(into)] author: Option<String>,
-        #[builder(into)] filter: Option<String>,
-        #[builder(into)] sort: Option<String>,
+        /// Free-text query forwarded as `?search=`. The Hub matches it substring-style against the dataset `id`
+        /// and card description — not a tag filter.
+        #[builder(into)]
+        search: Option<String>,
+        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g.
+        /// `"HuggingFaceH4"`, `"allenai"`).
+        #[builder(into)]
+        author: Option<String>,
+        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+        /// `"task_categories:text-classification"`, `"language:en"`, `"size_categories:10K<n<100K"`, `"license:mit"`.
+        /// To combine tags, narrow client-side — only one `filter` value is sent.
+        #[builder(into)]
+        filter: Option<String>,
+        /// API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
+        /// `"createdAt"`, `"lastModified"`, and `"trendingScore"` (Hub camelCase field names).
+        #[builder(into)]
+        sort: Option<String>,
+        /// Fetch the full dataset information including all fields.
         full: Option<bool>,
+        /// Cap on the total number of items yielded by the stream. When less than 1000, also used as the server
+        /// page size.
         limit: Option<usize>,
     ) -> HFResult<Vec<DatasetInfo>> {
         use futures::StreamExt;
@@ -1330,11 +1405,27 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_spaces(
         &self,
-        #[builder(into)] search: Option<String>,
-        #[builder(into)] author: Option<String>,
-        #[builder(into)] filter: Option<String>,
-        #[builder(into)] sort: Option<String>,
+        /// Free-text query forwarded as `?search=`. The Hub matches it substring-style against the Space `id`
+        /// and card description — not a tag filter.
+        #[builder(into)]
+        search: Option<String>,
+        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g. `"openai"`,
+        /// `"stabilityai"`).
+        #[builder(into)]
+        author: Option<String>,
+        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+        /// `"sdk:gradio"`, `"sdk:streamlit"`, `"sdk:docker"`, `"language:en"`, `"license:mit"`. To combine tags,
+        /// narrow client-side — only one `filter` value is sent.
+        #[builder(into)]
+        filter: Option<String>,
+        /// API field name to sort by, forwarded as `?sort=`. Common values are `"likes"`, `"createdAt"`,
+        /// `"lastModified"`, and `"trendingScore"` (Hub camelCase field names).
+        #[builder(into)]
+        sort: Option<String>,
+        /// Fetch the full Space information including all fields.
         full: Option<bool>,
+        /// Cap on the total number of items yielded by the stream. When less than 1000, also used as the server
+        /// page size.
         limit: Option<usize>,
     ) -> HFResult<Vec<SpaceInfo>> {
         use futures::StreamExt;
@@ -1363,11 +1454,19 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_repo(
         &self,
-        #[builder(into)] repo_id: String,
+        /// Repository ID in `"owner/name"` or `"name"` format.
+        #[builder(into)]
+        repo_id: String,
+        /// Type of repository to create (model, dataset, space, kernel).
         repo_type: Option<RepoType>,
+        /// Whether the repository should be private.
         private: Option<bool>,
-        #[builder(default)] exist_ok: bool,
-        #[builder(into)] space_sdk: Option<String>,
+        /// If `true`, do not error when the repository already exists.
+        #[builder(default)]
+        exist_ok: bool,
+        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`).
+        #[builder(into)]
+        space_sdk: Option<String>,
     ) -> HFResult<RepoUrl> {
         self.runtime.block_on(
             self.inner
@@ -1386,9 +1485,14 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_repo(
         &self,
-        #[builder(into)] repo_id: String,
+        /// Repository ID in `"owner/name"` or `"name"` format.
+        #[builder(into)]
+        repo_id: String,
+        /// Type of repository.
         repo_type: Option<RepoType>,
-        #[builder(default)] missing_ok: bool,
+        /// If `true`, do not error when the repository does not exist.
+        #[builder(default)]
+        missing_ok: bool,
     ) -> HFResult<()> {
         self.runtime.block_on(
             self.inner
@@ -1405,8 +1509,13 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn move_repo(
         &self,
-        #[builder(into)] from_id: String,
-        #[builder(into)] to_id: String,
+        /// Current repository ID in `"owner/name"` format.
+        #[builder(into)]
+        from_id: String,
+        /// New repository ID in `"owner/name"` format.
+        #[builder(into)]
+        to_id: String,
+        /// Type of repository to move.
         repo_type: Option<RepoType>,
     ) -> HFResult<RepoUrl> {
         self.runtime.block_on(
@@ -1426,7 +1535,15 @@ impl crate::blocking::HFRepositorySync {
     /// Blocking counterpart of [`HFRepository::info`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn info(&self, #[builder(into)] revision: Option<String>, expand: Option<Vec<String>>) -> HFResult<RepoInfo> {
+    pub fn info(
+        &self,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
+        /// the listed properties (plus `_id` and `id`) are returned.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<RepoInfo> {
         self.runtime
             .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
     }
@@ -1440,7 +1557,12 @@ impl crate::blocking::HFRepositorySync {
     /// Blocking counterpart of [`HFRepository::revision_exists`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn revision_exists(&self, #[builder(into)] revision: String) -> HFResult<bool> {
+    pub fn revision_exists(
+        &self,
+        /// Git revision to check for existence.
+        #[builder(into)]
+        revision: String,
+    ) -> HFResult<bool> {
         self.runtime.block_on(self.inner.revision_exists().revision(revision).send())
     }
 
@@ -1449,8 +1571,12 @@ impl crate::blocking::HFRepositorySync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn file_exists(
         &self,
-        #[builder(into)] filename: String,
-        #[builder(into)] revision: Option<String>,
+        /// Path of the file to check within the repository.
+        #[builder(into)]
+        filename: String,
+        /// Git revision to check. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
     ) -> HFResult<bool> {
         self.runtime
             .block_on(self.inner.file_exists().filename(filename).maybe_revision(revision).send())
@@ -1461,11 +1587,19 @@ impl crate::blocking::HFRepositorySync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn update_settings(
         &self,
+        /// Whether the repository should be private.
         private: Option<bool>,
+        /// Access-gating mode for the repository (e.g. `auto`, `manual`, disabled).
         gated: Option<GatedApprovalMode>,
-        #[builder(into)] description: Option<String>,
+        /// Repository description shown on the Hub page.
+        #[builder(into)]
+        description: Option<String>,
+        /// Whether discussions are disabled on this repository.
         discussions_disabled: Option<bool>,
-        #[builder(into)] gated_notifications_email: Option<String>,
+        /// Email address to receive gated-access request notifications.
+        #[builder(into)]
+        gated_notifications_email: Option<String>,
+        /// When to send gated-access notifications (e.g. `bulk`, `real-time`).
         gated_notifications_mode: Option<GatedNotificationsMode>,
     ) -> HFResult<()> {
         self.runtime.block_on(
@@ -1494,7 +1628,7 @@ mod tests {
 
     #[test]
     fn test_repo_path_and_accessors() {
-        let client = crate::HFClient::builder().build().unwrap();
+        let client = HFClient::builder().build().unwrap();
         let repo = HFRepository::new(client, RepoType::Model, "openai-community", "gpt2");
 
         assert_eq!(repo.owner(), "openai-community");
@@ -1574,20 +1708,21 @@ mod tests {
     fn test_eval_result_entry_minimal() {
         let json = r#"{"dataset":{"id":"cais/hle","task_id":"default"},"value":20.9}"#;
         let entry: EvalResultEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.dataset_id, "cais/hle");
-        assert_eq!(entry.task_id, "default");
+        assert_eq!(entry.dataset.id, "cais/hle");
+        assert_eq!(entry.dataset.task_id, "default");
         assert_eq!(entry.value.as_f64(), Some(20.9));
-        assert!(entry.source_url.is_none());
+        assert!(entry.source.is_none());
     }
 
     #[test]
-    fn test_eval_result_entry_with_source_and_data_wrapper() {
-        let json = r#"{"data":{"dataset":{"id":"d/x","task_id":"t","revision":"abc"},"value":0.5,"source":{"url":"u","name":"n","org":"o"},"verifyToken":"vt","notes":"n"}}"#;
+    fn test_eval_result_entry_with_source() {
+        let json = r#"{"dataset":{"id":"d/x","task_id":"t","revision":"abc"},"value":0.5,"source":{"url":"u","name":"n","org":"o"},"verifyToken":"vt","notes":"n"}"#;
         let entry: EvalResultEntry = serde_json::from_str(json).unwrap();
-        assert_eq!(entry.dataset_id, "d/x");
-        assert_eq!(entry.dataset_revision.as_deref(), Some("abc"));
-        assert_eq!(entry.source_url.as_deref(), Some("u"));
-        assert_eq!(entry.source_org.as_deref(), Some("o"));
+        assert_eq!(entry.dataset.id, "d/x");
+        assert_eq!(entry.dataset.revision.as_deref(), Some("abc"));
+        let source = entry.source.as_ref().unwrap();
+        assert_eq!(source.url.as_deref(), Some("u"));
+        assert_eq!(source.org.as_deref(), Some("o"));
         assert_eq!(entry.verify_token.as_deref(), Some("vt"));
     }
 

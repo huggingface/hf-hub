@@ -217,14 +217,14 @@ pub(crate) mod xet;
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync, HFSpaceSync};
 #[doc(inline)]
-pub use buckets::_handle::HFBucket;
+pub use buckets::HFBucket;
 pub use client::{HFClient, HFClientBuilder};
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult};
 #[doc(inline)]
-pub use repository::_handle::HFRepository;
+pub use repository::HFRepository;
 #[doc(inline)]
-pub use repository::_kind::RepoType;
+pub use repository::RepoType;
 #[doc(inline)]
-pub use spaces::_handle::HFSpace;
+pub use spaces::HFSpace;

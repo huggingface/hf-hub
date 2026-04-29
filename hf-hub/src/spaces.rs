@@ -1,6 +1,6 @@
 //! Space handles, response types, and runtime/hardware/secrets APIs.
 //!
-//! Obtain a handle with [`HFClient::space`](crate::HFClient::space). It is an [`HFSpace`], which
+//! Get a handle with [`HFClient::space`](crate::HFClient::space). It is an [`HFSpace`], which
 //! wraps an [`HFRepository`] pinned to [`RepoType::Space`] and adds
 //! Space-only methods (runtime, hardware, secrets, variables, pause/restart, duplicate).
 //!
@@ -16,7 +16,6 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use bon::bon;
-use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
 use crate::client::HFClient;
@@ -27,71 +26,42 @@ use crate::retry;
 /// Runtime state of a Space: stage, hardware, storage, and mounted volumes.
 ///
 /// Returned by Space lifecycle methods such as
-/// [`HFSpace::runtime`], [`HFSpace::pause`], and [`HFSpace::restart`]. Mirrors the
-/// `SpaceRuntime` type from the Python `huggingface_hub` library.
-#[derive(Debug, Clone, Serialize)]
+/// [`HFSpace::runtime`], [`HFSpace::pause`], and [`HFSpace::restart`].
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceRuntime {
     /// Lifecycle stage of the Space (e.g. `"RUNNING"`, `"BUILDING"`, `"PAUSED"`, `"SLEEPING"`).
     pub stage: String,
-    /// Hardware currently running the Space (e.g. `"cpu-basic"`, `"t4-medium"`). `None` while a
-    /// Space is `BUILDING` for the first time.
-    pub hardware: Option<String>,
-    /// Hardware most recently requested for the Space. May differ from `hardware` if a request is in
-    /// flight. `None` if no hardware has been requested yet.
-    pub requested_hardware: Option<String>,
+    /// Current and requested hardware for the Space. `None` while a Space is `BUILDING` for the
+    /// first time.
+    #[serde(default)]
+    pub hardware: Option<SpaceHardware>,
     /// Idle seconds before the Space is put to sleep. `None` means the default policy applies (Spaces
     /// on free `cpu-basic` hardware sleep after 48 hours; upgraded hardware never sleeps by default).
-    ///
-    /// On the wire this is the `gcTimeout` field.
+    #[serde(rename = "gcTimeout", default)]
     pub sleep_time: Option<u64>,
     /// Persistent storage attached to the Space (`"small"`, `"medium"`, or `"large"`), if any.
+    #[serde(default)]
     pub storage: Option<String>,
     /// Hot-reloading state for the Space, if a hot-reload commit is in progress.
+    #[serde(default)]
     pub hot_reloading: Option<SpaceHotReloading>,
     /// Volumes mounted in the Space. `None` if none are attached.
+    #[serde(default)]
     pub volumes: Option<Vec<Volume>>,
 }
 
-impl<'de> Deserialize<'de> for SpaceRuntime {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize, Default)]
-        struct HardwareWire {
-            #[serde(default)]
-            current: Option<String>,
-            #[serde(default)]
-            requested: Option<String>,
-        }
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Wire {
-            stage: String,
-            #[serde(default)]
-            hardware: Option<HardwareWire>,
-            #[serde(rename = "gcTimeout", default)]
-            sleep_time: Option<u64>,
-            #[serde(default)]
-            storage: Option<String>,
-            #[serde(default)]
-            hot_reloading: Option<SpaceHotReloading>,
-            #[serde(default)]
-            volumes: Option<Vec<Volume>>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        let (hardware, requested_hardware) = match wire.hardware {
-            Some(h) => (h.current, h.requested),
-            None => (None, None),
-        };
-        Ok(SpaceRuntime {
-            stage: wire.stage,
-            hardware,
-            requested_hardware,
-            sleep_time: wire.sleep_time,
-            storage: wire.storage,
-            hot_reloading: wire.hot_reloading,
-            volumes: wire.volumes,
-        })
-    }
+/// Hardware running a Space, with the most recently requested hardware.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SpaceHardware {
+    /// Hardware currently running the Space (e.g. `"cpu-basic"`, `"t4-medium"`). `None` if no
+    /// hardware is assigned yet.
+    #[serde(default)]
+    pub current: Option<String>,
+    /// Hardware most recently requested for the Space. May differ from `current` if a request is
+    /// in flight. `None` if no hardware has been requested yet.
+    #[serde(default)]
+    pub requested: Option<String>,
 }
 
 /// Hot-reloading state for a Space.
@@ -143,38 +113,29 @@ pub struct SpaceVariable {
     pub updated_at: Option<String>,
 }
 
-pub(crate) mod _handle {
-    use std::sync::Arc;
-
-    #[allow(unused_imports)]
-    use super::{HFClient, HFRepository, RepoType};
-
-    /// A handle for a Space repository, providing Space-specific operations on top of [`HFRepository`].
-    ///
-    /// `HFSpace` wraps an [`HFRepository`] fixed to [`RepoType::Space`] and exposes hardware,
-    /// secret, and variable management. It derefs to [`HFRepository`], so all general repo
-    /// methods (e.g. `exists`, `info`, `download_file`) are accessible directly.
-    ///
-    /// Created via [`HFClient::space`] or [`TryFrom<HFRepository>`].
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use hf_hub::HFClient;
-    /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-    /// let client = HFClient::builder().build()?;
-    /// let space = client.space("huggingface", "diffusers-gallery");
-    /// // General repo methods are available via Deref:
-    /// let exists = space.exists().send().await?;
-    /// # Ok(()) }
-    /// ```
-    #[derive(Clone)]
-    pub struct HFSpace {
-        pub(crate) repo: Arc<HFRepository>,
-    }
+/// A handle for a Space repository, providing Space-specific operations on top of [`HFRepository`].
+///
+/// `HFSpace` wraps an [`HFRepository`] fixed to [`RepoType::Space`] and exposes hardware,
+/// secret, and variable management. It derefs to [`HFRepository`], so all general repo
+/// methods (e.g. `exists`, `info`, `download_file`) are accessible directly.
+///
+/// Created via [`HFClient::space`] or [`TryFrom<HFRepository>`].
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use hf_hub::HFClient;
+/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+/// let client = HFClient::builder().build()?;
+/// let space = client.space("huggingface", "diffusers-gallery");
+/// // General repo methods are available via Deref:
+/// let exists = space.exists().send().await?;
+/// # Ok(()) }
+/// ```
+#[derive(Clone)]
+pub struct HFSpace {
+    pub(crate) repo: Arc<HFRepository>,
 }
-
-pub(crate) use _handle::HFSpace;
 
 impl fmt::Debug for HFSpace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -248,7 +209,10 @@ impl HFSpace {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn request_hardware(
         &self,
-        #[builder(into)] hardware: String,
+        /// Hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
+        #[builder(into)]
+        hardware: String,
+        /// Number of seconds of inactivity before the Space is put to sleep. `0` means never sleep.
         sleep_time: Option<u64>,
     ) -> HFResult<SpaceRuntime> {
         let url = format!("{}/api/spaces/{}/hardware", self.hf_client.endpoint(), self.repo_path());
@@ -281,7 +245,11 @@ impl HFSpace {
     ///
     /// - `sleep_time` (required): seconds of inactivity before the Space is put to sleep. `0` means never sleep.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn set_sleep_time(&self, sleep_time: u64) -> HFResult<()> {
+    pub async fn set_sleep_time(
+        &self,
+        /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
+        sleep_time: u64,
+    ) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/sleeptime", self.hf_client.endpoint(), self.repo_path());
         let body = serde_json::json!({ "seconds": sleep_time });
         let headers = self.hf_client.auth_headers();
@@ -348,9 +316,15 @@ impl HFSpace {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn add_secret(
         &self,
-        #[builder(into)] key: String,
-        #[builder(into)] value: String,
-        #[builder(into)] description: Option<String>,
+        /// Secret key name.
+        #[builder(into)]
+        key: String,
+        /// Secret value.
+        #[builder(into)]
+        value: String,
+        /// Human-readable description of the secret.
+        #[builder(into)]
+        description: Option<String>,
     ) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/secrets", self.hf_client.endpoint(), self.repo_path());
         let mut body = serde_json::json!({ "key": key, "value": value });
@@ -381,7 +355,12 @@ impl HFSpace {
     ///
     /// - `key` (required): secret key name to delete.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn delete_secret(&self, #[builder(into)] key: String) -> HFResult<()> {
+    pub async fn delete_secret(
+        &self,
+        /// Secret key name to delete.
+        #[builder(into)]
+        key: String,
+    ) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/secrets", self.hf_client.endpoint(), self.repo_path());
         let body = serde_json::json!({ "key": key });
         let headers = self.hf_client.auth_headers();
@@ -412,9 +391,15 @@ impl HFSpace {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn add_variable(
         &self,
-        #[builder(into)] key: String,
-        #[builder(into)] value: String,
-        #[builder(into)] description: Option<String>,
+        /// Variable key name.
+        #[builder(into)]
+        key: String,
+        /// Variable value.
+        #[builder(into)]
+        value: String,
+        /// Human-readable description of the variable.
+        #[builder(into)]
+        description: Option<String>,
     ) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/variables", self.hf_client.endpoint(), self.repo_path());
         let mut body = serde_json::json!({ "key": key, "value": value });
@@ -445,7 +430,12 @@ impl HFSpace {
     ///
     /// - `key` (required): variable key name to delete.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn delete_variable(&self, #[builder(into)] key: String) -> HFResult<()> {
+    pub async fn delete_variable(
+        &self,
+        /// Variable key name to delete.
+        #[builder(into)]
+        key: String,
+    ) -> HFResult<()> {
         let url = format!("{}/api/spaces/{}/variables", self.hf_client.endpoint(), self.repo_path());
         let body = serde_json::json!({ "key": key });
         let headers = self.hf_client.auth_headers();
@@ -511,12 +501,25 @@ impl HFSpace {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn duplicate(
         &self,
-        #[builder(into)] to_id: Option<String>,
+        /// Destination repository ID in `"owner/name"` format. Defaults to the authenticated user's namespace
+        /// with the same name.
+        #[builder(into)]
+        to_id: Option<String>,
+        /// Whether the duplicated Space should be private.
         private: Option<bool>,
-        #[builder(into)] hardware: Option<String>,
-        #[builder(into)] storage: Option<String>,
+        /// Hardware flavor identifier the duplicated Space should run on. When omitted, the Hub picks a default
+        /// (typically `"cpu-basic"`) — pass a value explicitly to mirror the source Space's hardware.
+        #[builder(into)]
+        hardware: Option<String>,
+        /// Persistent storage tier identifier. One of `"small"`, `"medium"`, or `"large"`. Omit to duplicate
+        /// without persistent storage.
+        #[builder(into)]
+        storage: Option<String>,
+        /// Seconds of inactivity before the Space is put to sleep. `0` means never.
         sleep_time: Option<u64>,
+        /// Encrypted environment variables to set on the duplicated Space.
         secrets: Option<Vec<serde_json::Value>>,
+        /// Public (non-secret) environment variables to set on the duplicated Space.
         variables: Option<Vec<serde_json::Value>>,
     ) -> HFResult<RepoUrl> {
         let url = format!("{}/api/spaces/{}/duplicate", self.hf_client.endpoint(), self.repo_path());
@@ -603,7 +606,10 @@ impl crate::blocking::HFSpaceSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn request_hardware(
         &self,
-        #[builder(into)] hardware: String,
+        /// Hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
+        #[builder(into)]
+        hardware: String,
+        /// Number of seconds of inactivity before the Space is put to sleep. `0` means never sleep.
         sleep_time: Option<u64>,
     ) -> HFResult<SpaceRuntime> {
         self.repo_sync.runtime.block_on(
@@ -618,7 +624,11 @@ impl crate::blocking::HFSpaceSync {
     /// Blocking counterpart of [`HFSpace::set_sleep_time`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn set_sleep_time(&self, sleep_time: u64) -> HFResult<()> {
+    pub fn set_sleep_time(
+        &self,
+        /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
+        sleep_time: u64,
+    ) -> HFResult<()> {
         self.repo_sync
             .runtime
             .block_on(self.inner.set_sleep_time().sleep_time(sleep_time).send())
@@ -643,9 +653,15 @@ impl crate::blocking::HFSpaceSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn add_secret(
         &self,
-        #[builder(into)] key: String,
-        #[builder(into)] value: String,
-        #[builder(into)] description: Option<String>,
+        /// Secret key name.
+        #[builder(into)]
+        key: String,
+        /// Secret value.
+        #[builder(into)]
+        value: String,
+        /// Human-readable description of the secret.
+        #[builder(into)]
+        description: Option<String>,
     ) -> HFResult<()> {
         self.repo_sync.runtime.block_on(
             self.inner
@@ -660,7 +676,12 @@ impl crate::blocking::HFSpaceSync {
     /// Blocking counterpart of [`HFSpace::delete_secret`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_secret(&self, #[builder(into)] key: String) -> HFResult<()> {
+    pub fn delete_secret(
+        &self,
+        /// Secret key name to delete.
+        #[builder(into)]
+        key: String,
+    ) -> HFResult<()> {
         self.repo_sync.runtime.block_on(self.inner.delete_secret().key(key).send())
     }
 
@@ -669,9 +690,15 @@ impl crate::blocking::HFSpaceSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn add_variable(
         &self,
-        #[builder(into)] key: String,
-        #[builder(into)] value: String,
-        #[builder(into)] description: Option<String>,
+        /// Variable key name.
+        #[builder(into)]
+        key: String,
+        /// Variable value.
+        #[builder(into)]
+        value: String,
+        /// Human-readable description of the variable.
+        #[builder(into)]
+        description: Option<String>,
     ) -> HFResult<()> {
         self.repo_sync.runtime.block_on(
             self.inner
@@ -686,7 +713,12 @@ impl crate::blocking::HFSpaceSync {
     /// Blocking counterpart of [`HFSpace::delete_variable`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_variable(&self, #[builder(into)] key: String) -> HFResult<()> {
+    pub fn delete_variable(
+        &self,
+        /// Variable key name to delete.
+        #[builder(into)]
+        key: String,
+    ) -> HFResult<()> {
         self.repo_sync.runtime.block_on(self.inner.delete_variable().key(key).send())
     }
 
@@ -695,12 +727,25 @@ impl crate::blocking::HFSpaceSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn duplicate(
         &self,
-        #[builder(into)] to_id: Option<String>,
+        /// Destination repository ID in `"owner/name"` format. Defaults to the authenticated user's namespace
+        /// with the same name.
+        #[builder(into)]
+        to_id: Option<String>,
+        /// Whether the duplicated Space should be private.
         private: Option<bool>,
-        #[builder(into)] hardware: Option<String>,
-        #[builder(into)] storage: Option<String>,
+        /// Hardware flavor identifier the duplicated Space should run on. When omitted, the Hub picks a default
+        /// (typically `"cpu-basic"`) — pass a value explicitly to mirror the source Space's hardware.
+        #[builder(into)]
+        hardware: Option<String>,
+        /// Persistent storage tier identifier. One of `"small"`, `"medium"`, or `"large"`. Omit to duplicate
+        /// without persistent storage.
+        #[builder(into)]
+        storage: Option<String>,
+        /// Seconds of inactivity before the Space is put to sleep. `0` means never.
         sleep_time: Option<u64>,
+        /// Encrypted environment variables to set on the duplicated Space.
         secrets: Option<Vec<serde_json::Value>>,
+        /// Public (non-secret) environment variables to set on the duplicated Space.
         variables: Option<Vec<serde_json::Value>>,
     ) -> HFResult<RepoUrl> {
         self.repo_sync.runtime.block_on(
@@ -750,12 +795,13 @@ mod tests {
     }
 
     #[test]
-    fn test_space_runtime_deserialize_flattens_hardware() {
+    fn test_space_runtime_deserialize_hardware() {
         let json = r#"{"stage":"RUNNING","hardware":{"current":"cpu-basic","requested":"t4-medium"},"storage":null}"#;
         let runtime: SpaceRuntime = serde_json::from_str(json).unwrap();
         assert_eq!(runtime.stage, "RUNNING");
-        assert_eq!(runtime.hardware.as_deref(), Some("cpu-basic"));
-        assert_eq!(runtime.requested_hardware.as_deref(), Some("t4-medium"));
+        let hardware = runtime.hardware.as_ref().unwrap();
+        assert_eq!(hardware.current.as_deref(), Some("cpu-basic"));
+        assert_eq!(hardware.requested.as_deref(), Some("t4-medium"));
         assert_eq!(runtime.storage, None);
     }
 
@@ -765,7 +811,6 @@ mod tests {
         let runtime: SpaceRuntime = serde_json::from_str(json).unwrap();
         assert_eq!(runtime.stage, "BUILDING");
         assert!(runtime.hardware.is_none());
-        assert!(runtime.requested_hardware.is_none());
     }
 
     #[test]

@@ -807,18 +807,41 @@ impl HFBucket {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn sync(
         &self,
-        #[builder(into)] local_path: PathBuf,
+        /// Local directory path.
+        #[builder(into)]
+        local_path: PathBuf,
+        /// Sync direction (upload or download).
         direction: BucketSyncDirection,
-        #[builder(into)] prefix: Option<String>,
-        #[builder(default)] delete: bool,
-        #[builder(default)] ignore_times: bool,
-        #[builder(default)] ignore_sizes: bool,
-        #[builder(default)] existing: bool,
-        #[builder(default)] ignore_existing: bool,
-        #[builder(default)] include: Vec<String>,
-        #[builder(default)] exclude: Vec<String>,
-        #[builder(default)] verbose: bool,
-        #[builder(into)] progress: Option<Progress>,
+        /// Optional prefix within the bucket (subdirectory).
+        #[builder(into)]
+        prefix: Option<String>,
+        /// Delete destination files not present in source.
+        #[builder(default)]
+        delete: bool,
+        /// Only compare sizes, ignore modification times.
+        #[builder(default)]
+        ignore_times: bool,
+        /// Only compare modification times, ignore sizes.
+        #[builder(default)]
+        ignore_sizes: bool,
+        /// Only sync files that already exist at destination.
+        #[builder(default)]
+        existing: bool,
+        /// Skip files that already exist at destination.
+        #[builder(default)]
+        ignore_existing: bool,
+        /// Glob-style include patterns.
+        #[builder(default)]
+        include: Vec<String>,
+        /// Glob-style exclude patterns. Exclusions take precedence over inclusions.
+        #[builder(default)]
+        exclude: Vec<String>,
+        /// Include skip operations in the returned plan.
+        #[builder(default)]
+        verbose: bool,
+        /// Progress handler for upload/download tracking.
+        #[builder(into)]
+        progress: Option<Progress>,
     ) -> HFResult<BucketSyncPlan> {
         self.sync_impl(BucketSyncParams {
             local_path,
@@ -846,18 +869,41 @@ impl crate::blocking::HFBucketSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn sync(
         &self,
-        #[builder(into)] local_path: PathBuf,
+        /// Local directory path.
+        #[builder(into)]
+        local_path: PathBuf,
+        /// Sync direction (upload or download).
         direction: BucketSyncDirection,
-        #[builder(into)] prefix: Option<String>,
-        #[builder(default)] delete: bool,
-        #[builder(default)] ignore_times: bool,
-        #[builder(default)] ignore_sizes: bool,
-        #[builder(default)] existing: bool,
-        #[builder(default)] ignore_existing: bool,
-        #[builder(default)] include: Vec<String>,
-        #[builder(default)] exclude: Vec<String>,
-        #[builder(default)] verbose: bool,
-        #[builder(into)] progress: Option<Progress>,
+        /// Optional prefix within the bucket (subdirectory).
+        #[builder(into)]
+        prefix: Option<String>,
+        /// Delete destination files not present in source.
+        #[builder(default)]
+        delete: bool,
+        /// Only compare sizes, ignore modification times.
+        #[builder(default)]
+        ignore_times: bool,
+        /// Only compare modification times, ignore sizes.
+        #[builder(default)]
+        ignore_sizes: bool,
+        /// Only sync files that already exist at destination.
+        #[builder(default)]
+        existing: bool,
+        /// Skip files that already exist at destination.
+        #[builder(default)]
+        ignore_existing: bool,
+        /// Glob-style include patterns.
+        #[builder(default)]
+        include: Vec<String>,
+        /// Glob-style exclude patterns. Exclusions take precedence over inclusions.
+        #[builder(default)]
+        exclude: Vec<String>,
+        /// Include skip operations in the returned plan.
+        #[builder(default)]
+        verbose: bool,
+        /// Progress handler for upload/download tracking.
+        #[builder(into)]
+        progress: Option<Progress>,
     ) -> HFResult<BucketSyncPlan> {
         self.runtime.block_on(
             self.inner

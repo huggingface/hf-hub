@@ -48,40 +48,18 @@ pub struct LastCommitInfo {
 /// Security-scan summary for a file in a repository.
 ///
 /// Populated on [`RepoTreeEntry::File`] entries when the listing was requested with `expand=true`.
-/// Mirrors `huggingface_hub.BlobSecurityInfo`. The `safe` field is computed from `status` for
-/// backward compatibility (true iff `status == "safe"`).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlobSecurityInfo {
-    /// Whether the file is considered safe (computed: `status == "safe"`).
-    pub safe: bool,
-    /// Status string reported by the scanner (e.g. `"safe"`, `"unsafe"`, `"suspicious"`).
+    /// Status string reported by the scanner (e.g. `"safe"`, `"unsafe"`, `"suspicious"`). The
+    /// file is considered safe iff `status == "safe"`.
     pub status: String,
     /// Antivirus-scan details, when present.
+    #[serde(default)]
     pub av_scan: Option<serde_json::Value>,
     /// Pickle-import-scan details, when present.
+    #[serde(default)]
     pub pickle_import_scan: Option<serde_json::Value>,
-}
-
-impl<'de> Deserialize<'de> for BlobSecurityInfo {
-    fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Wire {
-            status: String,
-            #[serde(default)]
-            av_scan: Option<serde_json::Value>,
-            #[serde(default)]
-            pickle_import_scan: Option<serde_json::Value>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        Ok(BlobSecurityInfo {
-            safe: wire.status == "safe",
-            status: wire.status,
-            av_scan: wire.av_scan,
-            pickle_import_scan: wire.pickle_import_scan,
-        })
-    }
 }
 
 /// Metadata returned from a HEAD request on a file's resolve URL.
@@ -147,62 +125,27 @@ pub enum RepoTreeEntry {
 /// Includes URLs for the commit and any PR that was opened, along with the commit OID
 /// when present. Returned by [`HFRepository::create_commit`]
 /// and related upload/delete helpers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitInfo {
     /// URL of the created commit on the Hub, when available.
+    #[serde(default)]
     pub commit_url: Option<String>,
     /// Commit message recorded for the operation.
+    #[serde(default)]
     pub commit_message: Option<String>,
     /// Commit description/body, when provided.
+    #[serde(default)]
     pub commit_description: Option<String>,
     /// Commit SHA, when returned by the API.
+    #[serde(default)]
     pub commit_oid: Option<String>,
     /// Pull-request URL, when `create_pr` was enabled and a PR was opened.
+    #[serde(default)]
     pub pr_url: Option<String>,
     /// Pull-request number, when `create_pr` was enabled and a PR was opened.
+    #[serde(default)]
     pub pr_num: Option<u64>,
-    /// PR-revision string of the form `refs/pr/{pr_num}`, derived from `pr_num` when a PR was opened.
-    pub pr_revision: Option<String>,
-    /// Repo-level URL, derived from `commit_url` by stripping the `/commit/{sha}` suffix.
-    pub repo_url: Option<crate::repository::RepoUrl>,
-}
-
-impl<'de> Deserialize<'de> for CommitInfo {
-    fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Wire {
-            #[serde(default)]
-            commit_url: Option<String>,
-            #[serde(default)]
-            commit_message: Option<String>,
-            #[serde(default)]
-            commit_description: Option<String>,
-            #[serde(default)]
-            commit_oid: Option<String>,
-            #[serde(default)]
-            pr_url: Option<String>,
-            #[serde(default)]
-            pr_num: Option<u64>,
-        }
-        let wire = Wire::deserialize(deserializer)?;
-        let pr_revision = wire.pr_num.map(|n| format!("refs/pr/{n}"));
-        let repo_url = wire.commit_url.as_deref().and_then(|url| {
-            url.split_once("/commit/").map(|(prefix, _)| crate::repository::RepoUrl {
-                url: prefix.to_string(),
-            })
-        });
-        Ok(CommitInfo {
-            commit_url: wire.commit_url,
-            commit_message: wire.commit_message,
-            commit_description: wire.commit_description,
-            commit_oid: wire.commit_oid,
-            pr_url: wire.pr_url,
-            pr_num: wire.pr_num,
-            pr_revision,
-            repo_url,
-        })
-    }
 }
 
 /// File mutation included in [`HFRepository::create_commit`].
@@ -345,7 +288,6 @@ mod tests {
                 assert_eq!(xet_hash.as_deref(), Some("xet-deadbeef"));
                 let security = security.unwrap();
                 assert_eq!(security.status, "safe");
-                assert!(security.safe);
                 assert!(security.av_scan.is_some());
                 assert!(security.pickle_import_scan.is_none());
                 assert!(last_commit.is_some());
@@ -385,13 +327,12 @@ mod tests {
         let json = r#"{"status":"suspicious","avScan":null,"pickleImportScan":{"matches":[]}}"#;
         let info: BlobSecurityInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.status, "suspicious");
-        assert!(!info.safe);
         assert!(info.av_scan.is_none());
         assert!(info.pickle_import_scan.is_some());
     }
 
     #[test]
-    fn test_commit_info_derives_pr_revision_and_repo_url() {
+    fn test_commit_info_with_pr() {
         let json = r#"{
             "commitUrl":"https://huggingface.co/owner/repo/commit/abc123",
             "commitOid":"abc123",
@@ -399,17 +340,18 @@ mod tests {
             "prNum":7
         }"#;
         let info: CommitInfo = serde_json::from_str(json).unwrap();
-        assert_eq!(info.pr_revision.as_deref(), Some("refs/pr/7"));
-        assert_eq!(info.repo_url.as_ref().map(|r| r.url.as_str()), Some("https://huggingface.co/owner/repo"));
+        assert_eq!(info.commit_oid.as_deref(), Some("abc123"));
+        assert_eq!(info.pr_url.as_deref(), Some("https://huggingface.co/owner/repo/discussions/7"));
+        assert_eq!(info.pr_num, Some(7));
     }
 
     #[test]
     fn test_commit_info_no_pr() {
         let json = r#"{"commitUrl":"https://huggingface.co/owner/repo/commit/abc","commitOid":"abc"}"#;
         let info: CommitInfo = serde_json::from_str(json).unwrap();
-        assert!(info.pr_revision.is_none());
+        assert_eq!(info.commit_url.as_deref(), Some("https://huggingface.co/owner/repo/commit/abc"));
         assert!(info.pr_url.is_none());
-        assert_eq!(info.repo_url.as_ref().map(|r| r.url.as_str()), Some("https://huggingface.co/owner/repo"));
+        assert!(info.pr_num.is_none());
     }
 
     #[test]

@@ -989,12 +989,22 @@ impl HFRepository {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file(
         &self,
-        #[builder(into)] filename: String,
-        #[builder(into)] local_dir: Option<PathBuf>,
-        #[builder(into)] revision: Option<String>,
+        /// Path of the file to download within the repository.
+        #[builder(into)]
+        filename: String,
+        /// Local directory to download the file into. When set, the file is saved with its repo path structure.
+        #[builder(into)]
+        local_dir: Option<PathBuf>,
+        /// Git revision. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Re-download the file even if a cached copy exists.
         force_download: Option<bool>,
+        /// Only return the file if cached locally; never make a network request.
         local_files_only: Option<bool>,
-        #[builder(into)] progress: Option<Progress>,
+        /// Optional progress handler.
+        #[builder(into)]
+        progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.download_file_impl(DownloadFileParams {
             filename,
@@ -1027,10 +1037,21 @@ impl HFRepository {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file_stream(
         &self,
-        #[builder(into)] filename: String,
-        #[builder(into)] revision: Option<String>,
+        /// Path of the file to stream within the repository.
+        #[builder(into)]
+        filename: String,
+        /// Git revision. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
+        /// `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
+        /// `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
+        /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
-        #[builder(into)] progress: Option<Progress>,
+        /// Optional progress handler. `Start` is emitted before the stream is returned; `Progress` is emitted
+        /// as the caller polls each chunk; `Complete` is emitted when the stream is exhausted.
+        #[builder(into)]
+        progress: Option<Progress>,
     ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
     {
         self.download_file_stream_impl(DownloadFileStreamParams {
@@ -1061,10 +1082,21 @@ impl HFRepository {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file_to_bytes(
         &self,
-        #[builder(into)] filename: String,
-        #[builder(into)] revision: Option<String>,
+        /// Path of the file to download within the repository.
+        #[builder(into)]
+        filename: String,
+        /// Git revision. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
+        /// `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
+        /// `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
+        /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
-        #[builder(into)] progress: Option<Progress>,
+        /// Optional progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
+        /// drained, identically to [`download_file_stream`](Self::download_file_stream).
+        #[builder(into)]
+        progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
         self.download_file_to_bytes_impl(DownloadFileStreamParams {
             filename,
@@ -1100,14 +1132,26 @@ impl HFRepository {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn snapshot_download(
         &self,
-        #[builder(into)] revision: Option<String>,
+        /// Git revision. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Globs selecting which repository files to download. When set, only files whose repo path
+        /// matches at least one pattern are downloaded.
         allow_patterns: Option<Vec<String>>,
+        /// Globs of repository files to skip. Matched against the same repo paths as `allow_patterns`.
         ignore_patterns: Option<Vec<String>>,
-        #[builder(into)] local_dir: Option<PathBuf>,
+        /// Local directory to download into.
+        #[builder(into)]
+        local_dir: Option<PathBuf>,
+        /// Re-download all files even if cached.
         force_download: Option<bool>,
+        /// Resolve only from the local cache.
         local_files_only: Option<bool>,
+        /// Maximum concurrent file downloads (default 8).
         max_workers: Option<usize>,
-        #[builder(into)] progress: Option<Progress>,
+        /// Optional progress handler.
+        #[builder(into)]
+        progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.snapshot_download_impl(SnapshotDownloadParams {
             revision,
@@ -1131,12 +1175,22 @@ impl crate::blocking::HFRepositorySync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn download_file(
         &self,
-        #[builder(into)] filename: String,
-        #[builder(into)] local_dir: Option<PathBuf>,
-        #[builder(into)] revision: Option<String>,
+        /// Path of the file to download within the repository.
+        #[builder(into)]
+        filename: String,
+        /// Local directory to download the file into. When set, the file is saved with its repo path structure.
+        #[builder(into)]
+        local_dir: Option<PathBuf>,
+        /// Git revision. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Re-download the file even if a cached copy exists.
         force_download: Option<bool>,
+        /// Only return the file if cached locally; never make a network request.
         local_files_only: Option<bool>,
-        #[builder(into)] progress: Option<Progress>,
+        /// Optional progress handler.
+        #[builder(into)]
+        progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.runtime.block_on(
             self.inner
@@ -1156,10 +1210,21 @@ impl crate::blocking::HFRepositorySync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn download_file_to_bytes(
         &self,
-        #[builder(into)] filename: String,
-        #[builder(into)] revision: Option<String>,
+        /// Path of the file to download within the repository.
+        #[builder(into)]
+        filename: String,
+        /// Git revision. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
+        /// `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
+        /// `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
+        /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
-        #[builder(into)] progress: Option<Progress>,
+        /// Optional progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
+        /// drained, identically to [`download_file_stream`](Self::download_file_stream).
+        #[builder(into)]
+        progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
         self.runtime.block_on(
             self.inner
@@ -1177,14 +1242,26 @@ impl crate::blocking::HFRepositorySync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn snapshot_download(
         &self,
-        #[builder(into)] revision: Option<String>,
+        /// Git revision. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Globs selecting which repository files to download. When set, only files whose repo path
+        /// matches at least one pattern are downloaded.
         allow_patterns: Option<Vec<String>>,
+        /// Globs of repository files to skip. Matched against the same repo paths as `allow_patterns`.
         ignore_patterns: Option<Vec<String>>,
-        #[builder(into)] local_dir: Option<PathBuf>,
+        /// Local directory to download into.
+        #[builder(into)]
+        local_dir: Option<PathBuf>,
+        /// Re-download all files even if cached.
         force_download: Option<bool>,
+        /// Resolve only from the local cache.
         local_files_only: Option<bool>,
+        /// Maximum concurrent file downloads (default 8).
         max_workers: Option<usize>,
-        #[builder(into)] progress: Option<Progress>,
+        /// Optional progress handler.
+        #[builder(into)]
+        progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.runtime.block_on(
             self.inner

@@ -171,7 +171,12 @@ impl HFClient {
     ///
     /// - `username` (required): Hub handle (slug) of the user.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn get_user_overview(&self, #[builder(into)] username: String) -> HFResult<User> {
+    pub async fn get_user_overview(
+        &self,
+        /// Hub handle (slug) of the user.
+        #[builder(into)]
+        username: String,
+    ) -> HFResult<User> {
         let url = format!("{}/api/users/{}/overview", self.endpoint(), username);
         let headers = self.auth_headers();
         let response =
@@ -190,7 +195,12 @@ impl HFClient {
     ///
     /// - `organization` (required): Hub handle (slug) of the organization.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn get_organization_overview(&self, #[builder(into)] organization: String) -> HFResult<Organization> {
+    pub async fn get_organization_overview(
+        &self,
+        /// Hub handle (slug) of the organization.
+        #[builder(into)]
+        organization: String,
+    ) -> HFResult<Organization> {
         let url = format!("{}/api/organizations/{}/overview", self.endpoint(), organization);
         let headers = self.auth_headers();
         let response =
@@ -212,7 +222,10 @@ impl HFClient {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_user_followers(
         &self,
-        #[builder(into)] username: String,
+        /// Hub handle of the user.
+        #[builder(into)]
+        username: String,
+        /// Cap on the total number of items yielded.
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<User>> + '_> {
         let url = Url::parse(&format!("{}/api/users/{}/followers", self.endpoint(), username))?;
@@ -230,7 +243,10 @@ impl HFClient {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_user_following(
         &self,
-        #[builder(into)] username: String,
+        /// Hub handle of the user.
+        #[builder(into)]
+        username: String,
+        /// Cap on the total number of items yielded.
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<User>> + '_> {
         let url = Url::parse(&format!("{}/api/users/{}/following", self.endpoint(), username))?;
@@ -248,7 +264,10 @@ impl HFClient {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_organization_members(
         &self,
-        #[builder(into)] organization: String,
+        /// Hub handle of the organization.
+        #[builder(into)]
+        organization: String,
+        /// Cap on the total number of items yielded.
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<User>> + '_> {
         let url = Url::parse(&format!("{}/api/organizations/{}/members", self.endpoint(), organization))?;
@@ -273,13 +292,23 @@ impl crate::blocking::HFClientSync {
 
     /// Blocking counterpart of [`HFClient::get_user_overview`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_user_overview(&self, #[builder(into)] username: String) -> HFResult<User> {
+    pub fn get_user_overview(
+        &self,
+        /// Hub handle (slug) of the user.
+        #[builder(into)]
+        username: String,
+    ) -> HFResult<User> {
         self.runtime.block_on(self.inner.get_user_overview().username(username).send())
     }
 
     /// Blocking counterpart of [`HFClient::get_organization_overview`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_organization_overview(&self, #[builder(into)] organization: String) -> HFResult<Organization> {
+    pub fn get_organization_overview(
+        &self,
+        /// Hub handle (slug) of the organization.
+        #[builder(into)]
+        organization: String,
+    ) -> HFResult<Organization> {
         self.runtime
             .block_on(self.inner.get_organization_overview().organization(organization).send())
     }
@@ -287,7 +316,14 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::list_user_followers`]. Collects the stream into a
     /// `Vec<User>`.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn list_user_followers(&self, #[builder(into)] username: String, limit: Option<usize>) -> HFResult<Vec<User>> {
+    pub fn list_user_followers(
+        &self,
+        /// Hub handle of the user.
+        #[builder(into)]
+        username: String,
+        /// Cap on the total number of items yielded.
+        limit: Option<usize>,
+    ) -> HFResult<Vec<User>> {
         use futures::StreamExt;
         self.runtime.block_on(async move {
             let stream = self.inner.list_user_followers().username(username).maybe_limit(limit).send()?;
@@ -303,7 +339,14 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::list_user_following`]. Collects the stream into a
     /// `Vec<User>`.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn list_user_following(&self, #[builder(into)] username: String, limit: Option<usize>) -> HFResult<Vec<User>> {
+    pub fn list_user_following(
+        &self,
+        /// Hub handle of the user.
+        #[builder(into)]
+        username: String,
+        /// Cap on the total number of items yielded.
+        limit: Option<usize>,
+    ) -> HFResult<Vec<User>> {
         use futures::StreamExt;
         self.runtime.block_on(async move {
             let stream = self.inner.list_user_following().username(username).maybe_limit(limit).send()?;
@@ -321,7 +364,10 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_organization_members(
         &self,
-        #[builder(into)] organization: String,
+        /// Hub handle of the organization.
+        #[builder(into)]
+        organization: String,
+        /// Cap on the total number of items yielded.
         limit: Option<usize>,
     ) -> HFResult<Vec<User>> {
         use futures::StreamExt;
