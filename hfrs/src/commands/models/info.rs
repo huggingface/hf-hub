@@ -24,13 +24,7 @@ pub struct Args {
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let (owner, name) = crate::util::split_repo_id(&args.model_id);
     let repo = client.model(owner, name);
-    let info = repo
-        .info()
-        .maybe_revision(args.revision)
-        .send()
-        .await?
-        .into_model()
-        .map_err(|_| anyhow::anyhow!("Expected model info"))?;
+    let info = repo.info().maybe_revision(args.revision).send().await?.into_model_info()?;
     let json_value = json!({
         "id": info.id,
         "author": info.author,

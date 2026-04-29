@@ -14,24 +14,20 @@ fn main() -> hf_hub::HFResult<()> {
     let model = client.model("openai-community", "gpt2");
     println!("Model handle: owner={}, name={}", model.owner(), model.name());
 
-    let info = model.info().send()?.into_model().expect("model handle returns model info");
+    let info = model.info().send()?.into_model_info()?;
     println!("Model info: {} (sha: {:?})", info.id, info.sha);
 
     let config_exists = model.file_exists().filename("config.json").send()?;
     println!("config.json exists on {}: {config_exists}", model.repo_path());
 
     let dataset = client.repo(RepoType::Dataset, "rajpurkar", "squad");
-    let info = dataset
-        .info()
-        .send()?
-        .into_dataset()
-        .expect("dataset handle returns dataset info");
+    let info = dataset.info().send()?.into_dataset_info()?;
     println!("Dataset info: {}", info.id);
 
     let generic_space = client.repo(RepoType::Space, "huggingface", "transformers-benchmarks");
     let space = HFSpaceSync::try_from(generic_space)?;
 
-    let info = space.info().send()?.into_space().expect("space handle returns space info");
+    let info = space.info().send()?.into_space_info()?;
     println!("Space info: {} (sdk: {:?})", info.id, info.sdk);
 
     let direct_space = client.space("huggingface", "transformers-benchmarks");

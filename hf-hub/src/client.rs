@@ -1,4 +1,3 @@
-use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,8 +37,8 @@ impl Clone for HFClient {
     }
 }
 
-impl fmt::Debug for HFClient {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for HFClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("HFClient");
         s.field("endpoint", &self.inner.endpoint);
         s.field("token_set", &self.inner.token.is_some());

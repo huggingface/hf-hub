@@ -9,13 +9,12 @@
 //!
 //! - Use [`HFBucket::info`], [`HFBucket::list_tree`], and [`HFBucket::get_paths_info`] to inspect bucket contents.
 //! - Use [`HFBucket::upload_files`] and [`HFBucket::download_files`] for common transfer workflows.
-//! - Use [`HFBucket::batch`] when you already have xet hashes and want direct control over add, delete, or copy
-//!   operations.
+//! - Use [`HFBucket::batch_operations`] when you already have xet hashes and want direct control over add, delete, or
+//!   copy operations.
 //! - Use [`sync`] for one-way directory mirroring between a local folder and a bucket prefix.
 
 pub mod sync;
 
-use std::fmt;
 use std::path::PathBuf;
 
 use bon::bon;
@@ -67,8 +66,8 @@ pub struct HFBucket {
     pub(super) name: String,
 }
 
-impl fmt::Debug for HFBucket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for HFBucket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFBucket")
             .field("owner", &self.owner)
             .field("name", &self.name)
@@ -281,7 +280,7 @@ impl HFBucket {
     ///
     /// # Parameters
     ///
-    /// - `add`: files to register in the bucket. Each [`BucketAddFile`] requires:
+    /// - `add_files`: files to register in the bucket. Each [`BucketAddFile`] requires:
     ///   - `path` (`String`): bucket-relative destination path.
     ///   - `xet_hash` (`String`): xet content hash from a prior xet upload — the bytes must already be in xet storage;
     ///     this call only registers metadata.
@@ -297,12 +296,11 @@ impl HFBucket {
     ///     `Dataset`, or `Space`. Serializes to the lowercase wire string the Hub expects.
     ///   - `source_repo_id` (`String`): full source identifier in `"namespace/name"` form (e.g. `"user/my-bucket"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    #[allow(clippy::should_implement_trait)]
-    pub async fn batch(
+    pub async fn batch_operations(
         &self,
         /// Files to register in the bucket.
         #[builder(default)]
-        add: Vec<BucketAddFile>,
+        add_files: Vec<BucketAddFile>,
         /// Bucket-relative paths to remove from the bucket.
         #[builder(default)]
         delete: Vec<String>,
@@ -315,7 +313,7 @@ impl HFBucket {
 
         let mut lines: Vec<String> = Vec::new();
 
-        for add in &add {
+        for add in &add_files {
             let mut obj = serde_json::json!({
                 "type": "addFile",
                 "path": add.path,
@@ -384,7 +382,7 @@ impl HFBucket {
 
     /// Delete files from this bucket by path.
     ///
-    /// Convenience wrapper around [`HFBucket::batch`] that sends only `deleteFile` operations.
+    /// Convenience wrapper around [`HFBucket::batch_operations`] that sends only `deleteFile` operations.
     ///
     /// # Parameters
     ///
@@ -395,7 +393,7 @@ impl HFBucket {
         /// Paths to delete from the bucket.
         paths: Vec<String>,
     ) -> HFResult<()> {
-        self.batch().delete(paths).send().await
+        self.batch_operations().delete(paths).send().await
     }
 
     /// Upload local files to the bucket.
@@ -460,7 +458,7 @@ impl HFBucket {
             })
             .collect();
 
-        self.batch().add(add_files).send().await?;
+        self.batch_operations().add_files(add_files).send().await?;
 
         progress.emit(UploadEvent::Complete);
         Ok(())
@@ -547,7 +545,7 @@ impl HFBucket {
 ///
 /// Represents an `addFile` entry in the NDJSON batch payload.
 /// The file content must have already been uploaded to xet to obtain the `xet_hash`.
-/// Used as input to [`HFBucket::batch`].
+/// Used as input to [`HFBucket::batch_operations`].
 #[derive(Debug, Clone)]
 pub struct BucketAddFile {
     /// Destination path in the bucket.
@@ -595,7 +593,7 @@ impl BucketCopySourceType {
 ///
 /// Represents a `copyFile` entry in the NDJSON batch payload.
 /// Copies are performed by xet hash — no data transfer occurs.
-/// Used as input to [`HFBucket::batch`].
+/// Used as input to [`HFBucket::batch_operations`].
 #[derive(Debug, Clone)]
 pub struct BucketCopyFile {
     /// Destination path in the bucket.
@@ -1043,15 +1041,14 @@ impl crate::blocking::HFBucketSync {
             .block_on(self.inner.get_file_metadata().remote_path(remote_path).send())
     }
 
-    /// Blocking counterpart of [`HFBucket::batch`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFBucket::batch_operations`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    #[allow(clippy::should_implement_trait)]
-    pub fn batch(
+    pub fn batch_operations(
         &self,
         /// Files to register in the bucket.
         #[builder(default)]
-        add: Vec<BucketAddFile>,
+        add_files: Vec<BucketAddFile>,
         /// Bucket-relative paths to remove from the bucket.
         #[builder(default)]
         delete: Vec<String>,
@@ -1059,8 +1056,14 @@ impl crate::blocking::HFBucketSync {
         #[builder(default)]
         copy: Vec<BucketCopyFile>,
     ) -> HFResult<()> {
-        self.runtime
-            .block_on(self.inner.batch().add(add).delete(delete).copy(copy).send())
+        self.runtime.block_on(
+            self.inner
+                .batch_operations()
+                .add_files(add_files)
+                .delete(delete)
+                .copy(copy)
+                .send(),
+        )
     }
 
     /// Blocking counterpart of [`HFBucket::delete_files`].

@@ -1,4 +1,3 @@
-use std::fmt;
 use std::sync::Arc;
 
 use crate::client::HFClient;
@@ -81,20 +80,20 @@ pub struct HFBucketSync {
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
 }
 
-impl fmt::Debug for HFClientSync {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for HFClientSync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFClientSync").finish()
     }
 }
 
-impl fmt::Debug for HFRepositorySync {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for HFRepositorySync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFRepositorySync").field("inner", &self.inner).finish()
     }
 }
 
-impl fmt::Debug for HFSpaceSync {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for HFSpaceSync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFSpaceSync")
             .field("inner", &self.inner)
             .field("repo_sync", &self.repo_sync)
@@ -102,8 +101,8 @@ impl fmt::Debug for HFSpaceSync {
     }
 }
 
-impl fmt::Debug for HFBucketSync {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for HFBucketSync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFBucketSync").field("inner", &self.inner).finish()
     }
 }

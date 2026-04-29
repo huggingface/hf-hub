@@ -25,7 +25,6 @@ pub mod listing;
 pub mod upload;
 
 use std::collections::HashMap;
-use std::fmt;
 use std::str::FromStr;
 
 use bon::bon;
@@ -567,8 +566,8 @@ pub struct HFRepository {
     pub(crate) repo_type: RepoType,
 }
 
-impl fmt::Display for RepoType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for RepoType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RepoType::Model => write!(f, "model"),
             RepoType::Dataset => write!(f, "dataset"),
@@ -651,13 +650,12 @@ impl RepoInfo {
     ///
     /// Useful when the caller already knows the repo type at compile time —
     /// e.g. after `client.model(...)` — and wants to avoid a `match` on
-    /// [`RepoInfo`]. On a mismatch the original `RepoInfo` is returned in the
-    /// `Err`, so no information is lost.
-    #[allow(clippy::result_large_err)]
-    pub fn into_model(self) -> Result<ModelInfo, RepoInfo> {
+    /// [`RepoInfo`]. On a mismatch returns [`HFError::Other`] naming the
+    /// variant that was found instead.
+    pub fn into_model_info(self) -> HFResult<ModelInfo> {
         match self {
             RepoInfo::Model(info) => Ok(info),
-            other => Err(other),
+            other => Err(HFError::Other(format!("expected RepoInfo::Model, got RepoInfo::{:?}", other.repo_type()))),
         }
     }
 
@@ -665,13 +663,12 @@ impl RepoInfo {
     ///
     /// Useful when the caller already knows the repo type at compile time —
     /// e.g. after `client.dataset(...)` — and wants to avoid a `match` on
-    /// [`RepoInfo`]. On a mismatch the original `RepoInfo` is returned in the
-    /// `Err`, so no information is lost.
-    #[allow(clippy::result_large_err)]
-    pub fn into_dataset(self) -> Result<DatasetInfo, RepoInfo> {
+    /// [`RepoInfo`]. On a mismatch returns [`HFError::Other`] naming the
+    /// variant that was found instead.
+    pub fn into_dataset_info(self) -> HFResult<DatasetInfo> {
         match self {
             RepoInfo::Dataset(info) => Ok(info),
-            other => Err(other),
+            other => Err(HFError::Other(format!("expected RepoInfo::Dataset, got RepoInfo::{:?}", other.repo_type()))),
         }
     }
 
@@ -679,13 +676,12 @@ impl RepoInfo {
     ///
     /// Useful when the caller already knows the repo type at compile time —
     /// e.g. after `client.space(...)` — and wants to avoid a `match` on
-    /// [`RepoInfo`]. On a mismatch the original `RepoInfo` is returned in the
-    /// `Err`, so no information is lost.
-    #[allow(clippy::result_large_err)]
-    pub fn into_space(self) -> Result<SpaceInfo, RepoInfo> {
+    /// [`RepoInfo`]. On a mismatch returns [`HFError::Other`] naming the
+    /// variant that was found instead.
+    pub fn into_space_info(self) -> HFResult<SpaceInfo> {
         match self {
             RepoInfo::Space(info) => Ok(info),
-            other => Err(other),
+            other => Err(HFError::Other(format!("expected RepoInfo::Space, got RepoInfo::{:?}", other.repo_type()))),
         }
     }
 
@@ -693,19 +689,18 @@ impl RepoInfo {
     ///
     /// Useful when the caller already knows the repo type at compile time —
     /// e.g. after `client.repo(RepoType::Kernel, ...)` — and wants to avoid a
-    /// `match` on [`RepoInfo`]. On a mismatch the original `RepoInfo` is
-    /// returned in the `Err`, so no information is lost.
-    #[allow(clippy::result_large_err)]
-    pub fn into_kernel(self) -> Result<KernelInfo, RepoInfo> {
+    /// `match` on [`RepoInfo`]. On a mismatch returns [`HFError::Other`]
+    /// naming the variant that was found instead.
+    pub fn into_kernel_info(self) -> HFResult<KernelInfo> {
         match self {
             RepoInfo::Kernel(info) => Ok(info),
-            other => Err(other),
+            other => Err(HFError::Other(format!("expected RepoInfo::Kernel, got RepoInfo::{:?}", other.repo_type()))),
         }
     }
 }
 
-impl fmt::Debug for HFRepository {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for HFRepository {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFRepository")
             .field("owner", &self.owner)
             .field("name", &self.name)

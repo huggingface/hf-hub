@@ -11,7 +11,6 @@
 //! Response structs such as [`SpaceRuntime`] and [`SpaceVariable`] live in this module; bon-generated
 //! `*Builder` types for each Space API appear here for rustdoc.
 
-use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -137,8 +136,8 @@ pub struct HFSpace {
     pub(crate) repo: Arc<HFRepository>,
 }
 
-impl fmt::Debug for HFSpace {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Debug for HFSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFSpace").field("repo", &self.repo).finish()
     }
 }

@@ -24,13 +24,7 @@ pub struct Args {
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let (owner, name) = crate::util::split_repo_id(&args.space_id);
     let repo = client.space(owner, name);
-    let info = repo
-        .info()
-        .maybe_revision(args.revision)
-        .send()
-        .await?
-        .into_space()
-        .map_err(|_| anyhow::anyhow!("Expected space info"))?;
+    let info = repo.info().maybe_revision(args.revision).send().await?.into_space_info()?;
     let json_value = json!({
         "id": info.id,
         "author": info.author,

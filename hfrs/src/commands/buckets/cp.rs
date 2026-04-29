@@ -191,7 +191,7 @@ async fn server_side_copy(client: &HFClient, src: &str, dst: &str, quiet: bool) 
     let metadata = src_bucket.get_file_metadata().remote_path(&src.path).send().await?;
     let dst_bucket = client.bucket(&dst.namespace, &dst.bucket_name);
     dst_bucket
-        .batch()
+        .batch_operations()
         .copy(vec![hf_hub::buckets::BucketCopyFile {
             path: dst.path.clone(),
             xet_hash: metadata.xet_hash,

@@ -18,17 +18,13 @@ fn main() -> hf_hub::HFResult<()> {
     let dataset = client.dataset("rajpurkar", "squad");
     let space = client.space("huggingface", "transformers-benchmarks");
 
-    let info = model.info().send()?.into_model().expect("model handle returns model info");
+    let info = model.info().send()?.into_model_info()?;
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
-    let info = dataset
-        .info()
-        .send()?
-        .into_dataset()
-        .expect("dataset handle returns dataset info");
+    let info = dataset.info().send()?.into_dataset_info()?;
     println!("Dataset: {} (downloads: {:?})", info.id, info.downloads);
 
-    let info = space.info().send()?.into_space().expect("space handle returns space info");
+    let info = space.info().send()?.into_space_info()?;
     println!("Space: {} (sdk: {:?})", info.id, info.sdk);
 
     let exists = model.exists().send()?;
