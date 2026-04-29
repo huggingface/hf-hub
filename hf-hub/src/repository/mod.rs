@@ -168,6 +168,12 @@ pub struct InferenceProviderMapping {
     pub r#type: Option<String>,
 }
 
+// The Hub returns `inferenceProviderMapping` as an object keyed by provider name on
+// `GET /api/models/{id}` and as an array on `GET /api/models`. See:
+//   https://huggingface.co/docs/inference-providers/hub-api
+//   https://huggingface.co/docs/inference-providers/register-as-a-provider
+// The Python `huggingface_hub` library handles both shapes the same way and notes:
+// "a dict on model_info and a list on list_models. Let's harmonize to list."
 fn deserialize_inference_provider_mapping<'de, D>(
     deserializer: D,
 ) -> Result<Option<Vec<InferenceProviderMapping>>, D::Error>
