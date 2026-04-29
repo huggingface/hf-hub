@@ -111,7 +111,7 @@ pub struct DiffEntry {
 }
 
 #[bon]
-impl HFRepository {
+impl<K: 'static> HFRepository<K> {
     /// Stream commit history for the repository at a given revision.
     ///
     /// Returns `HFResult<impl Stream<Item = HFResult<GitCommitInfo>>>`. Pagination is automatic.
@@ -461,7 +461,7 @@ impl HFRepository {
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
+impl<K: 'static> crate::blocking::HFRepositorySync<K> {
     /// Blocking counterpart of [`HFRepository::list_commits`]. Collects the stream into a
     /// `Vec<GitCommitInfo>`.
     #[builder(finish_fn = send, derive(Debug, Clone))]

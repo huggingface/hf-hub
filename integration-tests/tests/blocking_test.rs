@@ -49,18 +49,20 @@ const TEST_USER: &str = "julien-c";
 const TEST_MODEL_AUTHOR: &str = "openai-community";
 const TEST_MODEL_REPO: &str = "hf-internal-testing/tiny-gemma3";
 const TEST_DATASET_REPO: &str = "hf-internal-testing/cats_vs_dogs_sample";
+const TEST_MODEL_PARTS: (&str, &str) = ("hf-internal-testing", "tiny-gemma3");
+const TEST_DATASET_PARTS: (&str, &str) = ("hf-internal-testing", "cats_vs_dogs_sample");
 
 /// Split a `"owner/name"` string into an `HFRepositorySync` handle.
 fn repo_handle(client: &HFClientSync, repo_id: &str) -> hf_hub::HFRepositorySync {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
     if parts.len() == 2 {
-        client.model(parts[0], parts[1])
+        client.repo(RepoType::Model, parts[0], parts[1])
     } else {
-        client.model("", repo_id)
+        client.repo(RepoType::Model, "", repo_id)
     }
 }
 
-fn collect_file_paths(test_repo: &hf_hub::HFRepositorySync) -> std::collections::HashSet<String> {
+fn collect_file_paths<K: 'static>(test_repo: &hf_hub::HFRepositorySync<K>) -> std::collections::HashSet<String> {
     test_repo
         .list_tree()
         .recursive(true)
@@ -74,39 +76,24 @@ fn collect_file_paths(test_repo: &hf_hub::HFRepositorySync) -> std::collections:
         .collect()
 }
 
-fn dataset_handle(client: &HFClientSync, repo_id: &str) -> hf_hub::HFRepositorySync {
-    let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    if parts.len() == 2 {
-        client.dataset(parts[0], parts[1])
-    } else {
-        client.dataset("", repo_id)
-    }
-}
-
 // --- Repo info ---
 
 #[test]
 fn test_sync_model_info() {
     let Some(client) = prod_sync_api() else { return };
-    let model_repo = TEST_MODEL_REPO;
-    let repo = repo_handle(&client, model_repo);
-    let info = repo.info().send().unwrap();
-    match info {
-        RepoInfo::Model(model) => assert!(model.id.contains("tiny-gemma3")),
-        _ => panic!("expected model info"),
-    }
+    let info = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1).info().send().unwrap();
+    assert!(info.id.contains("tiny-gemma3"));
 }
 
 #[test]
 fn test_sync_dataset_info() {
     let Some(client) = prod_sync_api() else { return };
-    let dataset_repo = TEST_DATASET_REPO;
-    let repo = dataset_handle(&client, dataset_repo);
-    let info = repo.info().send().unwrap();
-    match info {
-        RepoInfo::Dataset(ds) => assert_eq!(ds.id, dataset_repo),
-        _ => panic!("expected dataset info"),
-    }
+    let info = client
+        .dataset(TEST_DATASET_PARTS.0, TEST_DATASET_PARTS.1)
+        .info()
+        .send()
+        .unwrap();
+    assert_eq!(info.id, TEST_DATASET_REPO);
 }
 
 #[test]

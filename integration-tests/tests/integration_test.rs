@@ -60,6 +60,8 @@ const TEST_MODEL_REPO: &str = "hf-internal-testing/tiny-gemma3";
 const TEST_SPACE_REPO: (&str, &str) = ("huggingface-projects", "diffusers-gallery");
 const TEST_SPACE_INFO_REPO: &str = "HuggingFaceFW/blogpost-fineweb-v1";
 const TEST_DATASET_REPO: &str = "hf-internal-testing/cats_vs_dogs_sample";
+const TEST_MODEL_PARTS: (&str, &str) = ("hf-internal-testing", "tiny-gemma3");
+const TEST_DATASET_PARTS: (&str, &str) = ("hf-internal-testing", "cats_vs_dogs_sample");
 
 /// Cached whoami username, fetched once and reused across write tests.
 async fn cached_username() -> &'static str {
@@ -76,13 +78,13 @@ async fn cached_username() -> &'static str {
 fn repo(client: &HFClient, repo_id: &str) -> HFRepository {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
     if parts.len() == 2 {
-        client.model(parts[0], parts[1])
+        client.repo(RepoType::Model, parts[0], parts[1])
     } else {
-        client.model("", repo_id)
+        client.repo(RepoType::Model, "", repo_id)
     }
 }
 
-async fn collect_file_paths(test_repo: &HFRepository) -> std::collections::HashSet<String> {
+async fn collect_file_paths<K: 'static>(test_repo: &HFRepository<K>) -> std::collections::HashSet<String> {
     let stream = test_repo.list_tree().recursive(true).send().unwrap();
     futures::pin_mut!(stream);
     let mut files = std::collections::HashSet::new();
@@ -108,12 +110,13 @@ fn repo_typed(client: &HFClient, repo_id: &str, repo_type: RepoType) -> HFReposi
 #[tokio::test]
 async fn test_model_info() {
     let Some(client) = prod_api() else { return };
-    let model_repo = TEST_MODEL_REPO;
-    let info = repo(&client, model_repo).info().send().await.unwrap();
-    match info {
-        RepoInfo::Model(model) => assert!(model.id.contains("tiny-gemma3")),
-        _ => panic!("expected model info"),
-    }
+    let info = client
+        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
+        .info()
+        .send()
+        .await
+        .unwrap();
+    assert!(info.id.contains("tiny-gemma3"));
 }
 
 #[tokio::test]
@@ -135,16 +138,13 @@ async fn test_repo_handle_info_and_file_exists() {
 #[tokio::test]
 async fn test_dataset_info() {
     let Some(client) = prod_api() else { return };
-    let dataset_repo = TEST_DATASET_REPO;
-    let info = repo_typed(&client, dataset_repo, RepoType::Dataset)
+    let info = client
+        .dataset(TEST_DATASET_PARTS.0, TEST_DATASET_PARTS.1)
         .info()
         .send()
         .await
         .unwrap();
-    match info {
-        RepoInfo::Dataset(ds) => assert_eq!(ds.id, dataset_repo),
-        _ => panic!("expected dataset info"),
-    }
+    assert_eq!(info.id, TEST_DATASET_REPO);
 }
 
 #[tokio::test]

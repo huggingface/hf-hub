@@ -56,7 +56,7 @@ struct SnapshotDownloadParams {
     progress: Option<Progress>,
 }
 
-impl HFRepository {
+impl<K: 'static> HFRepository<K> {
     async fn download_file_impl(&self, params: DownloadFileParams) -> HFResult<PathBuf> {
         let result = self.download_file_inner(&params).await;
         if result.is_ok() {
@@ -874,8 +874,8 @@ fn build_download_params(
         .collect()
 }
 
-async fn download_concurrently(
-    api: &HFRepository,
+async fn download_concurrently<K: 'static>(
+    api: &HFRepository<K>,
     params: &[DownloadFileParams],
     max_workers: usize,
 ) -> HFResult<Vec<PathBuf>> {
@@ -968,7 +968,7 @@ fn wrap_stream_with_progress(
 }
 
 #[bon]
-impl HFRepository {
+impl<K: 'static> HFRepository<K> {
     /// Download a single file from a repository.
     ///
     /// When `local_dir` is `Some`, the file is downloaded directly to that directory
@@ -1178,7 +1178,7 @@ impl HFRepository {
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
+impl<K: 'static> crate::blocking::HFRepositorySync<K> {
     /// Blocking counterpart of [`HFRepository::download_file`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]

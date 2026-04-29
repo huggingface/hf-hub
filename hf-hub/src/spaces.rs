@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
-use crate::repository::{HFRepository, RepoType, RepoUrl};
+use crate::repository::{HFRepository, RepoType, RepoUrl, SpaceRepo};
 use crate::retry;
 
 /// Runtime state of a Space: stage, hardware, storage, and mounted volumes.
@@ -133,7 +133,7 @@ pub struct SpaceVariable {
 /// ```
 #[derive(Clone)]
 pub struct HFSpace {
-    pub(crate) repo: Arc<HFRepository>,
+    pub(crate) repo: Arc<HFRepository<SpaceRepo>>,
 }
 
 impl std::fmt::Debug for HFSpace {
@@ -153,7 +153,7 @@ impl HFSpace {
     /// Construct a new Space handle. Prefer [`HFClient::space`] in most cases.
     pub fn new(client: HFClient, owner: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            repo: Arc::new(HFRepository::new(client, RepoType::Space, owner, name)),
+            repo: Arc::new(HFRepository::new_space(client, owner, name)),
         }
     }
 
@@ -161,7 +161,7 @@ impl HFSpace {
     ///
     /// `HFSpace` already derefs to `HFRepository`, so this is mainly useful when you need an
     /// explicit reference (e.g. to clone or to disambiguate trait resolution).
-    pub fn repo(&self) -> &HFRepository {
+    pub fn repo(&self) -> &HFRepository<SpaceRepo> {
         &self.repo
     }
 }
@@ -572,18 +572,24 @@ impl TryFrom<HFRepository> for HFSpace {
                 actual: repo.repo_type(),
             });
         }
-        Ok(Self { repo: Arc::new(repo) })
+        Ok(Self {
+            repo: Arc::new(HFRepository::new_space(
+                repo.client().clone(),
+                repo.owner().to_string(),
+                repo.name().to_string(),
+            )),
+        })
     }
 }
 
-impl From<HFSpace> for Arc<HFRepository> {
+impl From<HFSpace> for Arc<HFRepository<SpaceRepo>> {
     fn from(space: HFSpace) -> Self {
         space.repo.clone()
     }
 }
 
 impl Deref for HFSpace {
-    type Target = HFRepository;
+    type Target = HFRepository<SpaceRepo>;
 
     fn deref(&self) -> &Self::Target {
         &self.repo
@@ -765,13 +771,15 @@ impl crate::blocking::HFSpaceSync {
 #[cfg(test)]
 mod tests {
     use super::{HFSpace, SpaceRuntime, SpaceVariable};
-    use crate::repository::{HFRepository, RepoType};
+    use crate::repository::{DatasetRepo, HFRepository, ModelRepo, RepoType, SpaceRepo};
 
     #[test]
     fn test_hfspace_constructor_and_deref() {
         let client = crate::HFClient::builder().build().unwrap();
         let space = HFSpace::new(client, "huggingface-projects", "diffusers-gallery");
+        fn assert_space_repo(_: &HFRepository<SpaceRepo>) {}
 
+        assert_space_repo(space.repo());
         assert_eq!(space.repo_type(), RepoType::Space);
         assert_eq!(space.repo_path(), "huggingface-projects/diffusers-gallery");
     }
@@ -791,6 +799,17 @@ mod tests {
             },
             _ => panic!("expected invalid repo type error"),
         }
+    }
+
+    #[test]
+    fn test_typed_repo_constructors() {
+        let client = crate::HFClient::builder().build().unwrap();
+
+        fn assert_model_repo(_: &HFRepository<ModelRepo>) {}
+        fn assert_dataset_repo(_: &HFRepository<DatasetRepo>) {}
+
+        assert_model_repo(&client.model("owner", "model"));
+        assert_dataset_repo(&client.dataset("owner", "dataset"));
     }
 
     #[test]

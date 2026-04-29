@@ -350,7 +350,7 @@ async fn xet_upload_inner(
     Ok(xet_file_infos)
 }
 
-impl HFRepository {
+impl<K: 'static> HFRepository<K> {
     pub(crate) async fn xet_download_to_local_dir(
         &self,
         revision: &str,
@@ -587,7 +587,7 @@ impl HFRepository {
         file_hash: &str,
         file_size: u64,
         range: Option<std::ops::Range<u64>>,
-    ) -> HFResult<impl futures::Stream<Item = HFResult<bytes::Bytes>> + use<>> {
+    ) -> HFResult<impl futures::Stream<Item = HFResult<bytes::Bytes>> + use<K>> {
         let repo_path = self.repo_path();
         let repo_type = Some(self.repo_type);
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, repo_type, revision);

@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use hf_hub::repository::AddSource;
-use hf_hub::{HFClient, HFClientBuilder, HFRepository};
+use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoType};
 use integration_tests::test_utils::*;
 use rand::RngExt;
 use tokio::sync::OnceCell;
@@ -68,7 +68,7 @@ fn unique_suffix() -> String {
 
 /// Split an `"owner/name"` repo_id into an [`HFRepository`] handle.
 fn repo_handle(client: &HFClient, owner: &str, name: &str) -> HFRepository {
-    client.model(owner, name)
+    client.repo(RepoType::Model, owner, name)
 }
 
 async fn create_test_repo(client: &HFClient, suffix: &str) -> (String, String) {

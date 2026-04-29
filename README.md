@@ -50,21 +50,13 @@ This builds in release mode by default. Once installed, run `hfrs --help` to see
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::repository::RepoInfo;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
 
     // Get model info
-    let RepoInfo::Model(info) = client
-        .model("openai-community", "gpt2")
-        .info()
-        .send()
-        .await?
-    else {
-        unreachable!("handle type guarantees the Model variant");
-    };
+    let info = client.model("openai-community", "gpt2").info().send().await?;
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
     Ok(())
@@ -77,18 +69,11 @@ Requires the `blocking` feature. `HFClientSync` manages a dedicated tokio runtim
 
 ```rust,ignore
 use hf_hub::HFClientSync;
-use hf_hub::repository::RepoInfo;
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
 
-    let RepoInfo::Model(info) = client
-        .model("openai-community", "gpt2")
-        .info()
-        .send()?
-    else {
-        unreachable!("handle type guarantees the Model variant");
-    };
+    let info = client.model("openai-community", "gpt2").info().send()?;
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
     Ok(())
@@ -129,17 +114,13 @@ async fn main() -> hf_hub::HFResult<()> {
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::repository::RepoInfo;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
     let repo = client.model("openai-community", "gpt2");
 
-    let RepoInfo::Model(model_info) = repo.info().send().await? else {
-        println!("error, not a model");
-        return Ok(());
-    };
+    let model_info = repo.info().send().await?;
     println!("Model: {}", model_info.id);
 
     let exists = repo

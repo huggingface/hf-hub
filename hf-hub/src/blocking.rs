@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
-use crate::repository::{HFRepository, RepoType};
+use crate::repository::{DatasetRepo, DynamicRepo, HFRepository, ModelRepo, RepoType, SpaceRepo};
 use crate::spaces::HFSpace;
 
 fn build_runtime() -> HFResult<Arc<tokio::runtime::Runtime>> {
@@ -41,8 +41,8 @@ pub struct HFClientSync {
 /// See [`HFRepository`] for method semantics.
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 #[derive(Clone)]
-pub struct HFRepositorySync {
-    pub(crate) inner: Arc<HFRepository>,
+pub struct HFRepositorySync<K = DynamicRepo> {
+    pub(crate) inner: Arc<HFRepository<K>>,
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
 }
 
@@ -55,12 +55,12 @@ pub struct HFRepositorySync {
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 #[derive(Clone)]
 pub struct HFSpaceSync {
-    pub(crate) repo_sync: Arc<HFRepositorySync>,
+    pub(crate) repo_sync: Arc<HFRepositorySync<SpaceRepo>>,
     pub(crate) inner: Arc<HFSpace>,
 }
 
 impl std::ops::Deref for HFSpaceSync {
-    type Target = HFRepositorySync;
+    type Target = HFRepositorySync<SpaceRepo>;
 
     fn deref(&self) -> &Self::Target {
         &self.repo_sync
@@ -86,7 +86,7 @@ impl std::fmt::Debug for HFClientSync {
     }
 }
 
-impl std::fmt::Debug for HFRepositorySync {
+impl<K> std::fmt::Debug for HFRepositorySync<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFRepositorySync").field("inner", &self.inner).finish()
     }
@@ -144,15 +144,15 @@ impl HFClientSync {
     /// Creates a blocking handle for a model repository.
     ///
     /// See [`HFClient::model`].
-    pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync {
-        self.repo(RepoType::Model, owner, name)
+    pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync<ModelRepo> {
+        HFRepositorySync::from_repo(self.clone(), HFRepository::new_model(self.inner.clone(), owner, name))
     }
 
     /// Creates a blocking handle for a dataset repository.
     ///
     /// See [`HFClient::dataset`].
-    pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync {
-        self.repo(RepoType::Dataset, owner, name)
+    pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync<DatasetRepo> {
+        HFRepositorySync::from_repo(self.clone(), HFRepository::new_dataset(self.inner.clone(), owner, name))
     }
 
     /// Creates a blocking handle for a Space repository.
@@ -170,13 +170,20 @@ impl HFClientSync {
     }
 }
 
-impl HFRepositorySync {
+impl HFRepositorySync<DynamicRepo> {
     /// Creates a blocking repository handle.
     ///
     /// See [`HFRepository::new`].
     pub fn new(client: HFClientSync, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> Self {
+        let repo = HFRepository::new(client.inner.clone(), repo_type, owner, name);
+        Self::from_repo(client, repo)
+    }
+}
+
+impl<K> HFRepositorySync<K> {
+    pub(crate) fn from_repo(client: HFClientSync, repo: HFRepository<K>) -> Self {
         Self {
-            inner: Arc::new(HFRepository::new(client.inner.clone(), repo_type, owner, name)),
+            inner: Arc::new(repo),
             runtime: client.runtime.clone(),
         }
     }
@@ -209,7 +216,10 @@ impl HFSpaceSync {
     ///
     /// See [`HFSpace::new`].
     pub fn new(client: HFClientSync, owner: impl Into<String>, name: impl Into<String>) -> Self {
-        let repo_sync = Arc::new(HFRepositorySync::new(client, RepoType::Space, owner, name));
+        let repo_sync = Arc::new(HFRepositorySync::from_repo(
+            client.clone(),
+            HFRepository::new_space(client.inner.clone(), owner, name),
+        ));
         let inner = Arc::new(HFSpace {
             repo: repo_sync.inner.clone(),
         });
@@ -219,7 +229,7 @@ impl HFSpaceSync {
     /// Returns the underlying blocking repository handle.
     ///
     /// See [`HFSpace::repo`].
-    pub fn repo(&self) -> &HFRepositorySync {
+    pub fn repo(&self) -> &HFRepositorySync<SpaceRepo> {
         &self.repo_sync
     }
 }
@@ -246,17 +256,28 @@ impl TryFrom<HFRepositorySync> for HFSpaceSync {
                 actual: repo.inner.repo_type(),
             });
         }
+        let typed_repo_sync = HFRepositorySync::from_repo(
+            HFClientSync {
+                inner: repo.inner.client().clone(),
+                runtime: repo.runtime.clone(),
+            },
+            HFRepository::new_space(
+                repo.inner.client().clone(),
+                repo.inner.owner().to_string(),
+                repo.inner.name().to_string(),
+            ),
+        );
         let inner = Arc::new(HFSpace {
-            repo: repo.inner.clone(),
+            repo: typed_repo_sync.inner.clone(),
         });
         Ok(Self {
-            repo_sync: Arc::new(repo),
+            repo_sync: Arc::new(typed_repo_sync),
             inner,
         })
     }
 }
 
-impl From<HFSpaceSync> for Arc<HFRepositorySync> {
+impl From<HFSpaceSync> for Arc<HFRepositorySync<SpaceRepo>> {
     fn from(space: HFSpaceSync) -> Self {
         space.repo_sync
     }

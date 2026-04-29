@@ -81,7 +81,7 @@ struct DeleteFolderParams {
     create_pr: bool,
 }
 
-impl HFRepository {
+impl<K: 'static> HFRepository<K> {
     async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = format!("{}/commit/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
@@ -679,7 +679,7 @@ fn collect_files_recursive(
 }
 
 #[bon]
-impl HFRepository {
+impl<K: 'static> HFRepository<K> {
     /// Create a commit with multiple operations.
     ///
     /// This is the lowest-level public mutation API in the files module. Use it when you need an
@@ -936,7 +936,7 @@ impl HFRepository {
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
+impl<K: 'static> crate::blocking::HFRepositorySync<K> {
     /// Blocking counterpart of [`HFRepository::create_commit`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]

@@ -25,6 +25,9 @@ pub mod listing;
 pub mod upload;
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::marker::PhantomData;
+use std::pin::Pin;
 use std::str::FromStr;
 
 use bon::bon;
@@ -56,6 +59,99 @@ pub enum RepoType {
     Space,
     /// A kernel repository.
     Kernel,
+}
+
+/// Typestate marker for a runtime-selected repository handle returned by [`HFClient::repo`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DynamicRepo;
+
+/// Typestate marker for model repository handles returned by [`HFClient::model`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ModelRepo;
+
+/// Typestate marker for dataset repository handles returned by [`HFClient::dataset`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DatasetRepo;
+
+/// Typestate marker for Space repository handles exposed through [`crate::HFSpace`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpaceRepo;
+
+mod private {
+    pub trait Sealed {}
+}
+
+#[doc(hidden)]
+pub trait RepoKind: private::Sealed {
+    type Info;
+
+    fn fetch_info<'a>(
+        repo: &'a HFRepository<Self>,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> Pin<Box<dyn Future<Output = HFResult<Self::Info>> + 'a>>
+    where
+        Self: Sized;
+}
+
+impl private::Sealed for DynamicRepo {}
+impl private::Sealed for ModelRepo {}
+impl private::Sealed for DatasetRepo {}
+impl private::Sealed for SpaceRepo {}
+
+impl RepoKind for DynamicRepo {
+    type Info = RepoInfo;
+
+    fn fetch_info<'a>(
+        repo: &'a HFRepository<Self>,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> Pin<Box<dyn Future<Output = HFResult<Self::Info>> + 'a>> {
+        Box::pin(async move {
+            match repo.repo_type {
+                RepoType::Model => repo.model_info(revision, expand).await.map(RepoInfo::Model),
+                RepoType::Dataset => repo.dataset_info(revision, expand).await.map(RepoInfo::Dataset),
+                RepoType::Space => repo.space_info(revision, expand).await.map(RepoInfo::Space),
+                RepoType::Kernel => repo.kernel_info(revision, expand).await.map(RepoInfo::Kernel),
+            }
+        })
+    }
+}
+
+impl RepoKind for ModelRepo {
+    type Info = ModelInfo;
+
+    fn fetch_info<'a>(
+        repo: &'a HFRepository<Self>,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> Pin<Box<dyn Future<Output = HFResult<Self::Info>> + 'a>> {
+        Box::pin(async move { repo.model_info(revision, expand).await })
+    }
+}
+
+impl RepoKind for DatasetRepo {
+    type Info = DatasetInfo;
+
+    fn fetch_info<'a>(
+        repo: &'a HFRepository<Self>,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> Pin<Box<dyn Future<Output = HFResult<Self::Info>> + 'a>> {
+        Box::pin(async move { repo.dataset_info(revision, expand).await })
+    }
+}
+
+impl RepoKind for SpaceRepo {
+    type Info = SpaceInfo;
+
+    fn fetch_info<'a>(
+        repo: &'a HFRepository<Self>,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> Pin<Box<dyn Future<Output = HFResult<Self::Info>> + 'a>> {
+        Box::pin(async move { repo.space_info(revision, expand).await })
+    }
 }
 
 /// Access-gating mode for a repository.
@@ -112,8 +208,8 @@ impl GatedNotifications {
 
 /// Repo-type-tagged wrapper over [`ModelInfo`], [`DatasetInfo`], and [`SpaceInfo`].
 ///
-/// Returned by [`HFRepository::info`]; the active variant
-/// matches the repository's [`RepoType`].
+/// Returned by [`HFClient::repo`] handles through [`HFRepository::info`]; the active variant
+/// matches the repository's runtime [`RepoType`].
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum RepoInfo {
@@ -559,11 +655,12 @@ pub struct RepoUrl {
 /// # Ok(()) }
 /// ```
 #[derive(Clone)]
-pub struct HFRepository {
+pub struct HFRepository<K = DynamicRepo> {
     pub(crate) hf_client: HFClient,
     pub(super) owner: String,
     pub(super) name: String,
     pub(crate) repo_type: RepoType,
+    _kind: PhantomData<K>,
 }
 
 impl std::fmt::Display for RepoType {
@@ -699,7 +796,7 @@ impl RepoInfo {
     }
 }
 
-impl std::fmt::Debug for HFRepository {
+impl<K> std::fmt::Debug for HFRepository<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFRepository")
             .field("owner", &self.owner)
@@ -717,13 +814,13 @@ impl HFClient {
     }
 
     /// Create an [`HFRepository`] handle for a model repository.
-    pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository {
-        self.repo(RepoType::Model, owner, name)
+    pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<ModelRepo> {
+        HFRepository::new_model(self.clone(), owner, name)
     }
 
     /// Create an [`HFRepository`] handle for a dataset repository.
-    pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository {
-        self.repo(RepoType::Dataset, owner, name)
+    pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<DatasetRepo> {
+        HFRepository::new_dataset(self.clone(), owner, name)
     }
 
     /// List models on the Hub. Endpoint: `GET /api/models`.
@@ -1113,7 +1210,7 @@ impl HFClient {
     }
 }
 
-impl HFRepository {
+impl HFRepository<DynamicRepo> {
     /// Construct a new repository handle. Prefer the factory methods on [`HFClient`] instead.
     pub fn new(client: HFClient, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
@@ -1121,6 +1218,37 @@ impl HFRepository {
             owner: owner.into(),
             name: name.into(),
             repo_type,
+            _kind: PhantomData,
+        }
+    }
+}
+
+impl HFRepository<ModelRepo> {
+    pub(crate) fn new_model(client: HFClient, owner: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::new_typed(client, RepoType::Model, owner, name)
+    }
+}
+
+impl HFRepository<DatasetRepo> {
+    pub(crate) fn new_dataset(client: HFClient, owner: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::new_typed(client, RepoType::Dataset, owner, name)
+    }
+}
+
+impl HFRepository<SpaceRepo> {
+    pub(crate) fn new_space(client: HFClient, owner: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::new_typed(client, RepoType::Space, owner, name)
+    }
+}
+
+impl<K> HFRepository<K> {
+    fn new_typed(client: HFClient, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            hf_client: client,
+            owner: owner.into(),
+            name: name.into(),
+            repo_type,
+            _kind: PhantomData,
         }
     }
 
@@ -1225,14 +1353,12 @@ impl HFRepository {
 }
 
 #[bon]
-impl HFRepository {
-    /// Fetch repository metadata, returning the appropriate [`RepoInfo`] variant.
+impl<K: RepoKind> HFRepository<K> {
+    /// Fetch repository metadata for this handle.
     ///
-    /// When the caller statically knows the repo type — e.g. after `client.model(...)`,
-    /// `client.dataset(...)`, `client.space(...)`, or `client.repo(RepoType::Kernel, ...)` —
-    /// prefer the typed accessors [`RepoInfo::into_model`], [`RepoInfo::into_dataset`],
-    /// [`RepoInfo::into_space`], and [`RepoInfo::into_kernel`] over a manual `match` on the
-    /// returned enum.
+    /// Handles created with [`HFClient::model`] and [`HFClient::dataset`] return their concrete
+    /// info types directly. Runtime-selected handles created with [`HFClient::repo`] return
+    /// [`RepoInfo`].
     ///
     /// For [`RepoType::Kernel`], note that the Hub's `/api/kernels/{repo_id}` endpoint returns
     /// a slim shape (no `tags`, `cardData`, or `siblings`) and silently ignores `expand`. To get
@@ -1253,13 +1379,8 @@ impl HFRepository {
         /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
         /// the listed properties (plus `_id` and `id`) are returned. Ignored for kernel repos.
         expand: Option<Vec<String>>,
-    ) -> HFResult<RepoInfo> {
-        match self.repo_type {
-            RepoType::Model => self.model_info(revision, expand).await.map(RepoInfo::Model),
-            RepoType::Dataset => self.dataset_info(revision, expand).await.map(RepoInfo::Dataset),
-            RepoType::Space => self.space_info(revision, expand).await.map(RepoInfo::Space),
-            RepoType::Kernel => self.kernel_info(revision, expand).await.map(RepoInfo::Kernel),
-        }
+    ) -> HFResult<K::Info> {
+        K::fetch_info(self, revision, expand).await
     }
 
     /// Return `true` if the repository exists.
@@ -1684,7 +1805,7 @@ impl crate::blocking::HFClientSync {
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
+impl<K: RepoKind> crate::blocking::HFRepositorySync<K> {
     /// Blocking counterpart of [`HFRepository::info`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -1696,7 +1817,7 @@ impl crate::blocking::HFRepositorySync {
         /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
         /// the listed properties (plus `_id` and `id`) are returned.
         expand: Option<Vec<String>>,
-    ) -> HFResult<RepoInfo> {
+    ) -> HFResult<K::Info> {
         self.runtime
             .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
     }

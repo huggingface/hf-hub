@@ -18,7 +18,7 @@ use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
 
 #[bon]
-impl HFRepository {
+impl<K: 'static> HFRepository<K> {
     /// Stream file and directory entries in the repository tree.
     ///
     /// Returns `HFResult<impl Stream<Item = HFResult<RepoTreeEntry>>>`.
@@ -177,7 +177,7 @@ use futures::stream::StreamExt as _;
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
+impl<K: 'static> crate::blocking::HFRepositorySync<K> {
     /// Blocking counterpart of [`HFRepository::list_tree`]. Returns the collected stream as a
     /// `Vec<RepoTreeEntry>`.
     #[builder(finish_fn = send, derive(Debug, Clone))]

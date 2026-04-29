@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use futures::StreamExt;
 use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
 use hf_hub::repository::{AddSource, CommitOperation};
-use hf_hub::{HFClient, HFClientBuilder, HFRepository};
+use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoType};
 use integration_tests::test_utils::*;
 use sha2::{Digest, Sha256};
 
@@ -80,11 +80,11 @@ const TEST_MODEL_PARTS: (&str, &str) = ("hf-internal-testing", "tiny-gemma3");
 const TEST_DATASET_PARTS: (&str, &str) = ("hf-internal-testing", "cats_vs_dogs_sample");
 
 fn model(client: &HFClient, owner: &str, name: &str) -> HFRepository {
-    client.model(owner, name)
+    client.repo(RepoType::Model, owner, name)
 }
 
 fn dataset(client: &HFClient, owner: &str, name: &str) -> HFRepository {
-    client.dataset(owner, name)
+    client.repo(RepoType::Dataset, owner, name)
 }
 
 #[tokio::test]
@@ -584,7 +584,7 @@ async fn test_download_with_no_progress_handler() {
 
 fn repo_from_id(client: &HFClient, repo_id: &str) -> HFRepository {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    client.model(parts[0], parts[1])
+    client.repo(RepoType::Model, parts[0], parts[1])
 }
 
 #[tokio::test]
