@@ -16,7 +16,7 @@
 //! #[tokio::main]
 //! async fn main() -> hf_hub::HFResult<()> {
 //!     let client = HFClient::new()?;
-//!     let info = client.model("openai-community", "gpt2").info().send().await?;
+//!     let info = client.model_info().repo_id("openai-community/gpt2").send().await?;
 //!     println!("Repo: {:?}", info);
 //!     Ok(())
 //! }
@@ -152,7 +152,7 @@
 //!     use hf_hub::HFClientSync;
 //!
 //!     let client = HFClientSync::new()?;
-//!     let _info = client.model("openai-community", "gpt2").info().send()?;
+//!     let _info = client.model_info().repo_id("openai-community/gpt2").send()?;
 //!     Ok(())
 //! }
 //!

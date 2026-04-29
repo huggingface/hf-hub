@@ -74,39 +74,22 @@ fn collect_file_paths(test_repo: &hf_hub::HFRepositorySync) -> std::collections:
         .collect()
 }
 
-fn dataset_handle(client: &HFClientSync, repo_id: &str) -> hf_hub::HFRepositorySync {
-    let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    if parts.len() == 2 {
-        client.dataset(parts[0], parts[1])
-    } else {
-        client.dataset("", repo_id)
-    }
-}
-
 // --- Repo info ---
 
 #[test]
 fn test_sync_model_info() {
     let Some(client) = prod_sync_api() else { return };
     let model_repo = TEST_MODEL_REPO;
-    let repo = repo_handle(&client, model_repo);
-    let info = repo.info().send().unwrap();
-    match info {
-        RepoInfo::Model(model) => assert!(model.id.contains("tiny-gemma3")),
-        _ => panic!("expected model info"),
-    }
+    let info = client.model_info().repo_id(model_repo).send().unwrap();
+    assert!(info.id.contains("tiny-gemma3"));
 }
 
 #[test]
 fn test_sync_dataset_info() {
     let Some(client) = prod_sync_api() else { return };
     let dataset_repo = TEST_DATASET_REPO;
-    let repo = dataset_handle(&client, dataset_repo);
-    let info = repo.info().send().unwrap();
-    match info {
-        RepoInfo::Dataset(ds) => assert_eq!(ds.id, dataset_repo),
-        _ => panic!("expected dataset info"),
-    }
+    let info = client.dataset_info().repo_id(dataset_repo).send().unwrap();
+    assert_eq!(info.id, dataset_repo);
 }
 
 #[test]
@@ -115,11 +98,8 @@ fn test_sync_repo_handle_info_and_file_exists() {
     let model_repo = TEST_MODEL_REPO;
     let repo = repo_handle(&client, model_repo);
 
-    let info = repo.info().send().unwrap();
-    match info {
-        RepoInfo::Model(model) => assert_eq!(model.id, model_repo),
-        _ => panic!("expected model info"),
-    }
+    let info = client.model_info().repo_id(model_repo).send().unwrap();
+    assert_eq!(info.id, model_repo);
 
     let exists = repo.file_exists().filename("config.json").send().unwrap();
     assert!(exists);

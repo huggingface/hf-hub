@@ -109,11 +109,8 @@ fn repo_typed(client: &HFClient, repo_id: &str, repo_type: RepoType) -> HFReposi
 async fn test_model_info() {
     let Some(client) = prod_api() else { return };
     let model_repo = TEST_MODEL_REPO;
-    let info = repo(&client, model_repo).info().send().await.unwrap();
-    match info {
-        RepoInfo::Model(model) => assert!(model.id.contains("tiny-gemma3")),
-        _ => panic!("expected model info"),
-    }
+    let info = client.model_info().repo_id(model_repo).send().await.unwrap();
+    assert!(info.id.contains("tiny-gemma3"));
 }
 
 #[tokio::test]
@@ -122,11 +119,8 @@ async fn test_repo_handle_info_and_file_exists() {
     let model_repo = TEST_MODEL_REPO;
     let repo = repo(&client, model_repo);
 
-    let info = repo.info().send().await.unwrap();
-    match info {
-        RepoInfo::Model(model) => assert_eq!(model.id, model_repo),
-        _ => panic!("expected model info"),
-    }
+    let info = client.model_info().repo_id(model_repo).send().await.unwrap();
+    assert_eq!(info.id, model_repo);
 
     let exists = repo.file_exists().filename("config.json").send().await.unwrap();
     assert!(exists);
@@ -136,15 +130,8 @@ async fn test_repo_handle_info_and_file_exists() {
 async fn test_dataset_info() {
     let Some(client) = prod_api() else { return };
     let dataset_repo = TEST_DATASET_REPO;
-    let info = repo_typed(&client, dataset_repo, RepoType::Dataset)
-        .info()
-        .send()
-        .await
-        .unwrap();
-    match info {
-        RepoInfo::Dataset(ds) => assert_eq!(ds.id, dataset_repo),
-        _ => panic!("expected dataset info"),
-    }
+    let info = client.dataset_info().repo_id(dataset_repo).send().await.unwrap();
+    assert_eq!(info.id, dataset_repo);
 }
 
 #[tokio::test]
@@ -464,11 +451,8 @@ async fn test_list_organization_members() {
 async fn test_space_info() {
     let Some(client) = prod_api() else { return };
     let space_repo = TEST_SPACE_INFO_REPO;
-    let info = repo_typed(&client, space_repo, RepoType::Space).info().send().await.unwrap();
-    match info {
-        RepoInfo::Space(space) => assert_eq!(space.id, space_repo),
-        _ => panic!("expected space info"),
-    }
+    let info = client.space_info().repo_id(space_repo).send().await.unwrap();
+    assert_eq!(info.id, space_repo);
 }
 
 #[tokio::test]
@@ -1107,7 +1091,7 @@ async fn test_update_repo_settings() {
         .unwrap();
 
     // Verify we can still get info after update
-    let _info = test_repo.info().send().await.unwrap();
+    let _info = client.model_info().repo_id(test_repo.repo_path()).send().await.unwrap();
 
     delete_test_repo(&client, &repo_id).await;
 }

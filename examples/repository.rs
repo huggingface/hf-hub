@@ -13,15 +13,17 @@ async fn main() -> hf_hub::HFResult<()> {
     // --- Read operations ---
 
     let model = client.model("openai-community", "gpt2");
-    let info = model.info().send().await?.into_model_info()?;
+    let info = client.model_info().repo_id("openai-community/gpt2").send().await?;
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
-    let dataset = client.dataset("rajpurkar", "squad");
-    let info = dataset.info().send().await?.into_dataset_info()?;
+    let info = client.dataset_info().repo_id("rajpurkar/squad").send().await?;
     println!("Dataset: {} (downloads: {:?})", info.id, info.downloads);
 
-    let space = client.space("huggingface", "transformers-benchmarks");
-    let info = space.info().send().await?.into_space_info()?;
+    let info = client
+        .space_info()
+        .repo_id("huggingface/transformers-benchmarks")
+        .send()
+        .await?;
     println!("Space: {} (sdk: {:?})", info.id, info.sdk);
 
     let exists = model.exists().send().await?;

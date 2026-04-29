@@ -15,16 +15,14 @@ fn main() -> hf_hub::HFResult<()> {
     // --- Repo info ---
 
     let model = client.model("openai-community", "gpt2");
-    let dataset = client.dataset("rajpurkar", "squad");
-    let space = client.space("huggingface", "transformers-benchmarks");
 
-    let info = model.info().send()?.into_model_info()?;
+    let info = client.model_info().repo_id("openai-community/gpt2").send()?;
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
-    let info = dataset.info().send()?.into_dataset_info()?;
+    let info = client.dataset_info().repo_id("rajpurkar/squad").send()?;
     println!("Dataset: {} (downloads: {:?})", info.id, info.downloads);
 
-    let info = space.info().send()?.into_space_info()?;
+    let info = client.space_info().repo_id("huggingface/transformers-benchmarks").send()?;
     println!("Space: {} (sdk: {:?})", info.id, info.sdk);
 
     let exists = model.exists().send()?;

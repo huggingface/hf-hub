@@ -169,7 +169,7 @@ hf-hub/
 │   │   ├── progress.rs             # ProgressEvent, ProgressHandler, Upload/DownloadEvent, FileProgress
 │   │   ├── repository/             # Repo component: all HFRepository-bound APIs live here,
 │   │   │   │                       #   flat public surface via `hf_hub::repository::…`
-│   │   │   ├── mod.rs              # HFRepository handle, RepoType, RepoInfo, ModelInfo/DatasetInfo/
+│   │   │   ├── mod.rs              # HFRepository handle, RepoType, ModelInfo/DatasetInfo/
 │   │   │   │                       #   SpaceInfo, list/create/delete/move/update + flat re-exports
 │   │   │   ├── commits.rs          # Git history types + list_commits/list_refs/diff/branches/tags
 │   │   │   ├── diff.rs             # HFFileDiff, GitStatus, HFDiffParseError, parse_raw_diff, stream_raw_diff

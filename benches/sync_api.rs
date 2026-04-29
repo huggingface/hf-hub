@@ -139,7 +139,7 @@ fn bench_info(c: &mut Criterion) {
 
     group.bench_function("info", |b| {
         b.iter(|| {
-            client.model("julien-c", "dummy-unknown").info().send().unwrap();
+            client.model_info().repo_id("julien-c/dummy-unknown").send().unwrap();
         });
     });
 

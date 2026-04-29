@@ -505,9 +505,42 @@ impl HFRepository {
         }
         let repo_path = self.repo_path();
         let sha = match self.repo_type {
-            RepoType::Dataset => self.dataset_info(Some(revision.to_string()), None).await?.sha,
-            RepoType::Space => self.space_info(Some(revision.to_string()), None).await?.sha,
-            _ => self.model_info(Some(revision.to_string()), None).await?.sha,
+            RepoType::Dataset => {
+                self.hf_client
+                    .dataset_info()
+                    .repo_id(repo_path.clone())
+                    .revision(revision)
+                    .send()
+                    .await?
+                    .sha
+            },
+            RepoType::Space => {
+                self.hf_client
+                    .space_info()
+                    .repo_id(repo_path.clone())
+                    .revision(revision)
+                    .send()
+                    .await?
+                    .sha
+            },
+            RepoType::Kernel => {
+                self.hf_client
+                    .kernel_info()
+                    .repo_id(repo_path.clone())
+                    .revision(revision)
+                    .send()
+                    .await?
+                    .sha
+            },
+            RepoType::Model => {
+                self.hf_client
+                    .model_info()
+                    .repo_id(repo_path.clone())
+                    .revision(revision)
+                    .send()
+                    .await?
+                    .sha
+            },
         };
         sha.ok_or_else(|| {
             HFError::malformed_response(format!("repo info for {}@{} returned no commit sha", repo_path, revision))

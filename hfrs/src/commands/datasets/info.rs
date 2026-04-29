@@ -22,9 +22,12 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
-    let (owner, name) = crate::util::split_repo_id(&args.dataset_id);
-    let repo = client.dataset(owner, name);
-    let info = repo.info().maybe_revision(args.revision).send().await?.into_dataset_info()?;
+    let info = client
+        .dataset_info()
+        .repo_id(args.dataset_id)
+        .maybe_revision(args.revision)
+        .send()
+        .await?;
     let json_value = json!({
         "id": info.id,
         "author": info.author,

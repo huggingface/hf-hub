@@ -6,7 +6,7 @@
 //! Read-only operations require no auth.
 //! Run: cargo run -p examples --features blocking --example blocking_repo_handles
 
-use hf_hub::{HFClientSync, HFSpaceSync, RepoType};
+use hf_hub::HFClientSync;
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
@@ -14,24 +14,18 @@ fn main() -> hf_hub::HFResult<()> {
     let model = client.model("openai-community", "gpt2");
     println!("Model handle: owner={}, name={}", model.owner(), model.name());
 
-    let info = model.info().send()?.into_model_info()?;
+    let info = client.model_info().repo_id(model.repo_path()).send()?;
     println!("Model info: {} (sha: {:?})", info.id, info.sha);
 
     let config_exists = model.file_exists().filename("config.json").send()?;
     println!("config.json exists on {}: {config_exists}", model.repo_path());
 
-    let dataset = client.repo(RepoType::Dataset, "rajpurkar", "squad");
-    let info = dataset.info().send()?.into_dataset_info()?;
+    let info = client.dataset_info().repo_id("rajpurkar/squad").send()?;
     println!("Dataset info: {}", info.id);
 
-    let generic_space = client.repo(RepoType::Space, "huggingface", "transformers-benchmarks");
-    let space = HFSpaceSync::try_from(generic_space)?;
-
-    let info = space.info().send()?.into_space_info()?;
+    let space = client.space("huggingface", "transformers-benchmarks");
+    let info = client.space_info().repo_id(space.repo_path()).send()?;
     println!("Space info: {} (sdk: {:?})", info.id, info.sdk);
-
-    let direct_space = client.space("huggingface", "transformers-benchmarks");
-    println!("Direct space handle matches converted handle: {}", direct_space.repo_path() == space.repo_path());
 
     Ok(())
 }

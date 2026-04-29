@@ -110,23 +110,6 @@ impl GatedNotifications {
     }
 }
 
-/// Repo-type-tagged wrapper over [`ModelInfo`], [`DatasetInfo`], and [`SpaceInfo`].
-///
-/// Returned by [`HFRepository::info`]; the active variant
-/// matches the repository's [`RepoType`].
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum RepoInfo {
-    /// Info for a model repository.
-    Model(ModelInfo),
-    /// Info for a dataset repository.
-    Dataset(DatasetInfo),
-    /// Info for a Space repository.
-    Space(SpaceInfo),
-    /// Info for a kernel repository.
-    Kernel(KernelInfo),
-}
-
 /// A single file entry in a repository's flat "siblings" listing, as returned by the repo info endpoint.
 ///
 /// Most fields are populated only when the repo info request asks for file metadata (the `files_metadata`
@@ -280,8 +263,7 @@ pub struct EvalResultSource {
 
 /// Metadata for a model repository on the Hub.
 ///
-/// Returned by [`HFClient::list_models`] and by
-/// [`HFRepository::info`] when the repo is a model.
+/// Returned by [`HFClient::list_models`] and by [`HFClient::model_info`].
 /// Most fields are optional because they depend on the `expand` parameter and the repo's state.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -375,8 +357,7 @@ pub struct ModelInfo {
 
 /// Metadata for a dataset repository on the Hub.
 ///
-/// Returned by [`HFClient::list_datasets`] and by
-/// [`HFRepository::info`] when the repo is a dataset.
+/// Returned by [`HFClient::list_datasets`] and by [`HFClient::dataset_info`].
 /// Most fields are optional because they depend on the `expand` parameter and the repo's state.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -432,8 +413,7 @@ pub struct DatasetInfo {
 
 /// Metadata for a Space repository on the Hub.
 ///
-/// Returned by [`HFClient::list_spaces`] and by
-/// [`HFRepository::info`] when the repo is a Space.
+/// Returned by [`HFClient::list_spaces`] and by [`HFClient::space_info`].
 /// Most fields are optional because they depend on the `expand` parameter and the Space's state.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -493,15 +473,14 @@ pub struct SpaceInfo {
 
 /// Metadata for a kernel repository on the Hub.
 ///
-/// Returned by [`HFRepository::info`] when the repo is a kernel. The Hub's
-/// `/api/kernels/{repo_id}` endpoint returns a slim shape compared with
-/// model/dataset/space repos — fields like `tags`, `cardData`, and `siblings`
-/// are not exposed by this endpoint and are intentionally absent here. Most
-/// fields are optional because they depend on the repo's state.
+/// Returned by [`HFClient::kernel_info`]. The Hub's `/api/kernels/{repo_id}` endpoint returns
+/// a slim shape compared with model/dataset/space repos — fields like `tags`, `cardData`, and
+/// `siblings` are not exposed by this endpoint and are intentionally absent here. Most fields
+/// are optional because they depend on the repo's state.
 ///
 /// Kernels are also retrievable via `/api/models/{repo_id}` (kernels carry
 /// `library_name: "kernels"`) if you need the full model-style metadata; in
-/// that case go through [`HFClient::model`] and the [`ModelInfo`] response.
+/// that case go through [`HFClient::model_info`] and the [`ModelInfo`] response.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KernelInfo {
@@ -555,8 +534,8 @@ pub struct RepoUrl {
 /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 /// let client = HFClient::builder().build()?;
 /// let repo = client.model("openai-community", "gpt2");
-/// let info = repo.info().send().await?;
-/// # Ok(()) }
+/// let exists = repo.exists().send().await?;
+/// # let _ = exists; Ok(()) }
 /// ```
 #[derive(Clone)]
 pub struct HFRepository {
@@ -635,70 +614,6 @@ impl FromStr for GatedNotificationsMode {
     }
 }
 
-impl RepoInfo {
-    /// The [`RepoType`] of the active variant.
-    pub fn repo_type(&self) -> RepoType {
-        match self {
-            RepoInfo::Model(_) => RepoType::Model,
-            RepoInfo::Dataset(_) => RepoType::Dataset,
-            RepoInfo::Space(_) => RepoType::Space,
-            RepoInfo::Kernel(_) => RepoType::Kernel,
-        }
-    }
-
-    /// Consume `self` and return the [`ModelInfo`] when this is a model repo.
-    ///
-    /// Useful when the caller already knows the repo type at compile time —
-    /// e.g. after `client.model(...)` — and wants to avoid a `match` on
-    /// [`RepoInfo`]. On a mismatch returns [`HFError::Other`] naming the
-    /// variant that was found instead.
-    pub fn into_model_info(self) -> HFResult<ModelInfo> {
-        match self {
-            RepoInfo::Model(info) => Ok(info),
-            other => Err(HFError::Other(format!("expected RepoInfo::Model, got RepoInfo::{:?}", other.repo_type()))),
-        }
-    }
-
-    /// Consume `self` and return the [`DatasetInfo`] when this is a dataset repo.
-    ///
-    /// Useful when the caller already knows the repo type at compile time —
-    /// e.g. after `client.dataset(...)` — and wants to avoid a `match` on
-    /// [`RepoInfo`]. On a mismatch returns [`HFError::Other`] naming the
-    /// variant that was found instead.
-    pub fn into_dataset_info(self) -> HFResult<DatasetInfo> {
-        match self {
-            RepoInfo::Dataset(info) => Ok(info),
-            other => Err(HFError::Other(format!("expected RepoInfo::Dataset, got RepoInfo::{:?}", other.repo_type()))),
-        }
-    }
-
-    /// Consume `self` and return the [`SpaceInfo`] when this is a Space repo.
-    ///
-    /// Useful when the caller already knows the repo type at compile time —
-    /// e.g. after `client.space(...)` — and wants to avoid a `match` on
-    /// [`RepoInfo`]. On a mismatch returns [`HFError::Other`] naming the
-    /// variant that was found instead.
-    pub fn into_space_info(self) -> HFResult<SpaceInfo> {
-        match self {
-            RepoInfo::Space(info) => Ok(info),
-            other => Err(HFError::Other(format!("expected RepoInfo::Space, got RepoInfo::{:?}", other.repo_type()))),
-        }
-    }
-
-    /// Consume `self` and return the [`KernelInfo`] when this is a kernel repo.
-    ///
-    /// Useful when the caller already knows the repo type at compile time —
-    /// e.g. after `client.repo(RepoType::Kernel, ...)` — and wants to avoid a
-    /// `match` on [`RepoInfo`]. On a mismatch returns [`HFError::Other`]
-    /// naming the variant that was found instead.
-    pub fn into_kernel_info(self) -> HFResult<KernelInfo> {
-        match self {
-            RepoInfo::Kernel(info) => Ok(info),
-            other => Err(HFError::Other(format!("expected RepoInfo::Kernel, got RepoInfo::{:?}", other.repo_type()))),
-        }
-    }
-}
-
 impl std::fmt::Debug for HFRepository {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFRepository")
@@ -724,6 +639,144 @@ impl HFClient {
     /// Create an [`HFRepository`] handle for a dataset repository.
     pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository {
         self.repo(RepoType::Dataset, owner, name)
+    }
+
+    /// Fetch repo info for a given kind, deserializing into the caller-supplied `T`.
+    ///
+    /// Endpoint: `GET /api/{kind}/{repo_id}[/revision/{revision}]`.
+    async fn fetch_repo_info<T: DeserializeOwned>(
+        &self,
+        repo_type: RepoType,
+        repo_id: &str,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> HFResult<T> {
+        let mut url = self.api_url(Some(repo_type), repo_id);
+        if let Some(ref revision) = revision {
+            url = format!("{url}/revision/{revision}");
+        }
+        let headers = self.auth_headers();
+        let expand_params: Option<Vec<(&str, &str)>> =
+            expand.as_ref().map(|e| e.iter().map(|v| ("expand", v.as_str())).collect());
+        let response = retry::retry(self.retry_config(), || {
+            let mut req = self.http_client().get(&url).headers(headers.clone());
+            if let Some(ref params) = expand_params {
+                req = req.query(params);
+            }
+            req.send()
+        })
+        .await?;
+        let not_found_ctx = match revision {
+            Some(rev) => crate::error::NotFoundContext::Revision { revision: rev },
+            None => crate::error::NotFoundContext::Repo,
+        };
+        let response = self.check_response(response, Some(repo_id), not_found_ctx).await?;
+        Ok(response.json().await?)
+    }
+
+    /// Fetch metadata for a model repository.
+    ///
+    /// Endpoint: `GET /api/models/{repo_id}[/revision/{revision}]`.
+    ///
+    /// # Parameters
+    ///
+    /// - `repo_id` (required): repository ID in `"owner/name"` form (or just `"name"` for owner-less repos).
+    /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+    /// - `expand`: list of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
+    ///   the listed properties (plus `_id` and `id`) are returned.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn model_info(
+        &self,
+        /// Repository ID in `"owner/name"` form (or just `"name"` for owner-less repos).
+        #[builder(into)]
+        repo_id: String,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
+        /// the listed properties (plus `_id` and `id`) are returned.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<ModelInfo> {
+        self.fetch_repo_info(RepoType::Model, &repo_id, revision, expand).await
+    }
+
+    /// Fetch metadata for a dataset repository.
+    ///
+    /// Endpoint: `GET /api/datasets/{repo_id}[/revision/{revision}]`.
+    ///
+    /// # Parameters
+    ///
+    /// - `repo_id` (required): repository ID in `"owner/name"` form.
+    /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+    /// - `expand`: list of properties to expand in the response. When set, only the listed properties (plus `_id` and
+    ///   `id`) are returned.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn dataset_info(
+        &self,
+        /// Repository ID in `"owner/name"` form.
+        #[builder(into)]
+        repo_id: String,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response. When set, only the listed properties
+        /// (plus `_id` and `id`) are returned.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<DatasetInfo> {
+        self.fetch_repo_info(RepoType::Dataset, &repo_id, revision, expand).await
+    }
+
+    /// Fetch metadata for a Space repository.
+    ///
+    /// Endpoint: `GET /api/spaces/{repo_id}[/revision/{revision}]`.
+    ///
+    /// # Parameters
+    ///
+    /// - `repo_id` (required): repository ID in `"owner/name"` form.
+    /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+    /// - `expand`: list of properties to expand in the response. When set, only the listed properties (plus `_id` and
+    ///   `id`) are returned.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn space_info(
+        &self,
+        /// Repository ID in `"owner/name"` form.
+        #[builder(into)]
+        repo_id: String,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response. When set, only the listed properties
+        /// (plus `_id` and `id`) are returned.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<SpaceInfo> {
+        self.fetch_repo_info(RepoType::Space, &repo_id, revision, expand).await
+    }
+
+    /// Fetch metadata for a kernel repository.
+    ///
+    /// Endpoint: `GET /api/kernels/{repo_id}[/revision/{revision}]`. The Hub silently ignores
+    /// `expand` on this endpoint; the parameter is plumbed through for symmetry but does not
+    /// change the response shape. To get the full model-style metadata for a kernel, build a
+    /// model handle for the same repo id ([`HFClient::model_info`]) and call that instead.
+    ///
+    /// # Parameters
+    ///
+    /// - `repo_id` (required): repository ID in `"owner/name"` form.
+    /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+    /// - `expand`: ignored by the kernels endpoint; accepted for API symmetry.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn kernel_info(
+        &self,
+        /// Repository ID in `"owner/name"` form.
+        #[builder(into)]
+        repo_id: String,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Ignored by the kernels endpoint; accepted for API symmetry.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<KernelInfo> {
+        self.fetch_repo_info(RepoType::Kernel, &repo_id, revision, expand).await
     }
 
     /// List models on the Hub. Endpoint: `GET /api/models`.
@@ -1154,114 +1207,10 @@ impl HFRepository {
     pub fn repo_type(&self) -> RepoType {
         self.repo_type
     }
-
-    /// Fetch repo info for this repository's `repo_type`, deserializing into `T`.
-    /// Endpoint: GET /api/{repo_type}s/{repo_id}[/revision/{revision}]
-    async fn fetch_repo_info<T: DeserializeOwned>(
-        &self,
-        revision: Option<String>,
-        expand: Option<Vec<String>>,
-    ) -> HFResult<T> {
-        let mut url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
-        if let Some(ref revision) = revision {
-            url = format!("{url}/revision/{revision}");
-        }
-        let headers = self.hf_client.auth_headers();
-        let expand_params: Option<Vec<(&str, &str)>> =
-            expand.as_ref().map(|e| e.iter().map(|v| ("expand", v.as_str())).collect());
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            let mut req = self.hf_client.http_client().get(&url).headers(headers.clone());
-            if let Some(ref params) = expand_params {
-                req = req.query(params);
-            }
-            req.send()
-        })
-        .await?;
-        let repo_path = self.repo_path();
-        let not_found_ctx = match revision {
-            Some(rev) => crate::error::NotFoundContext::Revision { revision: rev },
-            None => crate::error::NotFoundContext::Repo,
-        };
-        let response = self.hf_client.check_response(response, Some(&repo_path), not_found_ctx).await?;
-        Ok(response.json().await?)
-    }
-
-    pub(crate) async fn model_info(
-        &self,
-        revision: Option<String>,
-        expand: Option<Vec<String>>,
-    ) -> HFResult<ModelInfo> {
-        self.fetch_repo_info(revision, expand).await
-    }
-
-    pub(crate) async fn dataset_info(
-        &self,
-        revision: Option<String>,
-        expand: Option<Vec<String>>,
-    ) -> HFResult<DatasetInfo> {
-        self.fetch_repo_info(revision, expand).await
-    }
-
-    pub(crate) async fn space_info(
-        &self,
-        revision: Option<String>,
-        expand: Option<Vec<String>>,
-    ) -> HFResult<SpaceInfo> {
-        self.fetch_repo_info(revision, expand).await
-    }
-
-    /// Fetch kernel-specific info from `/api/kernels/{repo_id}` (or
-    /// `/api/kernels/{repo_id}/revision/{revision}` when pinned).
-    ///
-    /// Note: the Hub silently ignores `expand` on this endpoint; the parameter
-    /// is plumbed through for symmetry but does not change the response shape.
-    pub(crate) async fn kernel_info(
-        &self,
-        revision: Option<String>,
-        expand: Option<Vec<String>>,
-    ) -> HFResult<KernelInfo> {
-        self.fetch_repo_info(revision, expand).await
-    }
 }
 
 #[bon]
 impl HFRepository {
-    /// Fetch repository metadata, returning the appropriate [`RepoInfo`] variant.
-    ///
-    /// When the caller statically knows the repo type — e.g. after `client.model(...)`,
-    /// `client.dataset(...)`, `client.space(...)`, or `client.repo(RepoType::Kernel, ...)` —
-    /// prefer the typed accessors [`RepoInfo::into_model`], [`RepoInfo::into_dataset`],
-    /// [`RepoInfo::into_space`], and [`RepoInfo::into_kernel`] over a manual `match` on the
-    /// returned enum.
-    ///
-    /// For [`RepoType::Kernel`], note that the Hub's `/api/kernels/{repo_id}` endpoint returns
-    /// a slim shape (no `tags`, `cardData`, or `siblings`) and silently ignores `expand`. To get
-    /// the full model-style metadata for a kernel, build a model handle for the same repo id
-    /// (`client.model(owner, name)`) and call `info()` on it.
-    ///
-    /// # Parameters
-    ///
-    /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-    /// - `expand`: list of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
-    ///   the listed properties (plus `_id` and `id`) are returned. Ignored for kernel repos.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn info(
-        &self,
-        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
-        /// the listed properties (plus `_id` and `id`) are returned. Ignored for kernel repos.
-        expand: Option<Vec<String>>,
-    ) -> HFResult<RepoInfo> {
-        match self.repo_type {
-            RepoType::Model => self.model_info(revision, expand).await.map(RepoInfo::Model),
-            RepoType::Dataset => self.dataset_info(revision, expand).await.map(RepoInfo::Dataset),
-            RepoType::Space => self.space_info(revision, expand).await.map(RepoInfo::Space),
-            RepoType::Kernel => self.kernel_info(revision, expand).await.map(RepoInfo::Kernel),
-        }
-    }
-
     /// Return `true` if the repository exists.
     ///
     /// Returns `Ok(false)` only when the Hub responds with 404. If the repo exists but the current
@@ -1442,6 +1391,102 @@ fn split_repo_id(repo_id: &str) -> (Option<&str>, &str) {
 #[cfg(feature = "blocking")]
 #[bon]
 impl crate::blocking::HFClientSync {
+    /// Blocking counterpart of [`HFClient::model_info`]. See the async method for parameters and
+    /// behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn model_info(
+        &self,
+        /// Repository ID in `"owner/name"` form (or just `"name"` for owner-less repos).
+        #[builder(into)]
+        repo_id: String,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<ModelInfo> {
+        self.runtime.block_on(
+            self.inner
+                .model_info()
+                .repo_id(repo_id)
+                .maybe_revision(revision)
+                .maybe_expand(expand)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFClient::dataset_info`]. See the async method for parameters
+    /// and behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn dataset_info(
+        &self,
+        /// Repository ID in `"owner/name"` form.
+        #[builder(into)]
+        repo_id: String,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<DatasetInfo> {
+        self.runtime.block_on(
+            self.inner
+                .dataset_info()
+                .repo_id(repo_id)
+                .maybe_revision(revision)
+                .maybe_expand(expand)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFClient::space_info`]. See the async method for parameters and
+    /// behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn space_info(
+        &self,
+        /// Repository ID in `"owner/name"` form.
+        #[builder(into)]
+        repo_id: String,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<SpaceInfo> {
+        self.runtime.block_on(
+            self.inner
+                .space_info()
+                .repo_id(repo_id)
+                .maybe_revision(revision)
+                .maybe_expand(expand)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFClient::kernel_info`]. See the async method for parameters
+    /// and behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn kernel_info(
+        &self,
+        /// Repository ID in `"owner/name"` form.
+        #[builder(into)]
+        repo_id: String,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Ignored by the kernels endpoint; accepted for API symmetry.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<KernelInfo> {
+        self.runtime.block_on(
+            self.inner
+                .kernel_info()
+                .repo_id(repo_id)
+                .maybe_revision(revision)
+                .maybe_expand(expand)
+                .send(),
+        )
+    }
+
     /// Blocking counterpart of [`HFClient::list_models`]. Returns the collected stream as a
     /// `Vec<ModelInfo>`.
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -1685,22 +1730,6 @@ impl crate::blocking::HFClientSync {
 #[cfg(feature = "blocking")]
 #[bon]
 impl crate::blocking::HFRepositorySync {
-    /// Blocking counterpart of [`HFRepository::info`]. See the async method for parameters and
-    /// behavior.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn info(
-        &self,
-        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
-        /// the listed properties (plus `_id` and `id`) are returned.
-        expand: Option<Vec<String>>,
-    ) -> HFResult<RepoInfo> {
-        self.runtime
-            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
-    }
-
     /// Blocking counterpart of [`HFRepository::exists`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn exists(&self) -> HFResult<bool> {
