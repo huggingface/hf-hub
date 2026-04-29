@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use hf_hub::repository::AddSource;
-use hf_hub::{HFClient, HFClientBuilder, HFRepository};
+use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoTypeModel};
 use integration_tests::test_utils::*;
 use rand::RngExt;
 use tokio::sync::OnceCell;
@@ -67,7 +67,7 @@ fn unique_suffix() -> String {
 }
 
 /// Split an `"owner/name"` repo_id into an [`HFRepository`] handle.
-fn repo_handle(client: &HFClient, owner: &str, name: &str) -> HFRepository {
+fn repo_handle(client: &HFClient, owner: &str, name: &str) -> HFRepository<RepoTypeModel> {
     client.model(owner, name)
 }
 
@@ -78,7 +78,7 @@ async fn create_test_repo(client: &HFClient, suffix: &str) -> (String, String) {
     let name = format!("hf-hub-xet-test-{suffix}");
     let repo_id = format!("{username}/{name}");
     client
-        .create_repo()
+        .create_repo::<RepoTypeModel>()
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(true)
@@ -89,7 +89,7 @@ async fn create_test_repo(client: &HFClient, suffix: &str) -> (String, String) {
 }
 
 async fn delete_test_repo(client: &HFClient, repo_id: &str) {
-    let _ = client.delete_repo().repo_id(repo_id).send().await;
+    let _ = client.delete_repo::<RepoTypeModel>().repo_id(repo_id).send().await;
 }
 
 fn generate_random_bytes(size: usize) -> Vec<u8> {

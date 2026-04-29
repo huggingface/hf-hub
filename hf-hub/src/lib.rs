@@ -4,9 +4,12 @@
 //! the Rust counterpart to the Python [`huggingface_hub`](https://github.com/huggingface/huggingface_hub) library.
 //!
 //! The crate exposes a high-level, ergonomic API built around a single entry point,
-//! [`HFClient`], and a family of typed handles ([`HFRepository`], [`HFSpace`],
-//! [`HFBucket`]) that scope operations to a specific resource. All network I/O is
-//! async and driven by the [`reqwest`](https://docs.rs/reqwest) HTTP client with built-in retries on transient failures.
+//! [`HFClient`], and a family of typed handles ([`HFRepository<T>`](HFRepository),
+//! [`HFBucket`]) that scope operations to a specific resource. The repo kind lives in
+//! the type system via the [`RepoType`] trait and its four marker structs
+//! ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`], [`RepoTypeKernel`]).
+//! All network I/O is async and driven by the [`reqwest`](https://docs.rs/reqwest)
+//! HTTP client with built-in retries on transient failures.
 //!
 //! ## Quick start
 //!
@@ -68,10 +71,11 @@
 //! ## Repository handles
 //!
 //! Rather than passing `(repo_type, owner, name)` to every method, bind them once
-//! with a typed handle:
+//! with a typed handle. The repo kind is encoded in the type via a marker
+//! ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`], [`RepoTypeKernel`]):
 //!
 //! ```rust,no_run
-//! use hf_hub::{HFClient, RepoType};
+//! use hf_hub::HFClient;
 //!
 //! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
 //! let client = HFClient::new()?;
@@ -79,17 +83,14 @@
 //! let model = client.model("openai-community", "gpt2");
 //! let dataset = client.dataset("HuggingFaceFW", "fineweb");
 //! let space = client.space("huggingface", "diffusers-gallery");
-//!
-//! // Or a generic repo when the type is only known at runtime:
-//! let repo = client.repo(RepoType::Model, "openai-community", "gpt2");
+//! let kernel = client.kernel("kernels-community", "cutlass-mla");
 //!
 //! let exists = model.exists().send().await?;
-//! # let _ = (dataset, space, repo, exists); Ok(()) }
+//! # let _ = (dataset, space, kernel, exists); Ok(()) }
 //! ```
 //!
-//! [`HFSpace`] dereferences to [`HFRepository`], so every generic repo method is
-//! available on Space handles in addition to Space-specific operations like
-//! hardware and secret management.
+//! Space-specific methods like `runtime`, `add_secret`, and `pause` live as `impl`
+//! blocks on `HFRepository<RepoTypeSpace>` — there is no separate `HFSpace` wrapper.
 //!
 //! ## File operations
 //!
@@ -160,8 +161,8 @@
 //! fn main() {}
 //! ```
 //!
-//! The blocking handles ([`HFClientSync`], [`HFRepositorySync`], [`HFSpaceSync`],
-//! [`HFBucketSync`]) mirror their async counterparts method-for-method.
+//! The blocking handles ([`HFClientSync`], [`HFRepositorySync`], [`HFBucketSync`])
+//! mirror their async counterparts method-for-method.
 //!
 //! ## Errors
 //!
@@ -215,7 +216,7 @@ pub(crate) mod xet;
 
 #[cfg(feature = "blocking")]
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
-pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync, HFSpaceSync};
+pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync};
 #[doc(inline)]
 pub use buckets::HFBucket;
 pub use client::{HFClient, HFClientBuilder};
@@ -223,8 +224,4 @@ pub use client::{HFClient, HFClientBuilder};
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult, XetOperation};
 #[doc(inline)]
-pub use repository::HFRepository;
-#[doc(inline)]
-pub use repository::RepoType;
-#[doc(inline)]
-pub use spaces::HFSpace;
+pub use repository::{HFRepository, RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};

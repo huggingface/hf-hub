@@ -18,6 +18,7 @@ use bon::bon;
 use futures::TryStreamExt;
 use futures::stream::{Stream, StreamExt};
 use reqwest::header::IF_NONE_MATCH;
+use serde::Deserialize;
 
 use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash, matches_any_glob};
 use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
@@ -56,7 +57,7 @@ struct SnapshotDownloadParams {
     progress: Option<Progress>,
 }
 
-impl HFRepository {
+impl<T: RepoType> HFRepository<T> {
     async fn download_file_impl(&self, params: DownloadFileParams) -> HFResult<PathBuf> {
         let result = self.download_file_inner(&params).await;
         if result.is_ok() {
@@ -94,7 +95,7 @@ impl HFRepository {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(Some(self.repo_type), &repo_path, revision, &params.filename);
+            .download_url(T::url_prefix(), &repo_path, revision, &params.filename);
 
         let headers = self.hf_client.auth_headers();
         let head_response = retry::retry(self.hf_client.retry_config(), || {
@@ -186,7 +187,7 @@ impl HFRepository {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(Some(self.repo_type), &repo_path, revision, &params.filename);
+            .download_url(T::url_prefix(), &repo_path, revision, &params.filename);
 
         let headers = self.hf_client.auth_headers();
         let head_response = retry::retry(self.hf_client.retry_config(), || {
@@ -317,7 +318,7 @@ impl HFRepository {
     async fn download_file_to_cache(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let cache_dir = self.hf_client.cache_dir();
-        let repo_folder = cache::repo_folder_name(&self.repo_path(), Some(self.repo_type));
+        let repo_folder = cache::repo_folder_name(&self.repo_path(), T::plural());
         let force_download = params.force_download;
 
         if cache::is_commit_hash(revision) && !force_download {
@@ -354,7 +355,7 @@ impl HFRepository {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(Some(self.repo_type), &repo_path, revision, &params.filename);
+            .download_url(T::url_prefix(), &repo_path, revision, &params.filename);
 
         let cached_etag = if !force_download {
             self.find_cached_etag(repo_folder, revision, &params.filename)
@@ -503,13 +504,13 @@ impl HFRepository {
         if cache::is_commit_hash(revision) {
             return Ok(revision.to_string());
         }
+        #[derive(Deserialize)]
+        struct ShaOnly {
+            sha: Option<String>,
+        }
         let repo_path = self.repo_path();
-        let sha = match self.repo_type {
-            RepoType::Dataset => self.dataset_info(Some(revision.to_string()), None).await?.sha,
-            RepoType::Space => self.space_info(Some(revision.to_string()), None).await?.sha,
-            _ => self.model_info(Some(revision.to_string()), None).await?.sha,
-        };
-        sha.ok_or_else(|| {
+        let info: ShaOnly = self.fetch_repo_info(Some(revision.to_string()), None).await?;
+        info.sha.ok_or_else(|| {
             HFError::malformed_response(format!("repo info for {}@{} returned no commit sha", repo_path, revision))
         })
     }
@@ -547,7 +548,7 @@ impl HFRepository {
         }
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let max_workers = params.max_workers.unwrap_or(8);
-        let repo_folder = cache::repo_folder_name(&self.repo_path(), Some(self.repo_type));
+        let repo_folder = cache::repo_folder_name(&self.repo_path(), T::plural());
         let cache_dir = self.hf_client.cache_dir();
 
         if params.local_files_only {
@@ -594,7 +595,7 @@ impl HFRepository {
         let commit_hash_ref = &commit_hash;
         let head_futs = filenames.iter().map(|filename| {
                 let url = self
-                    .hf_client.download_url(Some(self.repo_type), &repo_path, commit_hash_ref, filename);
+                    .hf_client.download_url(T::url_prefix(), &repo_path, commit_hash_ref, filename);
                 let auth = self.hf_client.auth_headers();
                 let filename = filename.clone();
                 let repo_folder_ref = &repo_folder;
@@ -721,7 +722,6 @@ impl HFRepository {
             let non_xet_dl_params = build_download_params(
                 &repo_path,
                 &non_xet_filenames,
-                Some(self.repo_type),
                 &commit_hash,
                 params.force_download,
                 Some(local_dir.clone()),
@@ -790,7 +790,6 @@ impl HFRepository {
         let non_xet_dl_params = build_download_params(
             &repo_path,
             &non_xet_filenames,
-            Some(self.repo_type),
             &commit_hash,
             params.force_download,
             None,
@@ -855,7 +854,6 @@ async fn finalize_cached_file(
 fn build_download_params(
     _repo_id: &str,
     filenames: &[String],
-    _repo_type: Option<RepoType>,
     commit_hash: &str,
     force_download: bool,
     local_dir: Option<PathBuf>,
@@ -874,8 +872,8 @@ fn build_download_params(
         .collect()
 }
 
-async fn download_concurrently(
-    api: &HFRepository,
+async fn download_concurrently<T: RepoType>(
+    api: &HFRepository<T>,
     params: &[DownloadFileParams],
     max_workers: usize,
 ) -> HFResult<Vec<PathBuf>> {
@@ -968,7 +966,7 @@ fn wrap_stream_with_progress(
 }
 
 #[bon]
-impl HFRepository {
+impl<T: RepoType> HFRepository<T> {
     /// Download a single file from a repository.
     ///
     /// When `local_dir` is `Some`, the file is downloaded directly to that directory
@@ -1178,7 +1176,7 @@ impl HFRepository {
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
+impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::download_file`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]

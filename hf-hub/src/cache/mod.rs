@@ -19,7 +19,6 @@ use bon::bon;
 
 use crate::client::HFClient;
 use crate::error::HFResult;
-use crate::repository::RepoType;
 
 pub(crate) mod storage;
 
@@ -73,8 +72,9 @@ pub struct CachedRevisionInfo {
 pub struct CachedRepoInfo {
     /// Hub repo identifier (e.g. `gpt2`, `google/bert-base-uncased`).
     pub repo_id: String,
-    /// Repository type (model, dataset, or space).
-    pub repo_type: RepoType,
+    /// Lowercase singular name of the repo kind (`"model"`, `"dataset"`, `"space"`, or `"kernel"`)
+    /// — see [`crate::repository::RepoType::singular`].
+    pub repo_type: &'static str,
     /// Absolute path of the repo's cache subfolder
     /// (`<cache>/<type>s--<owner>--<name>/`).
     pub repo_path: PathBuf,

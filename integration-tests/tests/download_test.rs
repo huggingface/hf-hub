@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use futures::StreamExt;
 use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
 use hf_hub::repository::{AddSource, CommitOperation};
-use hf_hub::{HFClient, HFClientBuilder, HFRepository};
+use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoTypeDataset, RepoTypeModel};
 use integration_tests::test_utils::*;
 use sha2::{Digest, Sha256};
 
@@ -62,7 +62,7 @@ async fn create_test_repo(client: &HFClient) -> String {
     let username = cached_username(client).await;
     let repo_id = format!("{}/hfrs-progress-test-{}", username, uuid_short());
     client
-        .create_repo()
+        .create_repo::<RepoTypeModel>()
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(false)
@@ -73,17 +73,17 @@ async fn create_test_repo(client: &HFClient) -> String {
 }
 
 async fn delete_test_repo(client: &HFClient, repo_id: &str) {
-    let _ = client.delete_repo().repo_id(repo_id).send().await;
+    let _ = client.delete_repo::<RepoTypeModel>().repo_id(repo_id).send().await;
 }
 
 const TEST_MODEL_PARTS: (&str, &str) = ("hf-internal-testing", "tiny-gemma3");
 const TEST_DATASET_PARTS: (&str, &str) = ("hf-internal-testing", "cats_vs_dogs_sample");
 
-fn model(client: &HFClient, owner: &str, name: &str) -> HFRepository {
+fn model(client: &HFClient, owner: &str, name: &str) -> HFRepository<RepoTypeModel> {
     client.model(owner, name)
 }
 
-fn dataset(client: &HFClient, owner: &str, name: &str) -> HFRepository {
+fn dataset(client: &HFClient, owner: &str, name: &str) -> HFRepository<RepoTypeDataset> {
     client.dataset(owner, name)
 }
 
@@ -582,7 +582,7 @@ async fn test_download_with_no_progress_handler() {
 
 // --- Upload progress tests (write to hub-ci) ---
 
-fn repo_from_id(client: &HFClient, repo_id: &str) -> HFRepository {
+fn repo_from_id(client: &HFClient, repo_id: &str) -> HFRepository<RepoTypeModel> {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
     client.model(parts[0], parts[1])
 }

@@ -4,7 +4,7 @@
 //! Run: cargo run -p examples --example commits
 
 use futures::StreamExt;
-use hf_hub::HFClient;
+use hf_hub::{HFClient, RepoTypeModel};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -56,7 +56,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo = client.model(&user.username, format!("example-commits-{unique}"));
 
     client
-        .create_repo()
+        .create_repo::<RepoTypeModel>()
         .repo_id(repo.repo_path())
         .private(true)
         .exist_ok(true)
@@ -76,7 +76,12 @@ async fn main() -> hf_hub::HFResult<()> {
     repo.delete_tag().tag("v0.1.0").send().await?;
     println!("Deleted tag: v0.1.0");
 
-    client.delete_repo().repo_id(repo.repo_path()).missing_ok(true).send().await?;
+    client
+        .delete_repo::<RepoTypeModel>()
+        .repo_id(repo.repo_path())
+        .missing_ok(true)
+        .send()
+        .await?;
     println!("Cleaned up test repo");
 
     Ok(())

@@ -143,15 +143,6 @@ pub enum HFError {
         context: Option<Box<HttpErrorContext>>,
     },
 
-    /// A handle of the wrong repository type was used for an operation.
-    #[error("Invalid repository type: expected {expected}, got {actual}")]
-    InvalidRepoType {
-        /// Required repository type.
-        expected: crate::repository::RepoType,
-        /// Actual repository type on the handle.
-        actual: crate::repository::RepoType,
-    },
-
     /// Credentials are valid, but the caller is not allowed to perform the
     /// operation.
     #[error("Forbidden: {}{}", .context.url, format_http_suffix(.context))]

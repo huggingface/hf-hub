@@ -4,7 +4,7 @@
 //! Run: cargo run -p examples --example repo
 
 use futures::StreamExt;
-use hf_hub::HFClient;
+use hf_hub::{HFClient, RepoTypeModel};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -13,15 +13,15 @@ async fn main() -> hf_hub::HFResult<()> {
     // --- Read operations ---
 
     let model = client.model("openai-community", "gpt2");
-    let info = model.info().send().await?.into_model_info()?;
+    let info = model.info().send().await?;
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
     let dataset = client.dataset("rajpurkar", "squad");
-    let info = dataset.info().send().await?.into_dataset_info()?;
+    let info = dataset.info().send().await?;
     println!("Dataset: {} (downloads: {:?})", info.id, info.downloads);
 
     let space = client.space("huggingface", "transformers-benchmarks");
-    let info = space.info().send().await?.into_space_info()?;
+    let info = space.info().send().await?;
     println!("Space: {} (sdk: {:?})", info.id, info.sdk);
 
     let exists = model.exists().send().await?;
@@ -76,7 +76,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo = client.model(&user.username, format!("example-repo-{unique}"));
 
     let repo_url = client
-        .create_repo()
+        .create_repo::<RepoTypeModel>()
         .repo_id(repo.repo_path())
         .private(true)
         .exist_ok(true)
@@ -88,10 +88,20 @@ async fn main() -> hf_hub::HFResult<()> {
     println!("Updated repo description");
 
     let new_name = format!("{}/example-repo-renamed-{unique}", user.username);
-    let moved = client.move_repo().from_id(repo.repo_path()).to_id(&new_name).send().await?;
+    let moved = client
+        .move_repo::<RepoTypeModel>()
+        .from_id(repo.repo_path())
+        .to_id(&new_name)
+        .send()
+        .await?;
     println!("Moved repo to: {}", moved.url);
 
-    client.delete_repo().repo_id(&new_name).missing_ok(true).send().await?;
+    client
+        .delete_repo::<RepoTypeModel>()
+        .repo_id(&new_name)
+        .missing_ok(true)
+        .send()
+        .await?;
     println!("Deleted repo");
 
     Ok(())

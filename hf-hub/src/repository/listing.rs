@@ -13,12 +13,12 @@ use futures::stream::Stream;
 use reqwest::Url;
 
 use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash};
-use super::{FileMetadataInfo, HFRepository, RepoTreeEntry};
+use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
 use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
 
 #[bon]
-impl HFRepository {
+impl<T: RepoType> HFRepository<T> {
     /// Stream file and directory entries in the repository tree.
     ///
     /// Returns `HFResult<impl Stream<Item = HFResult<RepoTreeEntry>>>`.
@@ -48,7 +48,7 @@ impl HFRepository {
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<RepoTreeEntry>> + '_> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url_str = format!("{}/tree/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
+        let url_str = format!("{}/tree/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), revision);
         let url = Url::parse(&url_str)?;
 
         let mut query: Vec<(String, String)> = Vec::new();
@@ -83,8 +83,7 @@ impl HFRepository {
         revision: Option<String>,
     ) -> HFResult<Vec<RepoTreeEntry>> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url =
-            format!("{}/paths-info/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
+        let url = format!("{}/paths-info/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), revision);
 
         let body = serde_json::json!({ "paths": paths });
 
@@ -131,9 +130,7 @@ impl HFRepository {
         let filename = filepath.clone();
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let repo_path = self.repo_path();
-        let url = self
-            .hf_client
-            .download_url(Some(self.repo_type), &repo_path, revision, &filename);
+        let url = self.hf_client.download_url(T::url_prefix(), &repo_path, revision, &filename);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -177,7 +174,7 @@ use futures::stream::StreamExt as _;
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
+impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::list_tree`]. Returns the collected stream as a
     /// `Vec<RepoTreeEntry>`.
     #[builder(finish_fn = send, derive(Debug, Clone))]

@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
-use crate::repository::RepoType;
 
 pub(crate) struct CacheLock {
     _file: File,
@@ -101,10 +100,12 @@ pub(crate) fn is_commit_hash(revision: &str) -> bool {
     revision.len() == 40 && revision.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-pub(crate) fn repo_folder_name(repo_id: &str, repo_type: Option<RepoType>) -> String {
-    let repo_type = repo_type.unwrap_or(RepoType::Model);
-    let type_plural = format!("{}s", repo_type);
-    std::iter::once(type_plural.as_str())
+/// Build the folder name for the cache layout: `<plural>--<owner>--<name>`.
+///
+/// `type_plural` is the API segment of the repo type — `"models"`, `"datasets"`, `"spaces"`,
+/// or `"kernels"` — i.e. the value returned by [`crate::repository::RepoType::plural`].
+pub(crate) fn repo_folder_name(repo_id: &str, type_plural: &str) -> String {
+    std::iter::once(type_plural)
         .chain(repo_id.split('/'))
         .collect::<Vec<_>>()
         .join("--")
@@ -130,12 +131,17 @@ pub(crate) fn no_exist_path(cache_dir: &Path, repo_folder: &str, commit_hash: &s
     cache_dir.join(repo_folder).join(".no_exist").join(commit_hash).join(filename)
 }
 
-fn parse_repo_folder_name(name: &str) -> Option<(RepoType, String)> {
+fn parse_repo_folder_name(name: &str) -> Option<(&'static str, String)> {
     let (type_plural, rest) = name.split_once("--")?;
-    let type_singular = type_plural.strip_suffix('s')?;
-    let repo_type: RepoType = type_singular.parse().ok()?;
+    let singular = match type_plural {
+        "models" => "model",
+        "datasets" => "dataset",
+        "spaces" => "space",
+        "kernels" => "kernel",
+        _ => return None,
+    };
     let repo_id = rest.replace("--", "/");
-    Some((repo_type, repo_id))
+    Some((singular, repo_id))
 }
 
 fn read_commit_refs(repo_path: &Path) -> HashMap<String, Vec<String>> {
@@ -335,34 +341,25 @@ mod tests {
         parse_repo_folder_name, read_commit_refs, read_ref, ref_path, repo_folder_name, scan_cache_dir, snapshot_path,
         write_ref,
     };
-    use crate::repository::RepoType;
 
     #[test]
     fn test_repo_folder_name_model_with_org() {
-        assert_eq!(
-            repo_folder_name("google/bert-base-uncased", Some(RepoType::Model)),
-            "models--google--bert-base-uncased"
-        );
+        assert_eq!(repo_folder_name("google/bert-base-uncased", "models"), "models--google--bert-base-uncased");
     }
 
     #[test]
     fn test_repo_folder_name_model_no_org() {
-        assert_eq!(repo_folder_name("gpt2", Some(RepoType::Model)), "models--gpt2");
-    }
-
-    #[test]
-    fn test_repo_folder_name_model_none_type() {
-        assert_eq!(repo_folder_name("gpt2", None), "models--gpt2");
+        assert_eq!(repo_folder_name("gpt2", "models"), "models--gpt2");
     }
 
     #[test]
     fn test_repo_folder_name_dataset() {
-        assert_eq!(repo_folder_name("rajpurkar/squad", Some(RepoType::Dataset)), "datasets--rajpurkar--squad");
+        assert_eq!(repo_folder_name("rajpurkar/squad", "datasets"), "datasets--rajpurkar--squad");
     }
 
     #[test]
     fn test_repo_folder_name_space() {
-        assert_eq!(repo_folder_name("dalle-mini/dalle-mini", Some(RepoType::Space)), "spaces--dalle-mini--dalle-mini");
+        assert_eq!(repo_folder_name("dalle-mini/dalle-mini", "spaces"), "spaces--dalle-mini--dalle-mini");
     }
 
     #[test]
@@ -496,17 +493,17 @@ mod tests {
 
     #[test]
     fn test_parse_repo_folder_name_model() {
-        assert_eq!(parse_repo_folder_name("models--gpt2"), Some((RepoType::Model, "gpt2".to_string())));
+        assert_eq!(parse_repo_folder_name("models--gpt2"), Some(("model", "gpt2".to_string())));
     }
 
     #[test]
     fn test_parse_repo_folder_name_model_with_org() {
-        assert_eq!(parse_repo_folder_name("models--google--bert"), Some((RepoType::Model, "google/bert".to_string())));
+        assert_eq!(parse_repo_folder_name("models--google--bert"), Some(("model", "google/bert".to_string())));
     }
 
     #[test]
     fn test_parse_repo_folder_name_dataset() {
-        assert_eq!(parse_repo_folder_name("datasets--squad"), Some((RepoType::Dataset, "squad".to_string())));
+        assert_eq!(parse_repo_folder_name("datasets--squad"), Some(("dataset", "squad".to_string())));
     }
 
     #[test]
@@ -552,7 +549,7 @@ mod tests {
         let result = scan_cache_dir(cache).await.unwrap();
         assert_eq!(result.repos.len(), 1);
         assert_eq!(result.repos[0].repo_id, "gpt2");
-        assert_eq!(result.repos[0].repo_type, RepoType::Model);
+        assert_eq!(result.repos[0].repo_type, "model");
         assert_eq!(result.repos[0].revisions.len(), 1);
         assert_eq!(result.repos[0].revisions[0].refs, vec!["main"]);
         assert_eq!(result.repos[0].revisions[0].files.len(), 1);

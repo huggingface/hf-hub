@@ -17,8 +17,8 @@ use futures::stream::{Stream, StreamExt};
 use serde::Deserialize;
 use url::Url;
 
-use super::HFRepository;
 use super::diff::{self, HFFileDiff};
+use super::{HFRepository, RepoType};
 use crate::error::HFResult;
 use crate::{constants, retry};
 
@@ -111,7 +111,7 @@ pub struct DiffEntry {
 }
 
 #[bon]
-impl HFRepository {
+impl<T: RepoType> HFRepository<T> {
     /// Stream commit history for the repository at a given revision.
     ///
     /// Returns `HFResult<impl Stream<Item = HFResult<GitCommitInfo>>>`. Pagination is automatic.
@@ -130,8 +130,7 @@ impl HFRepository {
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<GitCommitInfo>> + '_> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url_str =
-            format!("{}/commits/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
+        let url_str = format!("{}/commits/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), revision);
         let url = Url::parse(&url_str)?;
         Ok(self.hf_client.paginate(url, vec![], limit))
     }
@@ -150,7 +149,7 @@ impl HFRepository {
         #[builder(default)]
         include_pull_requests: bool,
     ) -> HFResult<GitRefs> {
-        let url = format!("{}/refs", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()));
+        let url = format!("{}/refs", self.hf_client.api_url(T::plural(), &self.repo_path()));
         let mut query: Vec<(&str, String)> = Vec::new();
         if include_pull_requests {
             query.push(("include_prs", "1".into()));
@@ -201,7 +200,7 @@ impl HFRepository {
         #[builder(into)]
         compare: String,
     ) -> HFResult<String> {
-        let url = format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), compare);
+        let url = format!("{}/compare/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), compare);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -242,7 +241,7 @@ impl HFRepository {
         #[builder(into)]
         compare: String,
     ) -> HFResult<String> {
-        let url = format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), compare);
+        let url = format!("{}/compare/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), compare);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -287,7 +286,7 @@ impl HFRepository {
         #[builder(into)]
         compare: String,
     ) -> HFResult<impl Stream<Item = HFResult<HFFileDiff>> + '_> {
-        let url = format!("{}/compare/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), compare);
+        let url = format!("{}/compare/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), compare);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -327,7 +326,7 @@ impl HFRepository {
         #[builder(into)]
         revision: Option<String>,
     ) -> HFResult<()> {
-        let url = format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), branch);
+        let url = format!("{}/branch/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), branch);
 
         let mut body = serde_json::Map::new();
         if let Some(ref rev) = revision {
@@ -366,7 +365,7 @@ impl HFRepository {
         #[builder(into)]
         branch: String,
     ) -> HFResult<()> {
-        let url = format!("{}/branch/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), branch);
+        let url = format!("{}/branch/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), branch);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -404,7 +403,7 @@ impl HFRepository {
         message: Option<String>,
     ) -> HFResult<()> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!("{}/tag/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
+        let url = format!("{}/tag/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), revision);
 
         let mut body = serde_json::json!({ "tag": tag });
         if let Some(ref m) = message {
@@ -443,7 +442,7 @@ impl HFRepository {
         #[builder(into)]
         tag: String,
     ) -> HFResult<()> {
-        let url = format!("{}/tag/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), tag);
+        let url = format!("{}/tag/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), tag);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -461,7 +460,7 @@ impl HFRepository {
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
+impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::list_commits`]. Collects the stream into a
     /// `Vec<GitCommitInfo>`.
     #[builder(finish_fn = send, derive(Debug, Clone))]

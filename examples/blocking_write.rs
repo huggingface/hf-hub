@@ -5,8 +5,8 @@
 //! Requires HF_TOKEN environment variable.
 //! Run: cargo run -p examples --features blocking --example blocking_write
 
-use hf_hub::HFClientSync;
 use hf_hub::repository::{AddSource, CommitOperation, RepoTreeEntry};
+use hf_hub::{HFClientSync, RepoTypeModel};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
@@ -17,7 +17,7 @@ fn main() -> hf_hub::HFResult<()> {
     // --- Create repo ---
 
     let repo_url = client
-        .create_repo()
+        .create_repo::<RepoTypeModel>()
         .repo_id(repo.repo_path())
         .private(true)
         .exist_ok(true)
@@ -106,7 +106,11 @@ fn main() -> hf_hub::HFResult<()> {
 
     // --- Clean up ---
 
-    client.delete_repo().repo_id(repo.repo_path()).missing_ok(true).send()?;
+    client
+        .delete_repo::<RepoTypeModel>()
+        .repo_id(repo.repo_path())
+        .missing_ok(true)
+        .send()?;
     println!("Deleted repo");
 
     Ok(())

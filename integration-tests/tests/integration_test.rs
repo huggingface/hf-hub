@@ -18,7 +18,7 @@
 
 use futures::StreamExt;
 use hf_hub::repository::*;
-use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoType};
+use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoTypeDataset, RepoTypeModel, RepoTypeSpace};
 use integration_tests::test_utils::*;
 
 fn api() -> Option<HFClient> {
@@ -72,17 +72,34 @@ async fn cached_username() -> &'static str {
         .await
 }
 
-/// Create an HFRepository handle from a full `owner/name` repo_id string.
-fn repo(client: &HFClient, repo_id: &str) -> HFRepository {
+/// Create an HFRepository<RepoTypeModel> handle from a full `owner/name` repo_id string.
+fn repo(client: &HFClient, repo_id: &str) -> HFRepository<RepoTypeModel> {
+    let (owner, name) = split_id(repo_id);
+    client.model(owner, name)
+}
+
+/// Create an HFRepository<RepoTypeDataset> handle from a full `owner/name` repo_id string.
+fn dataset_repo(client: &HFClient, repo_id: &str) -> HFRepository<RepoTypeDataset> {
+    let (owner, name) = split_id(repo_id);
+    client.dataset(owner, name)
+}
+
+/// Create an HFRepository<RepoTypeSpace> handle from a full `owner/name` repo_id string.
+fn space_repo(client: &HFClient, repo_id: &str) -> HFRepository<RepoTypeSpace> {
+    let (owner, name) = split_id(repo_id);
+    client.space(owner, name)
+}
+
+fn split_id(repo_id: &str) -> (&str, &str) {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
     if parts.len() == 2 {
-        client.model(parts[0], parts[1])
+        (parts[0], parts[1])
     } else {
-        client.model("", repo_id)
+        ("", repo_id)
     }
 }
 
-async fn collect_file_paths(test_repo: &HFRepository) -> std::collections::HashSet<String> {
+async fn collect_file_paths<T: RepoType>(test_repo: &HFRepository<T>) -> std::collections::HashSet<String> {
     let stream = test_repo.list_tree().recursive(true).send().unwrap();
     futures::pin_mut!(stream);
     let mut files = std::collections::HashSet::new();
@@ -94,26 +111,12 @@ async fn collect_file_paths(test_repo: &HFRepository) -> std::collections::HashS
     files
 }
 
-/// Create an HFRepository handle with a specific repo type.
-fn repo_typed(client: &HFClient, repo_id: &str, repo_type: RepoType) -> HFRepository {
-    let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    let (owner, name) = if parts.len() == 2 {
-        (parts[0], parts[1])
-    } else {
-        ("", repo_id)
-    };
-    client.repo(repo_type, owner, name)
-}
-
 #[tokio::test]
 async fn test_model_info() {
     let Some(client) = prod_api() else { return };
     let model_repo = TEST_MODEL_REPO;
     let info = repo(&client, model_repo).info().send().await.unwrap();
-    match info {
-        RepoInfo::Model(model) => assert!(model.id.contains("tiny-gemma3")),
-        _ => panic!("expected model info"),
-    }
+    assert!(info.id.contains("tiny-gemma3"));
 }
 
 #[tokio::test]
@@ -123,10 +126,7 @@ async fn test_repo_handle_info_and_file_exists() {
     let repo = repo(&client, model_repo);
 
     let info = repo.info().send().await.unwrap();
-    match info {
-        RepoInfo::Model(model) => assert_eq!(model.id, model_repo),
-        _ => panic!("expected model info"),
-    }
+    assert_eq!(info.id, model_repo);
 
     let exists = repo.file_exists().filename("config.json").send().await.unwrap();
     assert!(exists);
@@ -135,16 +135,9 @@ async fn test_repo_handle_info_and_file_exists() {
 #[tokio::test]
 async fn test_dataset_info() {
     let Some(client) = prod_api() else { return };
-    let dataset_repo = TEST_DATASET_REPO;
-    let info = repo_typed(&client, dataset_repo, RepoType::Dataset)
-        .info()
-        .send()
-        .await
-        .unwrap();
-    match info {
-        RepoInfo::Dataset(ds) => assert_eq!(ds.id, dataset_repo),
-        _ => panic!("expected dataset info"),
-    }
+    let id = TEST_DATASET_REPO;
+    let info = dataset_repo(&client, id).info().send().await.unwrap();
+    assert_eq!(info.id, id);
 }
 
 #[tokio::test]
@@ -463,12 +456,9 @@ async fn test_list_organization_members() {
 #[tokio::test]
 async fn test_space_info() {
     let Some(client) = prod_api() else { return };
-    let space_repo = TEST_SPACE_INFO_REPO;
-    let info = repo_typed(&client, space_repo, RepoType::Space).info().send().await.unwrap();
-    match info {
-        RepoInfo::Space(space) => assert_eq!(space.id, space_repo),
-        _ => panic!("expected space info"),
-    }
+    let id = TEST_SPACE_INFO_REPO;
+    let info = space_repo(&client, id).info().send().await.unwrap();
+    assert_eq!(info.id, id);
 }
 
 #[tokio::test]
@@ -744,7 +734,7 @@ async fn test_diff_against_empty_tree_all_additions() {
     ];
 
     for (repo_id, revision) in &test_cases {
-        let dataset = repo_typed(&client, repo_id, RepoType::Dataset);
+        let dataset = dataset_repo(&client, repo_id);
         let stream = dataset
             .get_raw_diff_stream()
             .compare(format!("{GIT_EMPTY_TREE_HASH}..{revision}"))
@@ -794,7 +784,7 @@ async fn test_create_and_delete_repo() {
 
     // Create
     let url = client
-        .create_repo()
+        .create_repo::<RepoTypeModel>()
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(true)
@@ -819,7 +809,7 @@ async fn test_create_and_delete_repo() {
     assert!(test_repo.file_exists().filename("test.txt").send().await.unwrap());
 
     // Delete repo
-    client.delete_repo().repo_id(&repo_id).send().await.unwrap();
+    client.delete_repo::<RepoTypeModel>().repo_id(&repo_id).send().await.unwrap();
 }
 
 fn uuid_v4_short() -> String {
@@ -830,7 +820,7 @@ async fn create_test_repo(client: &HFClient) -> String {
     let username = cached_username().await;
     let repo_id = format!("{}/hf-hub-test-{}", username, uuid_v4_short());
     client
-        .create_repo()
+        .create_repo::<RepoTypeModel>()
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(false)
@@ -852,7 +842,7 @@ async fn create_test_repo(client: &HFClient) -> String {
 }
 
 async fn delete_test_repo(client: &HFClient, repo_id: &str) {
-    let _ = client.delete_repo().repo_id(repo_id).send().await;
+    let _ = client.delete_repo::<RepoTypeModel>().repo_id(repo_id).send().await;
 }
 
 #[tokio::test]
@@ -1122,10 +1112,16 @@ async fn test_move_repo() {
     let original_name = format!("{}/hf-hub-move-src-{}", username, uuid_v4_short());
     let new_name = format!("{}/hf-hub-move-dst-{}", username, uuid_v4_short());
 
-    client.create_repo().repo_id(&original_name).private(true).send().await.unwrap();
+    client
+        .create_repo::<RepoTypeModel>()
+        .repo_id(&original_name)
+        .private(true)
+        .send()
+        .await
+        .unwrap();
 
     client
-        .move_repo()
+        .move_repo::<RepoTypeModel>()
         .from_id(&original_name)
         .to_id(&new_name)
         .send()
@@ -1134,7 +1130,7 @@ async fn test_move_repo() {
 
     assert!(repo(&client, &new_name).exists().send().await.unwrap());
 
-    client.delete_repo().repo_id(&new_name).send().await.unwrap();
+    client.delete_repo::<RepoTypeModel>().repo_id(&new_name).send().await.unwrap();
 }
 
 // =============================================================================
@@ -1161,9 +1157,8 @@ async fn test_duplicate_space() {
     // Create a minimal source space to duplicate.
     let source_id = format!("{}/hub-rust-test-dup-src-{}", username, uuid_v4_short());
     client
-        .create_repo()
+        .create_repo::<RepoTypeSpace>()
         .repo_id(&source_id)
-        .repo_type(RepoType::Space)
         .private(true)
         .space_sdk("static")
         .send()
@@ -1184,8 +1179,8 @@ async fn test_duplicate_space() {
     assert!(result.url.contains(&to_id));
 
     // Clean up both spaces.
-    let _ = client.delete_repo().repo_id(&to_id).repo_type(RepoType::Space).send().await;
-    let _ = client.delete_repo().repo_id(&source_id).repo_type(RepoType::Space).send().await;
+    let _ = client.delete_repo::<RepoTypeSpace>().repo_id(&to_id).send().await;
+    let _ = client.delete_repo::<RepoTypeSpace>().repo_id(&source_id).send().await;
 }
 
 #[tokio::test]
@@ -1197,9 +1192,8 @@ async fn test_space_secrets_and_variables() {
     let username = cached_username().await;
     let space = client.space(username, format!("hub-rust-test-space-{}", uuid_v4_short()));
     client
-        .create_repo()
+        .create_repo::<RepoTypeSpace>()
         .repo_id(space.repo_path())
-        .repo_type(RepoType::Space)
         .private(true)
         .space_sdk("static")
         .send()
@@ -1220,10 +1214,5 @@ async fn test_space_secrets_and_variables() {
 
     space.delete_variable().key("TEST_VAR").send().await.unwrap();
 
-    let _ = client
-        .delete_repo()
-        .repo_id(space.repo_path())
-        .repo_type(RepoType::Space)
-        .send()
-        .await;
+    let _ = client.delete_repo::<RepoTypeSpace>().repo_id(space.repo_path()).send().await;
 }

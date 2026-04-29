@@ -1,9 +1,11 @@
 //! Repository handles, metadata types, and list/create/delete/move APIs.
 //!
 //! Start from [`crate::HFClient`] — [`crate::HFClient::model`], [`crate::HFClient::dataset`],
-//! [`crate::HFClient::space`], and [`crate::HFClient::repo`] return a repo handle ([`HFRepository`]
-//! or [`crate::HFSpace`], which derefs to [`HFRepository`]). All read/write file and revision APIs
-//! hang off that value.
+//! [`crate::HFClient::space`], and [`crate::HFClient::kernel`] return a typed
+//! [`HFRepository<T>`](HFRepository) for the corresponding repo kind. All read/write
+//! file and revision APIs hang off that value; methods that differ per repo kind (such
+//! as [`info`](HFRepository::info)) are resolved at compile time via the [`RepoType`]
+//! type parameter.
 //!
 //! Submodule pages group related builders and types:
 //!
@@ -22,9 +24,11 @@ pub mod diff;
 pub mod download;
 pub mod files;
 pub mod listing;
+pub mod repo_type;
 pub mod upload;
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::str::FromStr;
 
 use bon::bon;
@@ -36,6 +40,7 @@ pub use files::{
 };
 pub(crate) use files::{extract_file_size, extract_xet_hash};
 use futures::Stream;
+pub use repo_type::{RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
 use url::Url;
@@ -43,20 +48,6 @@ use url::Url;
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
-
-/// The kind of repository on the Hugging Face Hub.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RepoType {
-    /// A model repository.
-    Model,
-    /// A dataset repository.
-    Dataset,
-    /// A Space (interactive app) repository.
-    Space,
-    /// A kernel repository.
-    Kernel,
-}
 
 /// Access-gating mode for a repository.
 ///
@@ -108,23 +99,6 @@ impl GatedNotifications {
         self.email = Some(email.into());
         self
     }
-}
-
-/// Repo-type-tagged wrapper over [`ModelInfo`], [`DatasetInfo`], and [`SpaceInfo`].
-///
-/// Returned by [`HFRepository::info`]; the active variant
-/// matches the repository's [`RepoType`].
-#[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
-pub enum RepoInfo {
-    /// Info for a model repository.
-    Model(ModelInfo),
-    /// Info for a dataset repository.
-    Dataset(DatasetInfo),
-    /// Info for a Space repository.
-    Space(SpaceInfo),
-    /// Info for a kernel repository.
-    Kernel(KernelInfo),
 }
 
 /// A single file entry in a repository's flat "siblings" listing, as returned by the repo info endpoint.
@@ -479,7 +453,7 @@ pub struct SpaceInfo {
     /// Runtime state of the Space (stage, hardware, sleep time, volumes, etc.).
     ///
     /// Populated when the repo info request expands the `runtime` field. The same shape is also
-    /// returned by [`HFSpace::runtime`](crate::HFSpace::runtime).
+    /// returned by [`HFRepository::<RepoTypeSpace>::runtime`](HFRepository::runtime).
     pub runtime: Option<crate::spaces::SpaceRuntime>,
     /// Datasets used by the Space, declared in the Space card.
     pub datasets: Option<Vec<String>>,
@@ -540,11 +514,15 @@ pub struct RepoUrl {
     pub url: String,
 }
 
-/// A handle for a single repository on the Hugging Face Hub.
+/// A handle for a single repository on the Hugging Face Hub, parameterised by the
+/// repo kind via the type-level marker `T`.
 ///
-/// `HFRepository` is created via [`HFClient::repo`], [`HFClient::model`], or
-/// [`HFClient::dataset`] and binds together the client, owner, repo name, and repo type.
-/// All repo-scoped API operations are methods on this type.
+/// `HFRepository<T>` is created via the typed factories on [`HFClient`] —
+/// [`HFClient::model`], [`HFClient::dataset`], [`HFClient::space`], or
+/// [`HFClient::kernel`] — and binds together the client, owner, and repo name. The
+/// repo kind lives in the type system rather than in a runtime field, so methods
+/// that differ per repo kind (such as [`info`](HFRepository::info)) are dispatched
+/// at compile time and mismatches are impossible by construction.
 ///
 /// Cheap to clone — the inner [`HFClient`] is `Arc`-backed.
 ///
@@ -558,37 +536,20 @@ pub struct RepoUrl {
 /// let info = repo.info().send().await?;
 /// # Ok(()) }
 /// ```
-#[derive(Clone)]
-pub struct HFRepository {
+pub struct HFRepository<T: RepoType> {
     pub(crate) hf_client: HFClient,
     pub(super) owner: String,
     pub(super) name: String,
-    pub(crate) repo_type: RepoType,
+    _ty: PhantomData<fn() -> T>,
 }
 
-impl std::fmt::Display for RepoType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RepoType::Model => write!(f, "model"),
-            RepoType::Dataset => write!(f, "dataset"),
-            RepoType::Space => write!(f, "space"),
-            RepoType::Kernel => write!(f, "kernel"),
-        }
-    }
-}
-
-impl FromStr for RepoType {
-    type Err = HFError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "model" => Ok(RepoType::Model),
-            "dataset" => Ok(RepoType::Dataset),
-            "space" => Ok(RepoType::Space),
-            "kernel" => Ok(RepoType::Kernel),
-            _ => Err(HFError::InvalidParameter(format!(
-                "unknown repo type: {s:?}. Expected 'model', 'dataset', 'space', or 'kernel'"
-            ))),
+impl<T: RepoType> Clone for HFRepository<T> {
+    fn clone(&self) -> Self {
+        Self {
+            hf_client: self.hf_client.clone(),
+            owner: self.owner.clone(),
+            name: self.name.clone(),
+            _ty: PhantomData,
         }
     }
 }
@@ -635,97 +596,57 @@ impl FromStr for GatedNotificationsMode {
     }
 }
 
-impl RepoInfo {
-    /// The [`RepoType`] of the active variant.
-    pub fn repo_type(&self) -> RepoType {
-        match self {
-            RepoInfo::Model(_) => RepoType::Model,
-            RepoInfo::Dataset(_) => RepoType::Dataset,
-            RepoInfo::Space(_) => RepoType::Space,
-            RepoInfo::Kernel(_) => RepoType::Kernel,
-        }
-    }
-
-    /// Consume `self` and return the [`ModelInfo`] when this is a model repo.
-    ///
-    /// Useful when the caller already knows the repo type at compile time —
-    /// e.g. after `client.model(...)` — and wants to avoid a `match` on
-    /// [`RepoInfo`]. On a mismatch returns [`HFError::Other`] naming the
-    /// variant that was found instead.
-    pub fn into_model_info(self) -> HFResult<ModelInfo> {
-        match self {
-            RepoInfo::Model(info) => Ok(info),
-            other => Err(HFError::Other(format!("expected RepoInfo::Model, got RepoInfo::{:?}", other.repo_type()))),
-        }
-    }
-
-    /// Consume `self` and return the [`DatasetInfo`] when this is a dataset repo.
-    ///
-    /// Useful when the caller already knows the repo type at compile time —
-    /// e.g. after `client.dataset(...)` — and wants to avoid a `match` on
-    /// [`RepoInfo`]. On a mismatch returns [`HFError::Other`] naming the
-    /// variant that was found instead.
-    pub fn into_dataset_info(self) -> HFResult<DatasetInfo> {
-        match self {
-            RepoInfo::Dataset(info) => Ok(info),
-            other => Err(HFError::Other(format!("expected RepoInfo::Dataset, got RepoInfo::{:?}", other.repo_type()))),
-        }
-    }
-
-    /// Consume `self` and return the [`SpaceInfo`] when this is a Space repo.
-    ///
-    /// Useful when the caller already knows the repo type at compile time —
-    /// e.g. after `client.space(...)` — and wants to avoid a `match` on
-    /// [`RepoInfo`]. On a mismatch returns [`HFError::Other`] naming the
-    /// variant that was found instead.
-    pub fn into_space_info(self) -> HFResult<SpaceInfo> {
-        match self {
-            RepoInfo::Space(info) => Ok(info),
-            other => Err(HFError::Other(format!("expected RepoInfo::Space, got RepoInfo::{:?}", other.repo_type()))),
-        }
-    }
-
-    /// Consume `self` and return the [`KernelInfo`] when this is a kernel repo.
-    ///
-    /// Useful when the caller already knows the repo type at compile time —
-    /// e.g. after `client.repo(RepoType::Kernel, ...)` — and wants to avoid a
-    /// `match` on [`RepoInfo`]. On a mismatch returns [`HFError::Other`]
-    /// naming the variant that was found instead.
-    pub fn into_kernel_info(self) -> HFResult<KernelInfo> {
-        match self {
-            RepoInfo::Kernel(info) => Ok(info),
-            other => Err(HFError::Other(format!("expected RepoInfo::Kernel, got RepoInfo::{:?}", other.repo_type()))),
-        }
-    }
-}
-
-impl std::fmt::Debug for HFRepository {
+impl<T: RepoType> std::fmt::Debug for HFRepository<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HFRepository")
             .field("owner", &self.owner)
             .field("name", &self.name)
-            .field("repo_type", &self.repo_type)
+            .field("repo_type", &T::singular())
             .finish()
+    }
+}
+
+impl HFClient {
+    /// Create an [`HFRepository`] handle for any repo kind via a turbofished generic.
+    ///
+    /// Equivalent to the typed shortcuts ([`model`](Self::model), [`dataset`](Self::dataset),
+    /// [`space`](Self::space), [`kernel`](Self::kernel)) but useful when the kind is
+    /// expressed by an external type parameter or a `match` arm — for example, dispatching
+    /// from a CLI flag:
+    ///
+    /// ```rust,no_run
+    /// # use hf_hub::{HFClient, RepoTypeDataset};
+    /// # let client = HFClient::builder().build().unwrap();
+    /// let repo = client.repository::<RepoTypeDataset>("rajpurkar", "squad");
+    /// # let _ = repo;
+    /// ```
+    pub fn repository<T: RepoType>(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<T> {
+        HFRepository::new(self.clone(), owner, name)
+    }
+
+    /// Create an [`HFRepository`] handle for a model repository.
+    pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<RepoTypeModel> {
+        self.repository::<RepoTypeModel>(owner, name)
+    }
+
+    /// Create an [`HFRepository`] handle for a dataset repository.
+    pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<RepoTypeDataset> {
+        self.repository::<RepoTypeDataset>(owner, name)
+    }
+
+    /// Create an [`HFRepository`] handle for a Space repository.
+    pub fn space(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<RepoTypeSpace> {
+        self.repository::<RepoTypeSpace>(owner, name)
+    }
+
+    /// Create an [`HFRepository`] handle for a kernel repository.
+    pub fn kernel(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<RepoTypeKernel> {
+        self.repository::<RepoTypeKernel>(owner, name)
     }
 }
 
 #[bon]
 impl HFClient {
-    /// Create an [`HFRepository`] handle for any repo type.
-    pub fn repo(&self, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> HFRepository {
-        HFRepository::new(self.clone(), repo_type, owner, name)
-    }
-
-    /// Create an [`HFRepository`] handle for a model repository.
-    pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository {
-        self.repo(RepoType::Model, owner, name)
-    }
-
-    /// Create an [`HFRepository`] handle for a dataset repository.
-    pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository {
-        self.repo(RepoType::Dataset, owner, name)
-    }
-
     /// List models on the Hub. Endpoint: `GET /api/models`.
     ///
     /// Returns a stream of [`ModelInfo`] entries. Pagination is automatic.
@@ -958,31 +879,32 @@ impl HFClient {
         Ok(self.paginate(url, query, limit))
     }
 
-    /// Create a new repository. Endpoint: `POST /api/repos/create`.
+    /// Create a new repository of kind `T`. Endpoint: `POST /api/repos/create`.
+    ///
+    /// `T` is the repo kind picked at the call site via turbofish — e.g.
+    /// `client.create_repo::<RepoTypeDataset>()...` to create a dataset. The body
+    /// always includes the `type` field, matching the Hub's per-kind defaults.
     ///
     /// # Parameters
     ///
     /// - `repo_id` (required): repository ID in `"owner/name"` or `"name"` format.
-    /// - `repo_type`: type of repository to create (model, dataset, space, kernel).
     /// - `private`: whether the repository should be private.
     /// - `exist_ok` (default `false`): if `true`, do not error when the repository already exists.
-    /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
-    ///   `Space`; ignored for other repo types.
+    /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `T` is
+    ///   [`RepoTypeSpace`]; ignored for other repo kinds.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn create_repo(
+    pub async fn create_repo<T: RepoType>(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
-        /// Type of repository to create (model, dataset, space, kernel).
-        repo_type: Option<RepoType>,
         /// Whether the repository should be private.
         private: Option<bool>,
         /// If `true`, do not error when the repository already exists.
         #[builder(default)]
         exist_ok: bool,
-        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is `Space`;
-        /// ignored for other repo types.
+        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `T` is
+        /// [`RepoTypeSpace`]; ignored for other repo kinds.
         #[builder(into)]
         space_sdk: Option<String>,
     ) -> HFResult<RepoUrl> {
@@ -993,13 +915,11 @@ impl HFClient {
         let mut body = serde_json::json!({
             "name": name,
             "private": private.unwrap_or(false),
+            "type": T::singular(),
         });
 
         if let Some(ns) = namespace {
             body["organization"] = serde_json::Value::String(ns.to_string());
-        }
-        if let Some(ref rt) = repo_type {
-            body["type"] = serde_json::Value::String(rt.to_string());
         }
         if let Some(ref sdk) = space_sdk {
             body["sdk"] = serde_json::Value::String(sdk.clone());
@@ -1012,9 +932,8 @@ impl HFClient {
         .await?;
 
         if response.status().as_u16() == 409 && exist_ok {
-            let prefix = constants::repo_type_url_prefix(repo_type);
             return Ok(RepoUrl {
-                url: format!("{}/{}{}", self.endpoint(), prefix, repo_id),
+                url: format!("{}/{}{}", self.endpoint(), T::url_prefix(), repo_id),
             });
         }
 
@@ -1024,21 +943,22 @@ impl HFClient {
         Ok(response.json().await?)
     }
 
-    /// Delete a repository. Endpoint: `DELETE /api/repos/delete`.
+    /// Delete a repository of kind `T`. Endpoint: `DELETE /api/repos/delete`.
+    ///
+    /// `T` is the repo kind picked at the call site via turbofish — e.g.
+    /// `client.delete_repo::<RepoTypeSpace>()...`. The body always includes
+    /// the `type` field.
     ///
     /// # Parameters
     ///
     /// - `repo_id` (required): repository ID in `"owner/name"` or `"name"` format.
-    /// - `repo_type`: type of repository.
     /// - `missing_ok` (default `false`): if `true`, do not error when the repository does not exist.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn delete_repo(
+    pub async fn delete_repo<T: RepoType>(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
-        /// Type of repository.
-        repo_type: Option<RepoType>,
         /// If `true`, do not error when the repository does not exist.
         #[builder(default)]
         missing_ok: bool,
@@ -1047,12 +967,12 @@ impl HFClient {
 
         let (namespace, name) = split_repo_id(&repo_id);
 
-        let mut body = serde_json::json!({ "name": name });
+        let mut body = serde_json::json!({
+            "name": name,
+            "type": T::singular(),
+        });
         if let Some(ns) = namespace {
             body["organization"] = serde_json::Value::String(ns.to_string());
-        }
-        if let Some(ref rt) = repo_type {
-            body["type"] = serde_json::Value::String(rt.to_string());
         }
 
         let headers = self.auth_headers();
@@ -1070,15 +990,18 @@ impl HFClient {
         Ok(())
     }
 
-    /// Move (rename) a repository. Endpoint: `POST /api/repos/move`.
+    /// Move (rename) a repository of kind `T`. Endpoint: `POST /api/repos/move`.
+    ///
+    /// `T` is the repo kind picked at the call site via turbofish — e.g.
+    /// `client.move_repo::<RepoTypeModel>()...`. The body always includes
+    /// the `type` field.
     ///
     /// # Parameters
     ///
     /// - `from_id` (required): current repository ID in `"owner/name"` format.
     /// - `to_id` (required): new repository ID in `"owner/name"` format.
-    /// - `repo_type`: type of repository to move.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn move_repo(
+    pub async fn move_repo<T: RepoType>(
         &self,
         /// Current repository ID in `"owner/name"` format.
         #[builder(into)]
@@ -1086,17 +1009,13 @@ impl HFClient {
         /// New repository ID in `"owner/name"` format.
         #[builder(into)]
         to_id: String,
-        /// Type of repository to move.
-        repo_type: Option<RepoType>,
     ) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/move", self.endpoint());
-        let mut body = serde_json::json!({
+        let body = serde_json::json!({
             "fromRepo": from_id,
             "toRepo": to_id,
+            "type": T::singular(),
         });
-        if let Some(ref rt) = repo_type {
-            body["type"] = serde_json::Value::String(rt.to_string());
-        }
 
         let headers = self.auth_headers();
         let response = retry::retry(self.retry_config(), || {
@@ -1106,21 +1025,20 @@ impl HFClient {
 
         self.check_response(response, None, crate::error::NotFoundContext::Generic)
             .await?;
-        let prefix = constants::repo_type_url_prefix(repo_type);
         Ok(RepoUrl {
-            url: format!("{}/{}{}", self.endpoint(), prefix, to_id),
+            url: format!("{}/{}{}", self.endpoint(), T::url_prefix(), to_id),
         })
     }
 }
 
-impl HFRepository {
+impl<T: RepoType> HFRepository<T> {
     /// Construct a new repository handle. Prefer the factory methods on [`HFClient`] instead.
-    pub fn new(client: HFClient, repo_type: RepoType, owner: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn new(client: HFClient, owner: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             hf_client: client,
             owner: owner.into(),
             name: name.into(),
-            repo_type,
+            _ty: PhantomData,
         }
     }
 
@@ -1150,19 +1068,22 @@ impl HFRepository {
         }
     }
 
-    /// The type of this repository (model, dataset, space, or kernel).
-    pub fn repo_type(&self) -> RepoType {
-        self.repo_type
+    /// Lowercase singular name of this repo's kind (`"model"`, `"dataset"`, `"space"`, or `"kernel"`).
+    ///
+    /// Equivalent to `T::singular()` for the type parameter on this handle. Useful for
+    /// logs and error messages without naming `T` explicitly.
+    pub fn repo_type(&self) -> &'static str {
+        T::singular()
     }
 
-    /// Fetch repo info for this repository's `repo_type`, deserializing into `T`.
-    /// Endpoint: GET /api/{repo_type}s/{repo_id}[/revision/{revision}]
-    async fn fetch_repo_info<T: DeserializeOwned>(
+    /// Fetch repo info for this repository's kind, deserializing into `I`.
+    /// Endpoint: `GET /api/{plural}/{repo_id}[/revision/{revision}]`.
+    pub(crate) async fn fetch_repo_info<I: DeserializeOwned>(
         &self,
         revision: Option<String>,
         expand: Option<Vec<String>>,
-    ) -> HFResult<T> {
-        let mut url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
+    ) -> HFResult<I> {
+        let mut url = self.hf_client.api_url(T::plural(), &self.repo_path());
         if let Some(ref revision) = revision {
             url = format!("{url}/revision/{revision}");
         }
@@ -1185,83 +1106,10 @@ impl HFRepository {
         let response = self.hf_client.check_response(response, Some(&repo_path), not_found_ctx).await?;
         Ok(response.json().await?)
     }
-
-    pub(crate) async fn model_info(
-        &self,
-        revision: Option<String>,
-        expand: Option<Vec<String>>,
-    ) -> HFResult<ModelInfo> {
-        self.fetch_repo_info(revision, expand).await
-    }
-
-    pub(crate) async fn dataset_info(
-        &self,
-        revision: Option<String>,
-        expand: Option<Vec<String>>,
-    ) -> HFResult<DatasetInfo> {
-        self.fetch_repo_info(revision, expand).await
-    }
-
-    pub(crate) async fn space_info(
-        &self,
-        revision: Option<String>,
-        expand: Option<Vec<String>>,
-    ) -> HFResult<SpaceInfo> {
-        self.fetch_repo_info(revision, expand).await
-    }
-
-    /// Fetch kernel-specific info from `/api/kernels/{repo_id}` (or
-    /// `/api/kernels/{repo_id}/revision/{revision}` when pinned).
-    ///
-    /// Note: the Hub silently ignores `expand` on this endpoint; the parameter
-    /// is plumbed through for symmetry but does not change the response shape.
-    pub(crate) async fn kernel_info(
-        &self,
-        revision: Option<String>,
-        expand: Option<Vec<String>>,
-    ) -> HFResult<KernelInfo> {
-        self.fetch_repo_info(revision, expand).await
-    }
 }
 
 #[bon]
-impl HFRepository {
-    /// Fetch repository metadata, returning the appropriate [`RepoInfo`] variant.
-    ///
-    /// When the caller statically knows the repo type — e.g. after `client.model(...)`,
-    /// `client.dataset(...)`, `client.space(...)`, or `client.repo(RepoType::Kernel, ...)` —
-    /// prefer the typed accessors [`RepoInfo::into_model`], [`RepoInfo::into_dataset`],
-    /// [`RepoInfo::into_space`], and [`RepoInfo::into_kernel`] over a manual `match` on the
-    /// returned enum.
-    ///
-    /// For [`RepoType::Kernel`], note that the Hub's `/api/kernels/{repo_id}` endpoint returns
-    /// a slim shape (no `tags`, `cardData`, or `siblings`) and silently ignores `expand`. To get
-    /// the full model-style metadata for a kernel, build a model handle for the same repo id
-    /// (`client.model(owner, name)`) and call `info()` on it.
-    ///
-    /// # Parameters
-    ///
-    /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-    /// - `expand`: list of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
-    ///   the listed properties (plus `_id` and `id`) are returned. Ignored for kernel repos.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn info(
-        &self,
-        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
-        /// the listed properties (plus `_id` and `id`) are returned. Ignored for kernel repos.
-        expand: Option<Vec<String>>,
-    ) -> HFResult<RepoInfo> {
-        match self.repo_type {
-            RepoType::Model => self.model_info(revision, expand).await.map(RepoInfo::Model),
-            RepoType::Dataset => self.dataset_info(revision, expand).await.map(RepoInfo::Dataset),
-            RepoType::Space => self.space_info(revision, expand).await.map(RepoInfo::Space),
-            RepoType::Kernel => self.kernel_info(revision, expand).await.map(RepoInfo::Kernel),
-        }
-    }
-
+impl<T: RepoType> HFRepository<T> {
     /// Return `true` if the repository exists.
     ///
     /// Returns `Ok(false)` only when the Hub responds with 404. If the repo exists but the current
@@ -1269,7 +1117,7 @@ impl HFRepository {
     /// ([`HFError::AuthRequired`] or [`HFError::Forbidden`]), not `Ok(false)`.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn exists(&self) -> HFResult<bool> {
-        let url = self.hf_client.api_url(Some(self.repo_type), &self.repo_path());
+        let url = self.hf_client.api_url(T::plural(), &self.repo_path());
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()
@@ -1300,7 +1148,7 @@ impl HFRepository {
         #[builder(into)]
         revision: String,
     ) -> HFResult<bool> {
-        let url = format!("{}/revision/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
+        let url = format!("{}/revision/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), revision);
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()
@@ -1334,7 +1182,7 @@ impl HFRepository {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = self
             .hf_client
-            .download_url(Some(self.repo_type), &self.repo_path(), revision, &filename);
+            .download_url(T::url_prefix(), &self.repo_path(), revision, &filename);
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().head(&url).headers(headers.clone()).send()
@@ -1359,7 +1207,7 @@ impl HFRepository {
     /// Update repository settings such as visibility, gating policy, description,
     /// discussion settings, and gated notification preferences.
     ///
-    /// Endpoint: `PUT /api/{repo_type}s/{repo_id}/settings`.
+    /// Endpoint: `PUT /api/{plural}/{repo_id}/settings`.
     ///
     /// # Parameters
     ///
@@ -1410,7 +1258,7 @@ impl HFRepository {
             gated_notifications_mode: gated_notifications.as_ref().map(|g| &g.mode),
         };
 
-        let url = format!("{}/settings", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()));
+        let url = format!("{}/settings", self.hf_client.api_url(T::plural(), &self.repo_path()));
         let headers = self.hf_client.auth_headers();
 
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -1428,6 +1276,110 @@ impl HFRepository {
             .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Repo)
             .await?;
         Ok(())
+    }
+}
+
+/// Documentation shared by the per-repo-kind `info` builders.
+macro_rules! info_method_doc {
+    () => {
+        "Fetch repository metadata for this repo kind, returning the concrete info struct.\n\n\
+        # Parameters\n\n\
+        - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.\n\
+        - `expand`: list of properties to expand in the response (e.g. `\"trendingScore\"`, `\"cardData\"`).\n  \
+          When set, only the listed properties (plus `_id` and `id`) are returned. Kernel info ignores this."
+    };
+}
+
+#[bon]
+impl HFRepository<RepoTypeModel> {
+    /// Fetch [`ModelInfo`] for this model repository.
+    #[doc = info_method_doc!()]
+    #[builder(
+        finish_fn = send,
+        builder_type = HFModelInfoBuilder,
+        state_mod(name = hf_model_info_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub async fn info(
+        &self,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`).
+        expand: Option<Vec<String>>,
+    ) -> HFResult<ModelInfo> {
+        self.fetch_repo_info(revision, expand).await
+    }
+}
+
+#[bon]
+impl HFRepository<RepoTypeDataset> {
+    /// Fetch [`DatasetInfo`] for this dataset repository.
+    #[doc = info_method_doc!()]
+    #[builder(
+        finish_fn = send,
+        builder_type = HFDatasetInfoBuilder,
+        state_mod(name = hf_dataset_info_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub async fn info(
+        &self,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`).
+        expand: Option<Vec<String>>,
+    ) -> HFResult<DatasetInfo> {
+        self.fetch_repo_info(revision, expand).await
+    }
+}
+
+#[bon]
+impl HFRepository<RepoTypeSpace> {
+    /// Fetch [`SpaceInfo`] for this Space repository.
+    #[doc = info_method_doc!()]
+    #[builder(
+        finish_fn = send,
+        builder_type = HFSpaceInfoBuilder,
+        state_mod(name = hf_space_info_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub async fn info(
+        &self,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`).
+        expand: Option<Vec<String>>,
+    ) -> HFResult<SpaceInfo> {
+        self.fetch_repo_info(revision, expand).await
+    }
+}
+
+#[bon]
+impl HFRepository<RepoTypeKernel> {
+    /// Fetch [`KernelInfo`] for this kernel repository.
+    ///
+    /// Note: the Hub's `/api/kernels/{repo_id}` endpoint returns a slim shape (no `tags`,
+    /// `cardData`, or `siblings`) and silently ignores `expand`. To get the full
+    /// model-style metadata for a kernel, build a model handle for the same repo id
+    /// (`client.model(owner, name)`) and call `info()` on it.
+    #[doc = info_method_doc!()]
+    #[builder(
+        finish_fn = send,
+        builder_type = HFKernelInfoBuilder,
+        state_mod(name = hf_kernel_info_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub async fn info(
+        &self,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response. Kernel info ignores this parameter.
+        expand: Option<Vec<String>>,
+    ) -> HFResult<KernelInfo> {
+        self.fetch_repo_info(revision, expand).await
     }
 }
 
@@ -1604,28 +1556,25 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::create_repo`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn create_repo(
+    pub fn create_repo<T: RepoType>(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
-        /// Type of repository to create (model, dataset, space, kernel).
-        repo_type: Option<RepoType>,
         /// Whether the repository should be private.
         private: Option<bool>,
         /// If `true`, do not error when the repository already exists.
         #[builder(default)]
         exist_ok: bool,
-        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is `Space`;
-        /// ignored for other repo types.
+        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `T` is
+        /// [`RepoTypeSpace`]; ignored for other repo kinds.
         #[builder(into)]
         space_sdk: Option<String>,
     ) -> HFResult<RepoUrl> {
         self.runtime.block_on(
             self.inner
-                .create_repo()
+                .create_repo::<T>()
                 .repo_id(repo_id)
-                .maybe_repo_type(repo_type)
                 .maybe_private(private)
                 .exist_ok(exist_ok)
                 .maybe_space_sdk(space_sdk)
@@ -1636,31 +1585,23 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::delete_repo`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_repo(
+    pub fn delete_repo<T: RepoType>(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
-        /// Type of repository.
-        repo_type: Option<RepoType>,
         /// If `true`, do not error when the repository does not exist.
         #[builder(default)]
         missing_ok: bool,
     ) -> HFResult<()> {
-        self.runtime.block_on(
-            self.inner
-                .delete_repo()
-                .repo_id(repo_id)
-                .maybe_repo_type(repo_type)
-                .missing_ok(missing_ok)
-                .send(),
-        )
+        self.runtime
+            .block_on(self.inner.delete_repo::<T>().repo_id(repo_id).missing_ok(missing_ok).send())
     }
 
     /// Blocking counterpart of [`HFClient::move_repo`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn move_repo(
+    pub fn move_repo<T: RepoType>(
         &self,
         /// Current repository ID in `"owner/name"` format.
         #[builder(into)]
@@ -1668,39 +1609,15 @@ impl crate::blocking::HFClientSync {
         /// New repository ID in `"owner/name"` format.
         #[builder(into)]
         to_id: String,
-        /// Type of repository to move.
-        repo_type: Option<RepoType>,
     ) -> HFResult<RepoUrl> {
-        self.runtime.block_on(
-            self.inner
-                .move_repo()
-                .from_id(from_id)
-                .to_id(to_id)
-                .maybe_repo_type(repo_type)
-                .send(),
-        )
+        self.runtime
+            .block_on(self.inner.move_repo::<T>().from_id(from_id).to_id(to_id).send())
     }
 }
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
-    /// Blocking counterpart of [`HFRepository::info`]. See the async method for parameters and
-    /// behavior.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn info(
-        &self,
-        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
-        /// the listed properties (plus `_id` and `id`) are returned.
-        expand: Option<Vec<String>>,
-    ) -> HFResult<RepoInfo> {
-        self.runtime
-            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
-    }
-
+impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::exists`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn exists(&self) -> HFResult<bool> {
@@ -1765,44 +1682,128 @@ impl crate::blocking::HFRepositorySync {
     }
 }
 
+/// Sync `info()` builders for each repo kind.
+///
+/// Each block mirrors the async per-kind `info()` impl in shape and forwards through the
+/// runtime. Builder type names are unique to keep the bon-generated state types from
+/// colliding across the four impl blocks.
+
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFRepositorySync<RepoTypeModel> {
+    /// Blocking counterpart of [`HFRepository::<RepoTypeModel>::info`].
+    #[builder(
+        finish_fn = send,
+        builder_type = HFModelInfoSyncBuilder,
+        state_mod(name = hf_model_info_sync_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub fn info(&self, #[builder(into)] revision: Option<String>, expand: Option<Vec<String>>) -> HFResult<ModelInfo> {
+        self.runtime
+            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
+    }
+}
+
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFRepositorySync<RepoTypeDataset> {
+    /// Blocking counterpart of [`HFRepository::<RepoTypeDataset>::info`].
+    #[builder(
+        finish_fn = send,
+        builder_type = HFDatasetInfoSyncBuilder,
+        state_mod(name = hf_dataset_info_sync_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub fn info(
+        &self,
+        #[builder(into)] revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> HFResult<DatasetInfo> {
+        self.runtime
+            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
+    }
+}
+
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
+    /// Blocking counterpart of [`HFRepository::<RepoTypeSpace>::info`].
+    #[builder(
+        finish_fn = send,
+        builder_type = HFSpaceInfoSyncBuilder,
+        state_mod(name = hf_space_info_sync_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub fn info(&self, #[builder(into)] revision: Option<String>, expand: Option<Vec<String>>) -> HFResult<SpaceInfo> {
+        self.runtime
+            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
+    }
+}
+
+#[cfg(feature = "blocking")]
+#[bon]
+impl crate::blocking::HFRepositorySync<RepoTypeKernel> {
+    /// Blocking counterpart of [`HFRepository::<RepoTypeKernel>::info`].
+    #[builder(
+        finish_fn = send,
+        builder_type = HFKernelInfoSyncBuilder,
+        state_mod(name = hf_kernel_info_sync_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub fn info(&self, #[builder(into)] revision: Option<String>, expand: Option<Vec<String>>) -> HFResult<KernelInfo> {
+        self.runtime
+            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use futures::StreamExt;
 
     use super::{
         DatasetInfo, EvalResultEntry, HFRepository, InferenceProviderMapping, KernelInfo, ModelInfo, RepoType,
-        SafeTensorsInfo, SpaceInfo, TransformersInfo, split_repo_id,
+        RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace, SafeTensorsInfo, SpaceInfo, TransformersInfo,
+        split_repo_id,
     };
     use crate::client::HFClient;
 
     #[test]
     fn test_repo_path_and_accessors() {
         let client = HFClient::builder().build().unwrap();
-        let repo = HFRepository::new(client, RepoType::Model, "openai-community", "gpt2");
+        let repo: HFRepository<RepoTypeModel> = HFRepository::new(client, "openai-community", "gpt2");
 
         assert_eq!(repo.owner(), "openai-community");
         assert_eq!(repo.name(), "gpt2");
         assert_eq!(repo.repo_path(), "openai-community/gpt2");
-        assert_eq!(repo.repo_type(), RepoType::Model);
+        assert_eq!(repo.repo_type(), "model");
     }
 
     #[test]
-    fn test_repo_type_from_str() {
-        assert_eq!("model".parse::<RepoType>().unwrap(), RepoType::Model);
-        assert_eq!("dataset".parse::<RepoType>().unwrap(), RepoType::Dataset);
-        assert_eq!("space".parse::<RepoType>().unwrap(), RepoType::Space);
-        assert_eq!("kernel".parse::<RepoType>().unwrap(), RepoType::Kernel);
-        assert_eq!("MODEL".parse::<RepoType>().unwrap(), RepoType::Model);
-        assert_eq!("KERNEL".parse::<RepoType>().unwrap(), RepoType::Kernel);
-        assert!("invalid".parse::<RepoType>().is_err());
+    fn test_marker_struct_singular_and_plural() {
+        assert_eq!(RepoTypeModel::singular(), "model");
+        assert_eq!(RepoTypeDataset::singular(), "dataset");
+        assert_eq!(RepoTypeSpace::singular(), "space");
+        assert_eq!(RepoTypeKernel::singular(), "kernel");
+        assert_eq!(RepoTypeModel::plural(), "models");
+        assert_eq!(RepoTypeDataset::plural(), "datasets");
+        assert_eq!(RepoTypeSpace::plural(), "spaces");
+        assert_eq!(RepoTypeKernel::plural(), "kernels");
     }
 
     #[test]
-    fn test_repo_type_display() {
-        assert_eq!(RepoType::Model.to_string(), "model");
-        assert_eq!(RepoType::Dataset.to_string(), "dataset");
-        assert_eq!(RepoType::Space.to_string(), "space");
-        assert_eq!(RepoType::Kernel.to_string(), "kernel");
+    fn test_marker_struct_url_prefix() {
+        assert_eq!(RepoTypeModel::url_prefix(), "");
+        assert_eq!(RepoTypeDataset::url_prefix(), "datasets/");
+        assert_eq!(RepoTypeSpace::url_prefix(), "spaces/");
+        assert_eq!(RepoTypeKernel::url_prefix(), "kernels/");
+    }
+
+    #[test]
+    fn test_marker_struct_display() {
+        assert_eq!(format!("{}", RepoTypeModel), "model");
+        assert_eq!(format!("{}", RepoTypeDataset), "dataset");
+        assert_eq!(format!("{}", RepoTypeSpace), "space");
+        assert_eq!(format!("{}", RepoTypeKernel), "kernel");
     }
 
     #[test]
