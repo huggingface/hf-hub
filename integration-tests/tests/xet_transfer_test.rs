@@ -115,7 +115,7 @@ async fn test_upload_small_text_file_roundtrip() {
     let data = b"Hello from the xet transfer test!".to_vec();
     let commit = repo
         .upload_file()
-        .source(AddSource::Bytes(data.clone()))
+        .source(AddSource::bytes(data.clone()))
         .path_in_repo("greeting.txt")
         .commit_message("upload small text file")
         .send()
@@ -148,7 +148,7 @@ async fn test_upload_empty_file() {
     let repo = repo_handle(&client, &owner, &name);
 
     repo.upload_file()
-        .source(AddSource::Bytes(vec![]))
+        .source(AddSource::bytes(vec![]))
         .path_in_repo("empty.bin")
         .commit_message("upload empty file")
         .send()
@@ -180,7 +180,7 @@ async fn test_upload_then_overwrite_same_path() {
     let repo = repo_handle(&client, &owner, &name);
 
     repo.upload_file()
-        .source(AddSource::Bytes(b"version 1".to_vec()))
+        .source(AddSource::bytes(b"version 1"))
         .path_in_repo("versioned.txt")
         .commit_message("v1")
         .send()
@@ -188,7 +188,7 @@ async fn test_upload_then_overwrite_same_path() {
         .unwrap();
 
     repo.upload_file()
-        .source(AddSource::Bytes(b"version 2 updated".to_vec()))
+        .source(AddSource::bytes(b"version 2 updated"))
         .path_in_repo("versioned.txt")
         .commit_message("v2")
         .send()
@@ -221,7 +221,7 @@ async fn test_upload_file_with_nested_path() {
 
     let data = b"deeply nested content".to_vec();
     repo.upload_file()
-        .source(AddSource::Bytes(data.clone()))
+        .source(AddSource::bytes(data.clone()))
         .path_in_repo("a/b/c/d/deep.txt")
         .commit_message("upload nested file")
         .send()
@@ -260,7 +260,7 @@ async fn test_upload_from_file_path() {
     std::fs::write(&local_file, &data).unwrap();
 
     repo.upload_file()
-        .source(AddSource::File(local_file))
+        .source(AddSource::file(local_file))
         .path_in_repo("uploaded_from_path.txt")
         .commit_message("upload from file path")
         .send()
@@ -332,7 +332,7 @@ async fn test_upload_75mb_random_data_and_verify() {
 
     let commit = repo
         .upload_file()
-        .source(AddSource::File(local_file))
+        .source(AddSource::file(local_file))
         .path_in_repo("model.safetensors")
         .commit_message("upload 75MB random data")
         .send()

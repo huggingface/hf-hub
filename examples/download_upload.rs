@@ -118,7 +118,7 @@ async fn main() -> hf_hub::HFResult<()> {
     // Upload from bytes
     let commit = repo
         .upload_file()
-        .source(AddSource::Bytes(b"Hello from Rust!".to_vec()))
+        .source(AddSource::bytes(b"Hello from Rust!"))
         .path_in_repo("hello.txt")
         .commit_message("Add hello.txt from bytes")
         .send()
@@ -131,7 +131,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .upload_file()
-        .source(AddSource::File(local_file))
+        .source(AddSource::file(local_file))
         .path_in_repo("data/local_data.txt")
         .commit_message("Add local_data.txt from file path")
         .send()

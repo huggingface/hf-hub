@@ -7,7 +7,7 @@
 //! Run: cargo run -p examples --features blocking --example blocking_read
 
 use hf_hub::HFClientSync;
-use hf_hub::repository::{RepoInfo, RepoTreeEntry};
+use hf_hub::repository::RepoTreeEntry;
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
@@ -18,20 +18,18 @@ fn main() -> hf_hub::HFResult<()> {
     let dataset = client.dataset("rajpurkar", "squad");
     let space = client.space("huggingface", "transformers-benchmarks");
 
-    match model.info().send()? {
-        RepoInfo::Model(info) => println!("Model: {} (downloads: {:?})", info.id, info.downloads),
-        _ => unreachable!(),
-    }
+    let info = model.info().send()?.into_model().expect("model handle returns model info");
+    println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
-    match dataset.info().send()? {
-        RepoInfo::Dataset(info) => println!("Dataset: {} (downloads: {:?})", info.id, info.downloads),
-        _ => unreachable!(),
-    }
+    let info = dataset
+        .info()
+        .send()?
+        .into_dataset()
+        .expect("dataset handle returns dataset info");
+    println!("Dataset: {} (downloads: {:?})", info.id, info.downloads);
 
-    match space.info().send()? {
-        RepoInfo::Space(info) => println!("Space: {} (sdk: {:?})", info.id, info.sdk),
-        _ => unreachable!(),
-    }
+    let info = space.info().send()?.into_space().expect("space handle returns space info");
+    println!("Space: {} (sdk: {:?})", info.id, info.sdk);
 
     let exists = model.exists().send()?;
     println!("gpt2 exists: {exists}");
@@ -51,12 +49,6 @@ fn main() -> hf_hub::HFResult<()> {
     }
 
     // --- Files ---
-
-    let files = model.list_files().send()?;
-    println!("\nFiles in gpt2: {}", files.len());
-    for f in files.iter().take(5) {
-        println!("  - {f}");
-    }
 
     let tree = model.list_tree().recursive(true).send()?;
     println!("\nTree entries in gpt2:");
@@ -94,10 +86,10 @@ fn main() -> hf_hub::HFResult<()> {
     let me = client.whoami().send()?;
     println!("\nLogged in as: {}", me.username);
 
-    let user = client.get_user_overview().username("julien-c").send()?;
+    let user = client.user_overview().username("julien-c").send()?;
     println!("User: {} (fullname: {:?})", user.username, user.fullname);
 
-    let org = client.get_organization_overview().organization("huggingface").send()?;
+    let org = client.organization_overview().organization("huggingface").send()?;
     println!("Org: {} (fullname: {:?})", org.name, org.fullname);
 
     let followers = client.list_user_followers().username("julien-c").send()?;

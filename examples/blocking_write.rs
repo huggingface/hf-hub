@@ -6,7 +6,7 @@
 //! Run: cargo run -p examples --features blocking --example blocking_write
 
 use hf_hub::HFClientSync;
-use hf_hub::repository::{AddSource, CommitOperation};
+use hf_hub::repository::{AddSource, CommitOperation, RepoTreeEntry};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
@@ -28,7 +28,7 @@ fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .upload_file()
-        .source(AddSource::Bytes(b"Hello from HFClientSync!".to_vec()))
+        .source(AddSource::bytes(b"Hello from HFClientSync!"))
         .path_in_repo("hello.txt")
         .commit_message("Add hello.txt")
         .send()?;
@@ -63,10 +63,12 @@ fn main() -> hf_hub::HFResult<()> {
 
     // --- List files ---
 
-    let files = repo.list_files().send()?;
+    let entries = repo.list_tree().recursive(true).send()?;
     println!("\nAll files in repo:");
-    for f in &files {
-        println!("  - {f}");
+    for entry in &entries {
+        if let RepoTreeEntry::File { path, .. } = entry {
+            println!("  - {path}");
+        }
     }
 
     // --- Download a file ---

@@ -28,6 +28,7 @@ pub(crate) mod storage;
 /// `file_path` is the pointer in the `snapshots/` tree (a symlink on Unix);
 /// `blob_path` is the canonical location of the underlying content under
 /// `blobs/`. Both paths refer to the same bytes.
+#[derive(Debug, Clone)]
 pub struct CachedFileInfo {
     /// Path of the file relative to its revision's snapshot root, including
     /// any subdirectories (e.g. `subdir/model.bin`).
@@ -47,6 +48,7 @@ pub struct CachedFileInfo {
 }
 
 /// A cached revision (commit) of a repository.
+#[derive(Debug, Clone)]
 pub struct CachedRevisionInfo {
     /// Full 40-character commit SHA.
     pub commit_hash: String,
@@ -67,6 +69,7 @@ pub struct CachedRevisionInfo {
 }
 
 /// A cached repository, with its revisions aggregated.
+#[derive(Debug, Clone)]
 pub struct CachedRepoInfo {
     /// Hub repo identifier (e.g. `gpt2`, `google/bert-base-uncased`).
     pub repo_id: String,
@@ -93,6 +96,7 @@ pub struct CachedRepoInfo {
 /// Returned by [`HFClient::scan_cache`]; aggregates every cached repository
 /// found at `cache_dir` along with total disk usage and any warnings emitted
 /// during scanning.
+#[derive(Debug, Clone)]
 pub struct HFCacheInfo {
     /// Cache directory that was scanned.
     pub cache_dir: PathBuf,

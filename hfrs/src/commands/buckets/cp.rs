@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
+use hf_hub::buckets::{BucketCopySourceType, BucketDownload, BucketUpload};
 use hf_hub::progress::Progress;
 
 use crate::output::CommandResult;
@@ -100,7 +101,7 @@ async fn upload_local(
     let bucket = client.bucket(&dst.namespace, &dst.bucket_name);
     bucket
         .upload_files()
-        .files(vec![(local_path, dst.path.clone())])
+        .files(vec![BucketUpload::new(local_path, dst.path.clone())])
         .maybe_progress(progress)
         .send()
         .await?;
@@ -122,7 +123,7 @@ async fn upload_stdin(client: &HFClient, dst: &str, quiet: bool, progress: Optio
     let bucket = client.bucket(&dst.namespace, &dst.bucket_name);
     bucket
         .upload_files()
-        .files(vec![(tmp.path().to_path_buf(), dst.path.clone())])
+        .files(vec![BucketUpload::new(tmp.path().to_path_buf(), dst.path.clone())])
         .maybe_progress(progress)
         .send()
         .await?;
@@ -153,7 +154,7 @@ async fn download_to_local(
     let bucket = client.bucket(&src.namespace, &src.bucket_name);
     bucket
         .download_files()
-        .files(vec![(src.path.clone(), local_path.clone())])
+        .files(vec![BucketDownload::new(src.path.clone(), local_path.clone())])
         .maybe_progress(progress)
         .send()
         .await?;
@@ -175,7 +176,7 @@ async fn download_to_stdout(client: &HFClient, src: &str) -> Result<CommandResul
     let bucket = client.bucket(&src.namespace, &src.bucket_name);
     bucket
         .download_files()
-        .files(vec![(src.path.clone(), tmp.path().to_path_buf())])
+        .files(vec![BucketDownload::new(src.path.clone(), tmp.path().to_path_buf())])
         .send()
         .await?;
     let data = std::fs::read(tmp.path())?;
@@ -194,7 +195,7 @@ async fn server_side_copy(client: &HFClient, src: &str, dst: &str, quiet: bool) 
         .copy(vec![hf_hub::buckets::BucketCopyFile {
             path: dst.path.clone(),
             xet_hash: metadata.xet_hash,
-            source_repo_type: "bucket".to_string(),
+            source_repo_type: BucketCopySourceType::Bucket,
             source_repo_id: format!("{}/{}", src.namespace, src.bucket_name),
             size: Some(metadata.size),
             mtime: None,

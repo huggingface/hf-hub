@@ -34,7 +34,7 @@ struct CreateCommitParams {
     commit_message: String,
     commit_description: Option<String>,
     revision: Option<String>,
-    create_pr: Option<bool>,
+    create_pr: bool,
     parent_commit: Option<String>,
     progress: Option<Progress>,
 }
@@ -46,7 +46,7 @@ struct UploadFileParams {
     revision: Option<String>,
     commit_message: Option<String>,
     commit_description: Option<String>,
-    create_pr: Option<bool>,
+    create_pr: bool,
     parent_commit: Option<String>,
     progress: Option<Progress>,
 }
@@ -58,7 +58,7 @@ struct UploadFolderParams {
     revision: Option<String>,
     commit_message: Option<String>,
     commit_description: Option<String>,
-    create_pr: Option<bool>,
+    create_pr: bool,
     allow_patterns: Option<Vec<String>>,
     ignore_patterns: Option<Vec<String>>,
     delete_patterns: Option<Vec<String>>,
@@ -70,7 +70,7 @@ struct DeleteFileParams {
     path_in_repo: String,
     revision: Option<String>,
     commit_message: Option<String>,
-    create_pr: Option<bool>,
+    create_pr: bool,
 }
 
 /// Internal options struct for [`HFRepository::delete_folder`].
@@ -78,7 +78,7 @@ struct DeleteFolderParams {
     path_in_repo: String,
     revision: Option<String>,
     commit_message: Option<String>,
-    create_pr: Option<bool>,
+    create_pr: bool,
 }
 
 impl HFRepository {
@@ -174,7 +174,7 @@ impl HFRepository {
         let mut headers = self.hf_client.auth_headers();
         headers.insert(reqwest::header::CONTENT_TYPE, "application/x-ndjson".parse().unwrap());
 
-        let create_pr = params.create_pr == Some(true);
+        let create_pr = params.create_pr;
         let response = retry::retry(self.hf_client.retry_config(), || {
             let mut req = self
                 .hf_client
@@ -642,7 +642,9 @@ fn collect_files_recursive(
         if metadata.is_dir() {
             collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations)?;
         } else if metadata.is_file() {
-            let relative = path.strip_prefix(root).map_err(|e| HFError::Other(e.to_string()))?;
+            let relative = path.strip_prefix(root).map_err(|e| {
+                HFError::InvalidParameter(format!("path {} is not under {}: {e}", path.display(), root.display()))
+            })?;
             let relative_str: String = relative
                 .components()
                 .filter_map(|c| match c {
@@ -693,7 +695,7 @@ impl HFRepository {
     /// - `commit_message` (required): commit message.
     /// - `commit_description`: extended description for the commit.
     /// - `revision`: branch to commit to. Defaults to the main branch.
-    /// - `create_pr`: create a pull request instead of committing directly.
+    /// - `create_pr` (default `false`): create a pull request instead of committing directly.
     /// - `parent_commit`: expected parent commit SHA. Fails if the branch head moved past it.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -711,11 +713,12 @@ impl HFRepository {
         #[builder(into)]
         revision: Option<String>,
         /// Create a pull request instead of committing directly.
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
         /// Expected parent commit SHA. Fails if the branch head moved past it.
         #[builder(into)]
         parent_commit: Option<String>,
-        /// Optional progress handler.
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
@@ -742,7 +745,7 @@ impl HFRepository {
     /// - `path_in_repo` (required): destination path within the repository.
     /// - `revision`: branch to upload to. Defaults to the main branch.
     /// - `commit_message`, `commit_description`, `create_pr`, `parent_commit`, `progress`: same as
-    ///   [`HFRepository::create_commit`].
+    ///   [`HFRepository::create_commit`]. `create_pr` defaults to `false`.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_file(
         &self,
@@ -761,11 +764,12 @@ impl HFRepository {
         #[builder(into)]
         commit_description: Option<String>,
         /// Create a pull request instead of committing directly. Same as [`HFRepository::create_commit`].
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
         /// Expected parent commit SHA. Same as [`HFRepository::create_commit`].
         #[builder(into)]
         parent_commit: Option<String>,
-        /// Optional progress handler. Same as [`HFRepository::create_commit`].
+        /// Progress handler. Same as [`HFRepository::create_commit`].
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
@@ -795,7 +799,8 @@ impl HFRepository {
     /// - `folder_path` (required): local folder path to upload.
     /// - `path_in_repo`: destination directory within the repository (default: repo root).
     /// - `revision`: branch to upload to. Defaults to the main branch.
-    /// - `commit_message`, `commit_description`, `create_pr`: commit metadata.
+    /// - `commit_message`, `commit_description`: commit metadata.
+    /// - `create_pr` (default `false`): create a pull request instead of committing directly.
     /// - `allow_patterns`: globs selecting which local files to include. Matched against each discovered file's path
     ///   relative to `folder_path` (e.g. `data/train.bin`, not the absolute path and not prefixed with `path_in_repo`).
     ///   When set, only files matching at least one pattern are uploaded.
@@ -824,7 +829,8 @@ impl HFRepository {
         #[builder(into)]
         commit_description: Option<String>,
         /// Create a pull request instead of committing directly.
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
         /// Globs selecting which local files to include. Matched against each discovered file's path
         /// relative to `folder_path` (e.g. `data/train.bin`, not the absolute path and not prefixed with
         /// `path_in_repo`). When set, only files matching at least one pattern are uploaded.
@@ -836,7 +842,7 @@ impl HFRepository {
         /// full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g. `old/*.bin` to
         /// remove every `.bin` directly under `old/` at the repo root.
         delete_patterns: Option<Vec<String>>,
-        /// Optional progress handler.
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
@@ -865,7 +871,7 @@ impl HFRepository {
     /// - `path_in_repo` (required): path of the file to delete.
     /// - `revision`: branch to delete from. Defaults to the main branch.
     /// - `commit_message`: commit message.
-    /// - `create_pr`: create a pull request instead of committing directly.
+    /// - `create_pr` (default `false`): create a pull request instead of committing directly.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn delete_file(
         &self,
@@ -879,7 +885,8 @@ impl HFRepository {
         #[builder(into)]
         commit_message: Option<String>,
         /// Create a pull request instead of committing directly.
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
     ) -> HFResult<CommitInfo> {
         self.delete_file_impl(DeleteFileParams {
             path_in_repo,
@@ -900,7 +907,7 @@ impl HFRepository {
     /// - `path_in_repo` (required): folder path within the repository.
     /// - `revision`: branch to delete from. Defaults to the main branch.
     /// - `commit_message`: commit message.
-    /// - `create_pr`: create a pull request instead of committing directly.
+    /// - `create_pr` (default `false`): create a pull request instead of committing directly.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn delete_folder(
         &self,
@@ -914,7 +921,8 @@ impl HFRepository {
         #[builder(into)]
         commit_message: Option<String>,
         /// Create a pull request instead of committing directly.
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
     ) -> HFResult<CommitInfo> {
         self.delete_folder_impl(DeleteFolderParams {
             path_in_repo,
@@ -946,11 +954,12 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)]
         revision: Option<String>,
         /// Create a pull request instead of committing directly.
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
         /// Expected parent commit SHA. Fails if the branch head moved past it.
         #[builder(into)]
         parent_commit: Option<String>,
-        /// Optional progress handler.
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
@@ -961,7 +970,7 @@ impl crate::blocking::HFRepositorySync {
                 .commit_message(commit_message)
                 .maybe_commit_description(commit_description)
                 .maybe_revision(revision)
-                .maybe_create_pr(create_pr)
+                .create_pr(create_pr)
                 .maybe_parent_commit(parent_commit)
                 .maybe_progress(progress)
                 .send(),
@@ -988,11 +997,12 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)]
         commit_description: Option<String>,
         /// Create a pull request instead of committing directly. Same as [`HFRepository::create_commit`].
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
         /// Expected parent commit SHA. Same as [`HFRepository::create_commit`].
         #[builder(into)]
         parent_commit: Option<String>,
-        /// Optional progress handler. Same as [`HFRepository::create_commit`].
+        /// Progress handler. Same as [`HFRepository::create_commit`].
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
@@ -1004,7 +1014,7 @@ impl crate::blocking::HFRepositorySync {
                 .maybe_revision(revision)
                 .maybe_commit_message(commit_message)
                 .maybe_commit_description(commit_description)
-                .maybe_create_pr(create_pr)
+                .create_pr(create_pr)
                 .maybe_parent_commit(parent_commit)
                 .maybe_progress(progress)
                 .send(),
@@ -1032,7 +1042,8 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)]
         commit_description: Option<String>,
         /// Create a pull request instead of committing directly.
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
         /// Globs selecting which local files to include. Matched against each discovered file's path
         /// relative to `folder_path` (e.g. `data/train.bin`, not the absolute path and not prefixed with
         /// `path_in_repo`). When set, only files matching at least one pattern are uploaded.
@@ -1044,7 +1055,7 @@ impl crate::blocking::HFRepositorySync {
         /// full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g. `old/*.bin` to
         /// remove every `.bin` directly under `old/` at the repo root.
         delete_patterns: Option<Vec<String>>,
-        /// Optional progress handler.
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
@@ -1056,7 +1067,7 @@ impl crate::blocking::HFRepositorySync {
                 .maybe_revision(revision)
                 .maybe_commit_message(commit_message)
                 .maybe_commit_description(commit_description)
-                .maybe_create_pr(create_pr)
+                .create_pr(create_pr)
                 .maybe_allow_patterns(allow_patterns)
                 .maybe_ignore_patterns(ignore_patterns)
                 .maybe_delete_patterns(delete_patterns)
@@ -1080,7 +1091,8 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)]
         commit_message: Option<String>,
         /// Create a pull request instead of committing directly.
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner
@@ -1088,7 +1100,7 @@ impl crate::blocking::HFRepositorySync {
                 .path_in_repo(path_in_repo)
                 .maybe_revision(revision)
                 .maybe_commit_message(commit_message)
-                .maybe_create_pr(create_pr)
+                .create_pr(create_pr)
                 .send(),
         )
     }
@@ -1108,7 +1120,8 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)]
         commit_message: Option<String>,
         /// Create a pull request instead of committing directly.
-        create_pr: Option<bool>,
+        #[builder(default)]
+        create_pr: bool,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner
@@ -1116,7 +1129,7 @@ impl crate::blocking::HFRepositorySync {
                 .path_in_repo(path_in_repo)
                 .maybe_revision(revision)
                 .maybe_commit_message(commit_message)
-                .maybe_create_pr(create_pr)
+                .create_pr(create_pr)
                 .send(),
         )
     }

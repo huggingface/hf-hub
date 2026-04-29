@@ -221,7 +221,7 @@ pub use buckets::HFBucket;
 pub use client::{HFClient, HFClientBuilder};
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
-pub use error::{HFError, HFResult};
+pub use error::{HFError, HFResult, XetOperation};
 #[doc(inline)]
 pub use repository::HFRepository;
 #[doc(inline)]

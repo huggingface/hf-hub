@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
+use futures::StreamExt;
 use globset::Glob;
 use hf_hub::HFClient;
-use hf_hub::repository::CommitOperation;
+use hf_hub::repository::{CommitOperation, RepoTreeEntry};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -42,18 +43,23 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let repo_type: hf_hub::RepoType = args.r#type.into();
     let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
 
-    let all_files = repo.list_files().maybe_revision(args.revision.clone()).send().await?;
-
     let matchers: Vec<_> = args
         .patterns
         .iter()
         .filter_map(|p| Glob::new(p).ok().map(|g| g.compile_matcher()))
         .collect();
 
-    let matched_files: Vec<String> = all_files
-        .into_iter()
-        .filter(|f| matchers.iter().any(|m| m.is_match(f)))
-        .collect();
+    let stream = repo.list_tree().maybe_revision(args.revision.clone()).recursive(true).send()?;
+    futures::pin_mut!(stream);
+
+    let mut matched_files: Vec<String> = Vec::new();
+    while let Some(entry) = stream.next().await {
+        if let RepoTreeEntry::File { path, .. } = entry?
+            && matchers.iter().any(|m| m.is_match(&path))
+        {
+            matched_files.push(path);
+        }
+    }
 
     if matched_files.is_empty() {
         anyhow::bail!("No files matched the given patterns");
@@ -66,7 +72,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         .commit_message(args.commit_message)
         .maybe_commit_description(args.commit_description)
         .maybe_revision(args.revision)
-        .maybe_create_pr(if args.create_pr { Some(true) } else { None })
+        .create_pr(args.create_pr)
         .send()
         .await?;
     let url = result.commit_url.or(result.pr_url).unwrap_or_default();

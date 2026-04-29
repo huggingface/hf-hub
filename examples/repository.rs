@@ -5,7 +5,6 @@
 
 use futures::StreamExt;
 use hf_hub::HFClient;
-use hf_hub::repository::RepoInfo;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -14,22 +13,31 @@ async fn main() -> hf_hub::HFResult<()> {
     // --- Read operations ---
 
     let model = client.model("openai-community", "gpt2");
-    match model.info().send().await? {
-        RepoInfo::Model(info) => println!("Model: {} (downloads: {:?})", info.id, info.downloads),
-        _ => unreachable!(),
-    }
+    let info = model
+        .info()
+        .send()
+        .await?
+        .into_model()
+        .expect("model handle returns model info");
+    println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
     let dataset = client.dataset("rajpurkar", "squad");
-    match dataset.info().send().await? {
-        RepoInfo::Dataset(info) => println!("Dataset: {} (downloads: {:?})", info.id, info.downloads),
-        _ => unreachable!(),
-    }
+    let info = dataset
+        .info()
+        .send()
+        .await?
+        .into_dataset()
+        .expect("dataset handle returns dataset info");
+    println!("Dataset: {} (downloads: {:?})", info.id, info.downloads);
 
     let space = client.space("huggingface", "transformers-benchmarks");
-    match space.info().send().await? {
-        RepoInfo::Space(info) => println!("Space: {} (sdk: {:?})", info.id, info.sdk),
-        _ => unreachable!(),
-    }
+    let info = space
+        .info()
+        .send()
+        .await?
+        .into_space()
+        .expect("space handle returns space info");
+    println!("Space: {} (sdk: {:?})", info.id, info.sdk);
 
     let exists = model.exists().send().await?;
     println!("gpt2 exists: {exists}");

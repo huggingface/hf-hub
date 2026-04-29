@@ -3,8 +3,8 @@
 //! This module exposes the [`User`], [`OrgMembership`], and [`Organization`]
 //! types and the corresponding [`HFClient`] methods:
 //!
-//! - [`HFClient::whoami`] / [`HFClient::auth_check`] — identify the caller and verify that the current token is valid.
-//! - [`HFClient::get_user_overview`] / [`HFClient::get_organization_overview`] — fetch a public profile by username or
+//! - [`HFClient::whoami`] — identify the caller and verify that the current token is valid.
+//! - [`HFClient::user_overview`] / [`HFClient::organization_overview`] — fetch a public profile by username or
 //!   organization name.
 //! - [`HFClient::list_user_followers`] / [`HFClient::list_user_following`] / [`HFClient::list_organization_members`] —
 //!   paginated listings that yield [`User`] entries one page at a time.
@@ -78,7 +78,7 @@ pub struct User {
 /// Summary entry for an organization the authenticated user belongs to.
 ///
 /// Returned inside [`User::orgs`]. This is a lighter-weight shape than
-/// [`Organization`] — use [`HFClient::get_organization_overview`] to fetch the
+/// [`Organization`] — use [`HFClient::organization_overview`] to fetch the
 /// full record by name.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,7 +93,7 @@ pub struct OrgMembership {
 
 /// A Hugging Face Hub organization.
 ///
-/// Returned by [`HFClient::get_organization_overview`].
+/// Returned by [`HFClient::organization_overview`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Organization {
@@ -150,19 +150,6 @@ impl HFClient {
         Ok(response.json().await?)
     }
 
-    /// Verify that the current token is valid.
-    ///
-    /// Returns `Ok(())` if the token authenticates successfully, or
-    /// [`HFError::AuthRequired`](crate::HFError::AuthRequired) if it is missing or rejected.
-    /// Equivalent to calling [`whoami`](Self::whoami) and discarding the response.
-    ///
-    /// Endpoint: `GET /api/whoami-v2`.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn auth_check(&self) -> HFResult<()> {
-        self.whoami().send().await?;
-        Ok(())
-    }
-
     /// Fetch the public profile of a user by Hub handle.
     ///
     /// Endpoint: `GET /api/users/{username}/overview`.
@@ -171,7 +158,7 @@ impl HFClient {
     ///
     /// - `username` (required): Hub handle (slug) of the user.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn get_user_overview(
+    pub async fn user_overview(
         &self,
         /// Hub handle (slug) of the user.
         #[builder(into)]
@@ -195,7 +182,7 @@ impl HFClient {
     ///
     /// - `organization` (required): Hub handle (slug) of the organization.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn get_organization_overview(
+    pub async fn organization_overview(
         &self,
         /// Hub handle (slug) of the organization.
         #[builder(into)]
@@ -284,33 +271,27 @@ impl crate::blocking::HFClientSync {
         self.runtime.block_on(self.inner.whoami().send())
     }
 
-    /// Blocking counterpart of [`HFClient::auth_check`].
+    /// Blocking counterpart of [`HFClient::user_overview`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn auth_check(&self) -> HFResult<()> {
-        self.runtime.block_on(self.inner.auth_check().send())
-    }
-
-    /// Blocking counterpart of [`HFClient::get_user_overview`].
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_user_overview(
+    pub fn user_overview(
         &self,
         /// Hub handle (slug) of the user.
         #[builder(into)]
         username: String,
     ) -> HFResult<User> {
-        self.runtime.block_on(self.inner.get_user_overview().username(username).send())
+        self.runtime.block_on(self.inner.user_overview().username(username).send())
     }
 
-    /// Blocking counterpart of [`HFClient::get_organization_overview`].
+    /// Blocking counterpart of [`HFClient::organization_overview`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_organization_overview(
+    pub fn organization_overview(
         &self,
         /// Hub handle (slug) of the organization.
         #[builder(into)]
         organization: String,
     ) -> HFResult<Organization> {
         self.runtime
-            .block_on(self.inner.get_organization_overview().organization(organization).send())
+            .block_on(self.inner.organization_overview().organization(organization).send())
     }
 
     /// Blocking counterpart of [`HFClient::list_user_followers`]. Collects the stream into a

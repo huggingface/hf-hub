@@ -2,8 +2,7 @@
 //!
 //! Common entry points:
 //!
-//! - Use [`HFRepository::list_files`] when you only need file paths.
-//! - Use [`HFRepository::list_tree`] when you need file and directory entries, or [`HFRepository::get_paths_info`] /
+//! - Use [`HFRepository::list_tree`] to stream file and directory entries, or [`HFRepository::get_paths_info`] /
 //!   [`HFRepository::get_file_metadata`] for targeted lookups.
 //! - Use [`HFRepository::download_file`] to write one file to disk, [`HFRepository::download_file_stream`] to stream
 //!   bytes, [`HFRepository::download_file_to_bytes`] to collect a file into memory, and
@@ -170,7 +169,7 @@ impl CommitOperation {
     pub fn add_file(path_in_repo: impl Into<String>, source: impl Into<PathBuf>) -> Self {
         CommitOperation::Add {
             path_in_repo: path_in_repo.into(),
-            source: AddSource::File(source.into()),
+            source: AddSource::file(source),
         }
     }
 
@@ -178,7 +177,7 @@ impl CommitOperation {
     pub fn add_bytes(path_in_repo: impl Into<String>, source: impl Into<Vec<u8>>) -> Self {
         CommitOperation::Add {
             path_in_repo: path_in_repo.into(),
-            source: AddSource::Bytes(source.into()),
+            source: AddSource::bytes(source),
         }
     }
 
@@ -197,6 +196,24 @@ pub enum AddSource {
     File(PathBuf),
     /// Use these bytes as the file contents.
     Bytes(Vec<u8>),
+}
+
+impl AddSource {
+    /// Construct an [`AddSource::File`] from a local file path.
+    ///
+    /// Prefer this over `AddSource::File(path.into())` so the call site reads
+    /// linearly without exposing the variant.
+    pub fn file(path: impl Into<PathBuf>) -> Self {
+        AddSource::File(path.into())
+    }
+
+    /// Construct an [`AddSource::Bytes`] from in-memory contents.
+    ///
+    /// Prefer this over `AddSource::Bytes(bytes.into())` so the call site reads
+    /// linearly without exposing the variant.
+    pub fn bytes(bytes: impl Into<Vec<u8>>) -> Self {
+        AddSource::Bytes(bytes.into())
+    }
 }
 
 pub(super) fn extract_etag(response: &reqwest::Response) -> Option<String> {

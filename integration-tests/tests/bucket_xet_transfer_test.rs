@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::TryStreamExt;
-use hf_hub::buckets::BucketTreeEntry;
+use hf_hub::buckets::{BucketDownload, BucketTreeEntry, BucketUpload};
 use hf_hub::{HFBucket, HFClient, HFClientBuilder, HFError};
 use integration_tests::test_utils::*;
 use rand::RngExt;
@@ -114,7 +114,7 @@ async fn test_bucket_upload_small_text_file() {
 
     bucket
         .upload_files()
-        .files(vec![(local_file, "greeting.txt".to_string())])
+        .files(vec![BucketUpload::new(local_file, "greeting.txt")])
         .send()
         .await
         .expect("bucket upload_files should succeed");
@@ -128,7 +128,7 @@ async fn test_bucket_upload_small_text_file() {
     let dl_dir = tempfile::tempdir().unwrap();
     bucket
         .download_files()
-        .files(vec![("greeting.txt".to_string(), dl_dir.path().join("greeting.txt"))])
+        .files(vec![BucketDownload::new("greeting.txt", dl_dir.path().join("greeting.txt"))])
         .send()
         .await
         .unwrap();
@@ -153,14 +153,14 @@ async fn test_bucket_upload_multiple_files() {
         ("b.txt", b"bravo content"),
         ("subdir/nested.txt", b"nested content"),
     ];
-    let mut upload_args: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let mut upload_args: Vec<BucketUpload> = Vec::new();
     for (remote, content) in &files {
         let local = tmp.path().join(remote);
         if let Some(parent) = local.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(&local, content).unwrap();
-        upload_args.push((local, remote.to_string()));
+        upload_args.push(BucketUpload::new(local, remote.to_string()));
     }
 
     bucket
@@ -179,9 +179,9 @@ async fn test_bucket_upload_multiple_files() {
     }
 
     let dl_dir = tempfile::tempdir().unwrap();
-    let download_pairs: Vec<(String, std::path::PathBuf)> = files
+    let download_pairs: Vec<BucketDownload> = files
         .iter()
-        .map(|(remote, _)| (remote.to_string(), dl_dir.path().join(remote)))
+        .map(|(remote, _)| BucketDownload::new(remote.to_string(), dl_dir.path().join(remote)))
         .collect();
     bucket.download_files().files(download_pairs).send().await.unwrap();
     for (remote, content) in &files {
@@ -213,7 +213,7 @@ async fn test_bucket_upload_large_random_file() {
 
     bucket
         .upload_files()
-        .files(vec![(local_file, "big.bin".to_string())])
+        .files(vec![BucketUpload::new(local_file, "big.bin")])
         .send()
         .await
         .expect("large bucket upload via xet should succeed");
@@ -227,7 +227,7 @@ async fn test_bucket_upload_large_random_file() {
     let dl_dir = tempfile::tempdir().unwrap();
     bucket
         .download_files()
-        .files(vec![("big.bin".to_string(), dl_dir.path().join("big.bin"))])
+        .files(vec![BucketDownload::new("big.bin", dl_dir.path().join("big.bin"))])
         .send()
         .await
         .unwrap();
@@ -254,7 +254,7 @@ async fn test_bucket_upload_empty_file() {
 
     bucket
         .upload_files()
-        .files(vec![(local_file, "empty.bin".to_string())])
+        .files(vec![BucketUpload::new(local_file, "empty.bin")])
         .send()
         .await
         .expect("empty-file bucket upload should succeed");
@@ -268,7 +268,7 @@ async fn test_bucket_upload_empty_file() {
     let dl_dir = tempfile::tempdir().unwrap();
     bucket
         .download_files()
-        .files(vec![("empty.bin".to_string(), dl_dir.path().join("empty.bin"))])
+        .files(vec![BucketDownload::new("empty.bin", dl_dir.path().join("empty.bin"))])
         .send()
         .await
         .unwrap();
@@ -296,14 +296,14 @@ async fn test_delete_bucket_with_files() {
         ("first.txt", b"first contents"),
         ("nested/second.bin", b"second contents"),
     ];
-    let mut upload_args: Vec<(std::path::PathBuf, String)> = Vec::new();
+    let mut upload_args: Vec<BucketUpload> = Vec::new();
     for (remote, content) in &files {
         let local = tmp.path().join(remote);
         if let Some(parent) = local.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(&local, content).unwrap();
-        upload_args.push((local, remote.to_string()));
+        upload_args.push(BucketUpload::new(local, remote.to_string()));
     }
     bucket
         .upload_files()

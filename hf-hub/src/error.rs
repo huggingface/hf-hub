@@ -228,9 +228,75 @@ pub enum HFError {
     #[error(transparent)]
     DiffParse(#[from] crate::repository::HFDiffParseError),
 
+    /// A xet (high-performance content-addressable) operation failed.
+    ///
+    /// The [`operation`](Self::Xet::operation) field identifies which step
+    /// failed; [`source`](Self::Xet::source) carries the underlying error
+    /// (typically a `xet_core` error or a `tokio` join failure).
+    #[error("Xet {operation} failed: {source}")]
+    Xet {
+        /// Which xet operation produced the error.
+        operation: XetOperation,
+        /// Underlying error, type-erased so the `xet_core` types stay out of the public API.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+
+    /// Hub responded with success but the response is missing data the client
+    /// needs to proceed (e.g. an `ETag` or `X-Repo-Commit` header that should
+    /// always be present, or a `304 Not Modified` without a corresponding
+    /// cached state).
+    ///
+    /// Distinct from [`Http`](Self::Http): the status code was a success, the
+    /// shape of the response was wrong.
+    #[error(
+        "Hub response missing required data: {what}{}",
+        url.as_deref().map(|u| format!(" ({u})")).unwrap_or_default()
+    )]
+    MalformedResponse {
+        /// Short description of what was missing or unexpected.
+        what: String,
+        /// URL of the request that produced the bad response, when known.
+        url: Option<String>,
+    },
+
     /// Catch-all error for cases that do not fit another variant.
     #[error("{0}")]
     Other(String),
+}
+
+/// Identifies the xet operation associated with an [`HFError::Xet`] error.
+///
+/// New variants may be added in the future; matches must include a wildcard arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum XetOperation {
+    /// Building or refreshing the cached `XetSession` used for transfers.
+    Session,
+    /// Single-file or multi-file upload via xet.
+    Upload,
+    /// Single-file download via xet (writing to the cache or a local dir).
+    Download,
+    /// Multi-file batch download via xet.
+    BatchDownload,
+    /// Streaming download via xet (returns bytes to the caller as they arrive).
+    StreamDownload,
+    /// Bucket-level batch download via xet.
+    BucketBatchDownload,
+}
+
+impl std::fmt::Display for XetOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            XetOperation::Session => "session",
+            XetOperation::Upload => "upload",
+            XetOperation::Download => "download",
+            XetOperation::BatchDownload => "batch download",
+            XetOperation::StreamDownload => "stream download",
+            XetOperation::BucketBatchDownload => "bucket batch download",
+        };
+        f.write_str(s)
+    }
 }
 
 impl From<reqwest::Error> for HFError {
@@ -241,6 +307,38 @@ impl From<reqwest::Error> for HFError {
 }
 
 impl HFError {
+    /// Construct an [`HFError::Xet`] from a typed source error.
+    ///
+    /// The source is type-erased into `Box<dyn Error + Send + Sync>` so that
+    /// upstream `xet_core` types stay out of the public API; downstream
+    /// matchers can use `source.downcast_ref::<T>()` if they need the concrete
+    /// type.
+    pub fn xet<E>(operation: XetOperation, source: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        HFError::Xet {
+            operation,
+            source: Box::new(source),
+        }
+    }
+
+    /// Construct a [`HFError::MalformedResponse`] without a known URL.
+    pub fn malformed_response(what: impl Into<String>) -> Self {
+        HFError::MalformedResponse {
+            what: what.into(),
+            url: None,
+        }
+    }
+
+    /// Construct a [`HFError::MalformedResponse`] with the originating URL attached.
+    pub fn malformed_response_at(what: impl Into<String>, url: impl Into<String>) -> Self {
+        HFError::MalformedResponse {
+            what: what.into(),
+            url: Some(url.into()),
+        }
+    }
+
     /// Returns true for errors that indicate transient network/server issues
     /// where falling back to a cached version is appropriate.
     pub(crate) fn is_transient(&self) -> bool {

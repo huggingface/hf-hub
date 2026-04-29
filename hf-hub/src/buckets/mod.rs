@@ -293,7 +293,8 @@ impl HFBucket {
     ///   - `path` (`String`): bucket-relative destination path.
     ///   - `xet_hash` (`String`): xet content hash of the source bytes (already present in xet storage from another
     ///     repo or bucket — copies are by-hash, no data is transferred).
-    ///   - `source_repo_type` (`String`): repo type of the source, e.g. `"bucket"`, `"model"`, `"dataset"`, `"space"`.
+    ///   - `source_repo_type` ([`BucketCopySourceType`]): repo type of the source — one of `Bucket`, `Model`,
+    ///     `Dataset`, or `Space`. Serializes to the lowercase wire string the Hub expects.
     ///   - `source_repo_id` (`String`): full source identifier in `"namespace/name"` form (e.g. `"user/my-bucket"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     #[allow(clippy::should_implement_trait)]
@@ -343,7 +344,7 @@ impl HFBucket {
                 "type": "copyFile",
                 "path": copy.path,
                 "xetHash": copy.xet_hash,
-                "sourceRepoType": copy.source_repo_type,
+                "sourceRepoType": copy.source_repo_type.as_str(),
                 "sourceRepoId": copy.source_repo_id,
             });
             if let Some(size) = copy.size {
@@ -399,24 +400,20 @@ impl HFBucket {
 
     /// Upload local files to the bucket.
     ///
-    /// Each tuple maps `(local_path, remote_path)`. File contents are uploaded to xet first, then
-    /// registered in the bucket via the batch endpoint.
+    /// File contents are uploaded to xet first, then registered in the bucket via the batch
+    /// endpoint. Each entry pairs a local source with a bucket-relative destination via the
+    /// [`BucketUpload`] struct (use [`BucketUpload::new`] to construct one).
     ///
     /// # Parameters
     ///
-    /// - `files` (required): list of `(local_path, remote_path)` pairs, where:
-    ///   - `local_path` (`PathBuf`) is a path on the local filesystem (absolute or relative to the current working
-    ///     directory) pointing at the file to upload.
-    ///   - `remote_path` (`String`) is a **bucket-relative**, slash-separated destination path (e.g.
-    ///     `"data/train/0001.bin"`) — no leading slash, forward slashes regardless of platform, and no `bucket_id`
-    ///     prefix.
+    /// - `files` (required): list of [`BucketUpload`] entries describing each `local` → `remote` mapping.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_files(
         &self,
-        /// List of `(local_path, remote_path)` pairs.
-        files: Vec<(PathBuf, String)>,
-        /// Optional progress handler.
+        /// List of [`BucketUpload`] entries describing each `local` → `remote` mapping.
+        files: Vec<BucketUpload>,
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<()> {
@@ -426,7 +423,7 @@ impl HFBucket {
 
         let total_bytes: u64 = files
             .iter()
-            .filter_map(|(p, _)| std::fs::metadata(p).ok())
+            .filter_map(|f| std::fs::metadata(&f.local).ok())
             .map(|m| m.len())
             .sum();
         progress.emit(UploadEvent::Start {
@@ -436,9 +433,7 @@ impl HFBucket {
 
         let xet_files: Vec<(String, crate::repository::AddSource)> = files
             .iter()
-            .map(|(local_path, remote_path)| {
-                (remote_path.clone(), crate::repository::AddSource::File(local_path.clone()))
-            })
+            .map(|f| (f.remote.clone(), crate::repository::AddSource::file(f.local.clone())))
             .collect();
 
         let xet_infos = self.xet_upload(&xet_files, &progress).await?;
@@ -446,8 +441,8 @@ impl HFBucket {
         let add_files: Vec<BucketAddFile> = files
             .iter()
             .zip(xet_infos.iter())
-            .map(|((local_path, remote_path), xet_info)| {
-                let metadata = std::fs::metadata(local_path).ok();
+            .map(|(f, xet_info)| {
+                let metadata = std::fs::metadata(&f.local).ok();
                 let size = metadata.as_ref().map(|m| m.len()).or(xet_info.file_size).unwrap_or(0);
                 let mtime = metadata
                     .as_ref()
@@ -456,7 +451,7 @@ impl HFBucket {
                     .map(|d| d.as_secs());
 
                 BucketAddFile {
-                    path: remote_path.clone(),
+                    path: f.remote.clone(),
                     xet_hash: xet_info.hash.clone(),
                     size,
                     mtime,
@@ -473,24 +468,21 @@ impl HFBucket {
 
     /// Download files from the bucket to local paths.
     ///
-    /// Each tuple maps `(remote_path, local_path)`. The method first resolves xet metadata, then
-    /// downloads the file contents through xet. Directory entries are rejected.
+    /// The method first resolves xet metadata for each `remote` path, then downloads the file
+    /// contents through xet. Directory entries are rejected. Each entry pairs a bucket-relative
+    /// source with a local destination via the [`BucketDownload`] struct (use
+    /// [`BucketDownload::new`] to construct one).
     ///
     /// # Parameters
     ///
-    /// - `files` (required): list of `(remote_path, local_path)` pairs, where:
-    ///   - `remote_path` (`String`) is a **bucket-relative**, slash-separated source path (e.g.
-    ///     `"data/train/0001.bin"`) — no leading slash, forward slashes regardless of platform, and no `bucket_id`
-    ///     prefix. Must resolve to a file entry; directory entries return [`HFError::InvalidParameter`].
-    ///   - `local_path` (`PathBuf`) is the destination path on the local filesystem. Parent directories are created as
-    ///     needed.
+    /// - `files` (required): list of [`BucketDownload`] entries describing each `remote` → `local` mapping.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_files(
         &self,
-        /// List of `(remote_path, local_path)` pairs.
-        files: Vec<(String, PathBuf)>,
-        /// Optional progress handler.
+        /// List of [`BucketDownload`] entries describing each `remote` → `local` mapping.
+        files: Vec<BucketDownload>,
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<()> {
@@ -498,7 +490,7 @@ impl HFBucket {
             return Ok(());
         }
 
-        let remote_paths: Vec<String> = files.iter().map(|(r, _)| r.clone()).collect();
+        let remote_paths: Vec<String> = files.iter().map(|f| f.remote.clone()).collect();
         let entries = self.get_paths_info().paths(remote_paths).send().await?;
 
         let entry_map: std::collections::HashMap<String, BucketTreeEntry> = entries
@@ -515,15 +507,15 @@ impl HFBucket {
         let mut xet_batch_files = Vec::new();
         let mut total_bytes: u64 = 0;
 
-        for (remote_path, local_path) in &files {
-            match entry_map.get(remote_path) {
+        for f in &files {
+            match entry_map.get(&f.remote) {
                 Some(BucketTreeEntry::File { xet_hash, size, .. }) => {
                     total_bytes += size;
                     xet_batch_files.push(crate::xet::XetBatchFile {
                         hash: xet_hash.clone(),
                         file_size: *size,
-                        path: local_path.clone(),
-                        filename: remote_path.clone(),
+                        path: f.local.clone(),
+                        filename: f.remote.clone(),
                     });
                 },
                 Some(BucketTreeEntry::Directory { path, .. }) => {
@@ -531,7 +523,7 @@ impl HFBucket {
                 },
                 None => {
                     return Err(HFError::EntryNotFound {
-                        path: remote_path.clone(),
+                        path: f.remote.clone(),
                         repo_id: self.bucket_id(),
                         context: None,
                     });
@@ -570,6 +562,35 @@ pub struct BucketAddFile {
     pub content_type: Option<String>,
 }
 
+/// Source repo type for a [`BucketCopyFile`].
+///
+/// Tells the batch endpoint where the source bytes for a server-side copy live.
+/// Serializes to the lowercase string the Hub expects (`"bucket"`, `"model"`,
+/// `"dataset"`, `"space"`) so callers can't typo the field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BucketCopySourceType {
+    /// Source bytes live in another bucket.
+    Bucket,
+    /// Source bytes live in a model repository.
+    Model,
+    /// Source bytes live in a dataset repository.
+    Dataset,
+    /// Source bytes live in a Space repository.
+    Space,
+}
+
+impl BucketCopySourceType {
+    /// Wire string sent to the Hub for this source type.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BucketCopySourceType::Bucket => "bucket",
+            BucketCopySourceType::Model => "model",
+            BucketCopySourceType::Dataset => "dataset",
+            BucketCopySourceType::Space => "space",
+        }
+    }
+}
+
 /// A server-side copy operation for the batch endpoint.
 ///
 /// Represents a `copyFile` entry in the NDJSON batch payload.
@@ -581,8 +602,8 @@ pub struct BucketCopyFile {
     pub path: String,
     /// Xet content hash to copy.
     pub xet_hash: String,
-    /// Source repo type (e.g. `"bucket"`, `"model"`).
-    pub source_repo_type: String,
+    /// Source repo type. See [`BucketCopySourceType`].
+    pub source_repo_type: BucketCopySourceType,
     /// Source repo or bucket ID (e.g. `"user/my-bucket"`).
     pub source_repo_id: String,
     /// Source file size in bytes, when known. Forwarded to the batch endpoint as `size`.
@@ -663,6 +684,63 @@ pub struct BucketFileMetadata {
     pub size: u64,
     /// Xet content-addressable hash.
     pub xet_hash: String,
+}
+
+/// One file to upload via [`HFBucket::upload_files`].
+///
+/// Pairs a local source path with the destination path inside the bucket.
+/// Using a named struct (rather than a `(local, remote)` tuple) prevents the
+/// two paths from being silently swapped at the call site, where a copy-paste
+/// from [`BucketDownload`] would otherwise compile.
+#[derive(Debug, Clone)]
+pub struct BucketUpload {
+    /// Path on the local filesystem (absolute or relative to the current
+    /// working directory) of the file to upload.
+    pub local: PathBuf,
+    /// **Bucket-relative**, slash-separated destination path (e.g.
+    /// `"data/train/0001.bin"`) — no leading slash, forward slashes regardless
+    /// of platform, and no `bucket_id` prefix.
+    pub remote: String,
+}
+
+impl BucketUpload {
+    /// Construct a [`BucketUpload`] from a local source path and a bucket-relative
+    /// destination path.
+    pub fn new(local: impl Into<PathBuf>, remote: impl Into<String>) -> Self {
+        Self {
+            local: local.into(),
+            remote: remote.into(),
+        }
+    }
+}
+
+/// One file to download via [`HFBucket::download_files`].
+///
+/// Pairs a bucket-relative source path with the local destination path. Using a
+/// named struct (rather than a `(remote, local)` tuple) prevents the two paths
+/// from being silently swapped at the call site, where a copy-paste from
+/// [`BucketUpload`] would otherwise compile.
+#[derive(Debug, Clone)]
+pub struct BucketDownload {
+    /// **Bucket-relative**, slash-separated source path (e.g.
+    /// `"data/train/0001.bin"`) — no leading slash, forward slashes regardless
+    /// of platform, and no `bucket_id` prefix. Must resolve to a file entry;
+    /// directory entries return [`HFError::InvalidParameter`].
+    pub remote: String,
+    /// Destination path on the local filesystem. Parent directories are
+    /// created as needed.
+    pub local: PathBuf,
+}
+
+impl BucketDownload {
+    /// Construct a [`BucketDownload`] from a bucket-relative source path and a
+    /// local destination path.
+    pub fn new(remote: impl Into<String>, local: impl Into<PathBuf>) -> Self {
+        Self {
+            remote: remote.into(),
+            local: local.into(),
+        }
+    }
 }
 
 #[bon]
@@ -1000,9 +1078,9 @@ impl crate::blocking::HFBucketSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn upload_files(
         &self,
-        /// List of `(local_path, remote_path)` pairs.
-        files: Vec<(PathBuf, String)>,
-        /// Optional progress handler.
+        /// List of [`BucketUpload`] entries describing each `local` → `remote` mapping.
+        files: Vec<BucketUpload>,
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<()> {
@@ -1015,9 +1093,9 @@ impl crate::blocking::HFBucketSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn download_files(
         &self,
-        /// List of `(remote_path, local_path)` pairs.
-        files: Vec<(String, PathBuf)>,
-        /// Optional progress handler.
+        /// List of [`BucketDownload`] entries describing each `remote` → `local` mapping.
+        files: Vec<BucketDownload>,
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<()> {
@@ -1028,7 +1106,7 @@ impl crate::blocking::HFBucketSync {
 
 #[cfg(test)]
 mod tests {
-    use super::{BucketCopyFile, HFBucket};
+    use super::{BucketCopyFile, BucketCopySourceType, HFBucket};
 
     #[test]
     fn test_bucket_accessors() {
@@ -1041,11 +1119,19 @@ mod tests {
     }
 
     #[test]
+    fn test_bucket_copy_source_type_wire_strings() {
+        assert_eq!(BucketCopySourceType::Bucket.as_str(), "bucket");
+        assert_eq!(BucketCopySourceType::Model.as_str(), "model");
+        assert_eq!(BucketCopySourceType::Dataset.as_str(), "dataset");
+        assert_eq!(BucketCopySourceType::Space.as_str(), "space");
+    }
+
+    #[test]
     fn test_bucket_copy_file_optional_fields_construct() {
         let with_extras = BucketCopyFile {
             path: "p".into(),
             xet_hash: "x".into(),
-            source_repo_type: "bucket".into(),
+            source_repo_type: BucketCopySourceType::Bucket,
             source_repo_id: "u/b".into(),
             size: Some(42),
             mtime: Some(1_700_000_000_000),
@@ -1058,7 +1144,7 @@ mod tests {
         let bare = BucketCopyFile {
             path: "p".into(),
             xet_hash: "x".into(),
-            source_repo_type: "bucket".into(),
+            source_repo_type: BucketCopySourceType::Bucket,
             source_repo_id: "u/b".into(),
             size: None,
             mtime: None,

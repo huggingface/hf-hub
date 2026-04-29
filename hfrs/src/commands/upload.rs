@@ -96,12 +96,12 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
                 .unwrap_or_default()
         });
         repo.upload_file()
-            .source(AddSource::File(local_path))
+            .source(AddSource::file(local_path))
             .path_in_repo(path_in_repo)
             .maybe_revision(args.revision)
             .maybe_commit_message(args.commit_message)
             .maybe_commit_description(args.commit_description)
-            .maybe_create_pr(if args.create_pr { Some(true) } else { None })
+            .create_pr(args.create_pr)
             .maybe_progress(handler.clone())
             .send()
             .await?
@@ -127,7 +127,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
             .maybe_revision(args.revision)
             .maybe_commit_message(args.commit_message)
             .maybe_commit_description(args.commit_description)
-            .maybe_create_pr(if args.create_pr { Some(true) } else { None })
+            .create_pr(args.create_pr)
             .maybe_allow_patterns(allow_patterns)
             .maybe_ignore_patterns(ignore_patterns)
             .maybe_delete_patterns(delete_patterns)

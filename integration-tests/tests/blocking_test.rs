@@ -60,6 +60,20 @@ fn repo_handle(client: &HFClientSync, repo_id: &str) -> hf_hub::HFRepositorySync
     }
 }
 
+fn collect_file_paths(test_repo: &hf_hub::HFRepositorySync) -> std::collections::HashSet<String> {
+    test_repo
+        .list_tree()
+        .recursive(true)
+        .send()
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e {
+            RepoTreeEntry::File { path, .. } => Some(path),
+            _ => None,
+        })
+        .collect()
+}
+
 fn dataset_handle(client: &HFClientSync, repo_id: &str) -> hf_hub::HFRepositorySync {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
     if parts.len() == 2 {
@@ -150,14 +164,6 @@ fn test_sync_list_datasets() {
 }
 
 #[test]
-fn test_sync_list_repo_files() {
-    let Some(client) = prod_sync_api() else { return };
-    let files = repo_handle(&client, TEST_MODEL_REPO).list_files().send().unwrap();
-    assert!(files.contains(&"config.json".to_string()));
-    assert!(files.contains(&"README.md".to_string()));
-}
-
-#[test]
 fn test_sync_list_repo_tree() {
     let Some(client) = prod_sync_api() else { return };
     let entries = repo_handle(&client, TEST_MODEL_REPO).list_tree().send().unwrap();
@@ -222,24 +228,18 @@ fn test_sync_whoami() {
 }
 
 #[test]
-fn test_sync_auth_check() {
-    let Some(client) = ci_sync_api() else { return };
-    client.auth_check().send().unwrap();
-}
-
-#[test]
-fn test_sync_get_user_overview() {
+fn test_sync_user_overview() {
     let Some(client) = prod_sync_api() else { return };
     let username = TEST_USER;
-    let user = client.get_user_overview().username(username).send().unwrap();
+    let user = client.user_overview().username(username).send().unwrap();
     assert_eq!(user.username, username);
 }
 
 #[test]
-fn test_sync_get_organization_overview() {
+fn test_sync_organization_overview() {
     let Some(client) = prod_sync_api() else { return };
     let org_name = TEST_ORG;
-    let org = client.get_organization_overview().organization(org_name).send().unwrap();
+    let org = client.organization_overview().organization(org_name).send().unwrap();
     assert_eq!(org.name, org_name);
 }
 
@@ -304,7 +304,7 @@ fn create_test_repo(client: &HFClientSync) -> String {
     let test_repo = client.model(parts[0], parts[1]);
     test_repo
         .upload_file()
-        .source(AddSource::Bytes(b"initial content".to_vec()))
+        .source(AddSource::bytes(b"initial content"))
         .path_in_repo("README.md")
         .commit_message("initial commit")
         .send()
@@ -341,7 +341,7 @@ fn test_sync_create_and_delete_repo() {
 
     let commit = test_repo
         .upload_file()
-        .source(AddSource::Bytes(b"hello world".to_vec()))
+        .source(AddSource::bytes(b"hello world"))
         .path_in_repo("test.txt")
         .commit_message("test upload")
         .send()
@@ -374,9 +374,9 @@ fn test_sync_create_commit() {
         .unwrap();
     assert!(commit.commit_oid.is_some());
 
-    let files = test_repo.list_files().send().unwrap();
-    assert!(files.contains(&"file_a.txt".to_string()));
-    assert!(files.contains(&"file_b.txt".to_string()));
+    let files = collect_file_paths(&test_repo);
+    assert!(files.contains("file_a.txt"));
+    assert!(files.contains("file_b.txt"));
 
     delete_test_repo(&client, &repo_id);
 }
@@ -404,9 +404,9 @@ fn test_sync_upload_folder() {
         .unwrap();
     assert!(commit.commit_oid.is_some());
 
-    let files = test_repo.list_files().send().unwrap();
-    assert!(files.contains(&"hello.txt".to_string()));
-    assert!(files.contains(&"subdir/nested.txt".to_string()));
+    let files = collect_file_paths(&test_repo);
+    assert!(files.contains("hello.txt"));
+    assert!(files.contains("subdir/nested.txt"));
 
     delete_test_repo(&client, &repo_id);
 }

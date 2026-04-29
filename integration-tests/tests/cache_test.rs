@@ -7,6 +7,8 @@
 
 use std::path::Path;
 
+use futures::StreamExt;
+use hf_hub::repository::RepoTreeEntry;
 use hf_hub::{HFClient, HFClientBuilder, HFError};
 use integration_tests::test_utils::*;
 use serial_test::serial;
@@ -589,12 +591,15 @@ async fn test_snapshot_download_allow_and_ignore_set_difference() {
     let client = api_with_cache(cache_dir.path());
 
     // First, fetch the full file list so we can derive the expected set independently.
-    let repo_files: Vec<String> = client
-        .model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1)
-        .list_files()
-        .send()
-        .await
-        .unwrap();
+    let model = client.model(TEST_MODEL_PARTS.0, TEST_MODEL_PARTS.1);
+    let stream = model.list_tree().recursive(true).send().unwrap();
+    futures::pin_mut!(stream);
+    let mut repo_files: Vec<String> = Vec::new();
+    while let Some(entry) = stream.next().await {
+        if let RepoTreeEntry::File { path, .. } = entry.unwrap() {
+            repo_files.push(path);
+        }
+    }
 
     let allowed_jsons: Vec<&String> = repo_files.iter().filter(|f| f.ends_with(".json")).collect();
     let expected_present: Vec<&String> = allowed_jsons

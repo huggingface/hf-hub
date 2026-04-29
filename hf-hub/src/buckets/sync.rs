@@ -24,7 +24,7 @@ use bon::bon;
 use futures::StreamExt;
 use globset::{Glob, GlobMatcher};
 
-use crate::buckets::{BucketTreeEntry, HFBucket};
+use crate::buckets::{BucketTreeEntry, BucketUpload, HFBucket};
 use crate::error::{HFError, HFResult};
 use crate::progress::{DownloadEvent, EmitEvent, Progress};
 
@@ -199,7 +199,7 @@ fn list_local_files(root: &Path) -> HFResult<HashMap<String, (u64, f64)>> {
                 let path = entry.path();
                 let rel = path
                     .strip_prefix(root)
-                    .map_err(|e| HFError::Other(format!("failed to strip prefix: {e}")))?;
+                    .map_err(|e| HFError::InvalidParameter(format!("failed to strip prefix: {e}")))?;
                 let rel_str = rel
                     .components()
                     .map(|c| c.as_os_str().to_string_lossy())
@@ -604,7 +604,7 @@ impl HFBucket {
     }
 
     async fn execute_upload_plan(&self, plan: &BucketSyncPlan, params: &BucketSyncParams) -> HFResult<()> {
-        let upload_files: Vec<(PathBuf, String)> = plan
+        let upload_files: Vec<BucketUpload> = plan
             .operations
             .iter()
             .filter(|op| op.action == BucketSyncAction::Upload)
@@ -614,7 +614,7 @@ impl HFBucket {
                     Some(prefix) => format!("{prefix}/{}", op.path),
                     None => op.path.clone(),
                 };
-                (local_path, remote_path)
+                BucketUpload::new(local_path, remote_path)
             })
             .collect();
 
@@ -812,7 +812,7 @@ impl HFBucket {
         local_path: PathBuf,
         /// Sync direction (upload or download).
         direction: BucketSyncDirection,
-        /// Optional prefix within the bucket (subdirectory).
+        /// Prefix within the bucket (subdirectory).
         #[builder(into)]
         prefix: Option<String>,
         /// Delete destination files not present in source.
@@ -874,7 +874,7 @@ impl crate::blocking::HFBucketSync {
         local_path: PathBuf,
         /// Sync direction (upload or download).
         direction: BucketSyncDirection,
-        /// Optional prefix within the bucket (subdirectory).
+        /// Prefix within the bucket (subdirectory).
         #[builder(into)]
         prefix: Option<String>,
         /// Delete destination files not present in source.

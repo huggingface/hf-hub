@@ -82,6 +82,18 @@ fn repo(client: &HFClient, repo_id: &str) -> HFRepository {
     }
 }
 
+async fn collect_file_paths(test_repo: &HFRepository) -> std::collections::HashSet<String> {
+    let stream = test_repo.list_tree().recursive(true).send().unwrap();
+    futures::pin_mut!(stream);
+    let mut files = std::collections::HashSet::new();
+    while let Some(entry) = stream.next().await {
+        if let RepoTreeEntry::File { path, .. } = entry.unwrap() {
+            files.insert(path);
+        }
+    }
+    files
+}
+
 /// Create an HFRepository handle with a specific repo type.
 fn repo_typed(client: &HFClient, repo_id: &str, repo_type: RepoType) -> HFRepository {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
@@ -311,14 +323,6 @@ async fn test_list_spaces_with_sdk_filter() {
 }
 
 #[tokio::test]
-async fn test_list_repo_files() {
-    let Some(client) = prod_api() else { return };
-    let files = repo(&client, TEST_MODEL_REPO).list_files().send().await.unwrap();
-    assert!(files.contains(&"config.json".to_string()));
-    assert!(files.contains(&"README.md".to_string()));
-}
-
-#[tokio::test]
 async fn test_list_repo_tree() {
     let Some(client) = prod_api() else { return };
     let r = repo(&client, TEST_MODEL_REPO);
@@ -409,24 +413,18 @@ async fn test_whoami() {
 }
 
 #[tokio::test]
-async fn test_auth_check() {
-    let Some(client) = api() else { return };
-    client.auth_check().send().await.unwrap();
-}
-
-#[tokio::test]
-async fn test_get_user_overview() {
+async fn test_user_overview() {
     let Some(client) = prod_api() else { return };
     let username = TEST_USER;
-    let user = client.get_user_overview().username(username).send().await.unwrap();
+    let user = client.user_overview().username(username).send().await.unwrap();
     assert_eq!(user.username, username);
 }
 
 #[tokio::test]
-async fn test_get_organization_overview() {
+async fn test_organization_overview() {
     let Some(client) = prod_api() else { return };
     let org_name = TEST_ORG;
-    let org = client.get_organization_overview().organization(org_name).send().await.unwrap();
+    let org = client.organization_overview().organization(org_name).send().await.unwrap();
     assert_eq!(org.name, org_name);
 }
 
@@ -809,7 +807,7 @@ async fn test_create_and_delete_repo() {
     let test_repo = repo(&client, &repo_id);
     let commit = test_repo
         .upload_file()
-        .source(AddSource::Bytes(b"hello world".to_vec()))
+        .source(AddSource::bytes(b"hello world"))
         .path_in_repo("test.txt")
         .commit_message("test upload")
         .send()
@@ -843,7 +841,7 @@ async fn create_test_repo(client: &HFClient) -> String {
     let test_repo = repo(client, &repo_id);
     test_repo
         .upload_file()
-        .source(AddSource::Bytes(b"initial content".to_vec()))
+        .source(AddSource::bytes(b"initial content"))
         .path_in_repo("README.md")
         .commit_message("initial commit")
         .send()
@@ -878,9 +876,9 @@ async fn test_create_commit() {
         .unwrap();
     assert!(commit.commit_oid.is_some());
 
-    let files = test_repo.list_files().send().await.unwrap();
-    assert!(files.contains(&"file_a.txt".to_string()));
-    assert!(files.contains(&"file_b.txt".to_string()));
+    let files = collect_file_paths(&test_repo).await;
+    assert!(files.contains("file_a.txt"));
+    assert!(files.contains("file_b.txt"));
 
     delete_test_repo(&client, &repo_id).await;
 }
@@ -908,9 +906,9 @@ async fn test_upload_folder() {
         .unwrap();
     assert!(commit.commit_oid.is_some());
 
-    let files = test_repo.list_files().send().await.unwrap();
-    assert!(files.contains(&"hello.txt".to_string()));
-    assert!(files.contains(&"subdir/nested.txt".to_string()));
+    let files = collect_file_paths(&test_repo).await;
+    assert!(files.contains("hello.txt"));
+    assert!(files.contains("subdir/nested.txt"));
 
     delete_test_repo(&client, &repo_id).await;
 }
@@ -926,7 +924,7 @@ async fn test_delete_file() {
     let test_repo = repo(&client, &repo_id);
     test_repo
         .upload_file()
-        .source(AddSource::Bytes(b"to delete".to_vec()))
+        .source(AddSource::bytes(b"to delete"))
         .path_in_repo("deleteme.txt")
         .commit_message("add file to delete")
         .send()

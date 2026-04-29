@@ -66,7 +66,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
             .filename(args.filenames.into_iter().next().unwrap())
             .maybe_local_dir(args.local_dir)
             .maybe_revision(args.revision)
-            .maybe_force_download(if args.force_download { Some(true) } else { None })
+            .force_download(args.force_download)
             .maybe_progress(handler.clone())
             .send()
             .await?
@@ -88,7 +88,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
             .maybe_allow_patterns(allow_patterns)
             .maybe_ignore_patterns(ignore_patterns)
             .maybe_local_dir(args.local_dir)
-            .maybe_force_download(if args.force_download { Some(true) } else { None })
+            .force_download(args.force_download)
             .maybe_progress(handler.clone())
             .send()
             .await?

@@ -2,7 +2,7 @@
 //!
 //! Start from [`crate::HFClient`] — [`crate::HFClient::model`], [`crate::HFClient::dataset`],
 //! [`crate::HFClient::space`], and [`crate::HFClient::repo`] return a repo handle ([`HFRepository`]
-//! or [`crate::HFSpace`], which derefs to [`HFRepository`]). All read/write files and revision APIs
+//! or [`crate::HFSpace`], which derefs to [`HFRepository`]). All read/write file and revision APIs
 //! hang off that value.
 //!
 //! Submodule pages group related builders and types:
@@ -31,7 +31,10 @@ use std::str::FromStr;
 use bon::bon;
 pub use commits::{CommitAuthor, DiffEntry, GitCommitInfo, GitRefInfo, GitRefs};
 pub use diff::{GitStatus, HFDiffParseError, HFFileDiff};
-pub use files::{AddSource, BlobLfsInfo, CommitInfo, CommitOperation, FileMetadataInfo, LastCommitInfo, RepoTreeEntry};
+pub use files::{
+    AddSource, BlobLfsInfo, BlobSecurityInfo, CommitInfo, CommitOperation, FileMetadataInfo, LastCommitInfo,
+    RepoTreeEntry,
+};
 pub(crate) use files::{extract_file_size, extract_xet_hash};
 use futures::Stream;
 use serde::de::DeserializeOwned;
@@ -80,6 +83,34 @@ pub enum GatedNotificationsMode {
     RealTime,
 }
 
+/// Notification preferences for gated-access requests on a repository.
+///
+/// Groups the cadence (`mode`) with the optional override `email`. Pass to
+/// [`HFRepository::update_settings`] via the `gated_notifications` parameter so
+/// the two fields move together — leaving the email out keeps the existing
+/// recipient.
+#[derive(Debug, Clone)]
+pub struct GatedNotifications {
+    /// Cadence at which gated-access notifications are sent.
+    pub mode: GatedNotificationsMode,
+    /// Override the email address that receives gated-access notifications.
+    /// When `None`, the existing recipient configured on the repository is left in place.
+    pub email: Option<String>,
+}
+
+impl GatedNotifications {
+    /// Construct a notification configuration with just the cadence.
+    pub fn new(mode: GatedNotificationsMode) -> Self {
+        Self { mode, email: None }
+    }
+
+    /// Set or replace the override email recipient for gated-access notifications.
+    pub fn with_email(mut self, email: impl Into<String>) -> Self {
+        self.email = Some(email.into());
+        self
+    }
+}
+
 /// Repo-type-tagged wrapper over [`ModelInfo`], [`DatasetInfo`], and [`SpaceInfo`].
 ///
 /// Returned by [`HFRepository::info`]; the active variant
@@ -93,6 +124,8 @@ pub enum RepoInfo {
     Dataset(DatasetInfo),
     /// Info for a Space repository.
     Space(SpaceInfo),
+    /// Info for a kernel repository.
+    Kernel(KernelInfo),
 }
 
 /// A single file entry in a repository's flat "siblings" listing, as returned by the repo info endpoint.
@@ -459,6 +492,48 @@ pub struct SpaceInfo {
     pub used_storage: Option<u64>,
 }
 
+/// Metadata for a kernel repository on the Hub.
+///
+/// Returned by [`HFRepository::info`] when the repo is a kernel. The Hub's
+/// `/api/kernels/{repo_id}` endpoint returns a slim shape compared with
+/// model/dataset/space repos — fields like `tags`, `cardData`, and `siblings`
+/// are not exposed by this endpoint and are intentionally absent here. Most
+/// fields are optional because they depend on the repo's state.
+///
+/// Kernels are also retrievable via `/api/models/{repo_id}` (kernels carry
+/// `library_name: "kernels"`) if you need the full model-style metadata; in
+/// that case go through [`HFClient::model`] and the [`ModelInfo`] response.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KernelInfo {
+    /// Repo ID, in the form `owner/name`.
+    pub id: String,
+    /// Internal Hub identifier (the API's `_id` field). Most callers should use `id` instead.
+    #[serde(rename = "_id")]
+    pub internal_id: Option<String>,
+    /// Owner of the repo (the part before `/` in `id`).
+    pub author: Option<String>,
+    /// Git commit SHA at the revision the response describes.
+    pub sha: Option<String>,
+    /// Whether the repo is private.
+    pub private: Option<bool>,
+    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"` indicating
+    /// the approval mode for access requests. Modeled as raw JSON because the field is union-typed.
+    pub gated: Option<serde_json::Value>,
+    /// Total downloads of this kernel.
+    pub downloads: Option<u64>,
+    /// Number of likes on the kernel.
+    pub likes: Option<u64>,
+    /// ISO-8601 timestamp of the most recent commit to the repo.
+    pub last_modified: Option<String>,
+    /// Whether the publisher is trusted by the Hub. Kernels from trusted publishers receive a
+    /// distinct badge in the UI.
+    pub trusted_publisher: Option<bool>,
+    /// Driver families the prebuilt kernel artifacts support, e.g. `"cuda"`, `"xpu"`, `"cpu"`.
+    /// May be absent when the kernel has not declared its supported drivers.
+    pub supported_driver_families: Option<Vec<String>>,
+}
+
 /// URL of a repository, returned by create/move endpoints.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RepoUrl {
@@ -512,7 +587,9 @@ impl FromStr for RepoType {
             "dataset" => Ok(RepoType::Dataset),
             "space" => Ok(RepoType::Space),
             "kernel" => Ok(RepoType::Kernel),
-            _ => Err(HFError::Other(format!("Unknown repo type: {s}"))),
+            _ => Err(HFError::InvalidParameter(format!(
+                "unknown repo type: {s:?}. Expected 'model', 'dataset', 'space', or 'kernel'"
+            ))),
         }
     }
 }
@@ -538,9 +615,9 @@ impl FromStr for GatedApprovalMode {
             "false" | "disabled" => Ok(GatedApprovalMode::Disabled),
             "auto" => Ok(GatedApprovalMode::Auto),
             "manual" => Ok(GatedApprovalMode::Manual),
-            _ => {
-                Err(HFError::Other(format!("Unknown gated approval mode: {s}. Expected 'auto', 'manual', or 'false'")))
-            },
+            _ => Err(HFError::InvalidParameter(format!(
+                "unknown gated approval mode: {s:?}. Expected 'auto', 'manual', or 'false'"
+            ))),
         }
     }
 }
@@ -552,7 +629,9 @@ impl FromStr for GatedNotificationsMode {
         match s.to_lowercase().as_str() {
             "bulk" => Ok(GatedNotificationsMode::Bulk),
             "real-time" | "realtime" => Ok(GatedNotificationsMode::RealTime),
-            _ => Err(HFError::Other(format!("Unknown gated notifications mode: {s}. Expected 'bulk' or 'real-time'"))),
+            _ => Err(HFError::InvalidParameter(format!(
+                "unknown gated notifications mode: {s:?}. Expected 'bulk' or 'real-time'"
+            ))),
         }
     }
 }
@@ -564,6 +643,63 @@ impl RepoInfo {
             RepoInfo::Model(_) => RepoType::Model,
             RepoInfo::Dataset(_) => RepoType::Dataset,
             RepoInfo::Space(_) => RepoType::Space,
+            RepoInfo::Kernel(_) => RepoType::Kernel,
+        }
+    }
+
+    /// Consume `self` and return the [`ModelInfo`] when this is a model repo.
+    ///
+    /// Useful when the caller already knows the repo type at compile time —
+    /// e.g. after `client.model(...)` — and wants to avoid a `match` on
+    /// [`RepoInfo`]. On a mismatch the original `RepoInfo` is returned in the
+    /// `Err`, so no information is lost.
+    #[allow(clippy::result_large_err)]
+    pub fn into_model(self) -> Result<ModelInfo, RepoInfo> {
+        match self {
+            RepoInfo::Model(info) => Ok(info),
+            other => Err(other),
+        }
+    }
+
+    /// Consume `self` and return the [`DatasetInfo`] when this is a dataset repo.
+    ///
+    /// Useful when the caller already knows the repo type at compile time —
+    /// e.g. after `client.dataset(...)` — and wants to avoid a `match` on
+    /// [`RepoInfo`]. On a mismatch the original `RepoInfo` is returned in the
+    /// `Err`, so no information is lost.
+    #[allow(clippy::result_large_err)]
+    pub fn into_dataset(self) -> Result<DatasetInfo, RepoInfo> {
+        match self {
+            RepoInfo::Dataset(info) => Ok(info),
+            other => Err(other),
+        }
+    }
+
+    /// Consume `self` and return the [`SpaceInfo`] when this is a Space repo.
+    ///
+    /// Useful when the caller already knows the repo type at compile time —
+    /// e.g. after `client.space(...)` — and wants to avoid a `match` on
+    /// [`RepoInfo`]. On a mismatch the original `RepoInfo` is returned in the
+    /// `Err`, so no information is lost.
+    #[allow(clippy::result_large_err)]
+    pub fn into_space(self) -> Result<SpaceInfo, RepoInfo> {
+        match self {
+            RepoInfo::Space(info) => Ok(info),
+            other => Err(other),
+        }
+    }
+
+    /// Consume `self` and return the [`KernelInfo`] when this is a kernel repo.
+    ///
+    /// Useful when the caller already knows the repo type at compile time —
+    /// e.g. after `client.repo(RepoType::Kernel, ...)` — and wants to avoid a
+    /// `match` on [`RepoInfo`]. On a mismatch the original `RepoInfo` is
+    /// returned in the `Err`, so no information is lost.
+    #[allow(clippy::result_large_err)]
+    pub fn into_kernel(self) -> Result<KernelInfo, RepoInfo> {
+        match self {
+            RepoInfo::Kernel(info) => Ok(info),
+            other => Err(other),
         }
     }
 }
@@ -835,7 +971,8 @@ impl HFClient {
     /// - `repo_type`: type of repository to create (model, dataset, space, kernel).
     /// - `private`: whether the repository should be private.
     /// - `exist_ok` (default `false`): if `true`, do not error when the repository already exists.
-    /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`).
+    /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
+    ///   `Space`; ignored for other repo types.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn create_repo(
         &self,
@@ -849,7 +986,8 @@ impl HFClient {
         /// If `true`, do not error when the repository already exists.
         #[builder(default)]
         exist_ok: bool,
-        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`).
+        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is `Space`;
+        /// ignored for other repo types.
         #[builder(into)]
         space_sdk: Option<String>,
     ) -> HFResult<RepoUrl> {
@@ -1076,17 +1214,41 @@ impl HFRepository {
     ) -> HFResult<SpaceInfo> {
         self.fetch_repo_info(revision, expand).await
     }
+
+    /// Fetch kernel-specific info from `/api/kernels/{repo_id}` (or
+    /// `/api/kernels/{repo_id}/revision/{revision}` when pinned).
+    ///
+    /// Note: the Hub silently ignores `expand` on this endpoint; the parameter
+    /// is plumbed through for symmetry but does not change the response shape.
+    pub(crate) async fn kernel_info(
+        &self,
+        revision: Option<String>,
+        expand: Option<Vec<String>>,
+    ) -> HFResult<KernelInfo> {
+        self.fetch_repo_info(revision, expand).await
+    }
 }
 
 #[bon]
 impl HFRepository {
     /// Fetch repository metadata, returning the appropriate [`RepoInfo`] variant.
     ///
+    /// When the caller statically knows the repo type — e.g. after `client.model(...)`,
+    /// `client.dataset(...)`, `client.space(...)`, or `client.repo(RepoType::Kernel, ...)` —
+    /// prefer the typed accessors [`RepoInfo::into_model`], [`RepoInfo::into_dataset`],
+    /// [`RepoInfo::into_space`], and [`RepoInfo::into_kernel`] over a manual `match` on the
+    /// returned enum.
+    ///
+    /// For [`RepoType::Kernel`], note that the Hub's `/api/kernels/{repo_id}` endpoint returns
+    /// a slim shape (no `tags`, `cardData`, or `siblings`) and silently ignores `expand`. To get
+    /// the full model-style metadata for a kernel, build a model handle for the same repo id
+    /// (`client.model(owner, name)`) and call `info()` on it.
+    ///
     /// # Parameters
     ///
     /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
     /// - `expand`: list of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
-    ///   the listed properties (plus `_id` and `id`) are returned.
+    ///   the listed properties (plus `_id` and `id`) are returned. Ignored for kernel repos.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn info(
         &self,
@@ -1094,16 +1256,14 @@ impl HFRepository {
         #[builder(into)]
         revision: Option<String>,
         /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`). When set, only
-        /// the listed properties (plus `_id` and `id`) are returned.
+        /// the listed properties (plus `_id` and `id`) are returned. Ignored for kernel repos.
         expand: Option<Vec<String>>,
     ) -> HFResult<RepoInfo> {
         match self.repo_type {
             RepoType::Model => self.model_info(revision, expand).await.map(RepoInfo::Model),
             RepoType::Dataset => self.dataset_info(revision, expand).await.map(RepoInfo::Dataset),
             RepoType::Space => self.space_info(revision, expand).await.map(RepoInfo::Space),
-            RepoType::Kernel => {
-                Err(HFError::Other("Repository info is not implemented yet for kernel repositories".to_string()))
-            },
+            RepoType::Kernel => self.kernel_info(revision, expand).await.map(RepoInfo::Kernel),
         }
     }
 
@@ -1212,8 +1372,8 @@ impl HFRepository {
     /// - `gated`: access-gating mode for the repository (e.g. `auto`, `manual`, disabled).
     /// - `description`: repository description shown on the Hub page.
     /// - `discussions_disabled`: whether discussions are disabled on this repository.
-    /// - `gated_notifications_email`: email address to receive gated-access request notifications.
-    /// - `gated_notifications_mode`: when to send gated-access notifications (e.g. `bulk`, `real-time`).
+    /// - `gated_notifications`: notification cadence (and optional email override) for gated-access requests. The
+    ///   cadence is required when this is set; pass [`GatedNotifications::with_email`] to override the recipient too.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn update_settings(
         &self,
@@ -1226,11 +1386,8 @@ impl HFRepository {
         description: Option<String>,
         /// Whether discussions are disabled on this repository.
         discussions_disabled: Option<bool>,
-        /// Email address to receive gated-access request notifications.
-        #[builder(into)]
-        gated_notifications_email: Option<String>,
-        /// When to send gated-access notifications (e.g. `bulk`, `real-time`).
-        gated_notifications_mode: Option<GatedNotificationsMode>,
+        /// Notification cadence (and optional email override) for gated-access requests.
+        gated_notifications: Option<GatedNotifications>,
     ) -> HFResult<()> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -1254,8 +1411,8 @@ impl HFRepository {
             gated: gated.as_ref(),
             description: description.as_deref(),
             discussions_disabled,
-            gated_notifications_email: gated_notifications_email.as_deref(),
-            gated_notifications_mode: gated_notifications_mode.as_ref(),
+            gated_notifications_email: gated_notifications.as_ref().and_then(|g| g.email.as_deref()),
+            gated_notifications_mode: gated_notifications.as_ref().map(|g| &g.mode),
         };
 
         let url = format!("{}/settings", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()));
@@ -1464,7 +1621,8 @@ impl crate::blocking::HFClientSync {
         /// If `true`, do not error when the repository already exists.
         #[builder(default)]
         exist_ok: bool,
-        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`).
+        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is `Space`;
+        /// ignored for other repo types.
         #[builder(into)]
         space_sdk: Option<String>,
     ) -> HFResult<RepoUrl> {
@@ -1596,11 +1754,8 @@ impl crate::blocking::HFRepositorySync {
         description: Option<String>,
         /// Whether discussions are disabled on this repository.
         discussions_disabled: Option<bool>,
-        /// Email address to receive gated-access request notifications.
-        #[builder(into)]
-        gated_notifications_email: Option<String>,
-        /// When to send gated-access notifications (e.g. `bulk`, `real-time`).
-        gated_notifications_mode: Option<GatedNotificationsMode>,
+        /// Notification cadence (and optional email override) for gated-access requests.
+        gated_notifications: Option<GatedNotifications>,
     ) -> HFResult<()> {
         self.runtime.block_on(
             self.inner
@@ -1609,8 +1764,7 @@ impl crate::blocking::HFRepositorySync {
                 .maybe_gated(gated)
                 .maybe_description(description)
                 .maybe_discussions_disabled(discussions_disabled)
-                .maybe_gated_notifications_email(gated_notifications_email)
-                .maybe_gated_notifications_mode(gated_notifications_mode)
+                .maybe_gated_notifications(gated_notifications)
                 .send(),
         )
     }
@@ -1621,8 +1775,8 @@ mod tests {
     use futures::StreamExt;
 
     use super::{
-        DatasetInfo, EvalResultEntry, HFRepository, InferenceProviderMapping, ModelInfo, RepoType, SafeTensorsInfo,
-        SpaceInfo, TransformersInfo, split_repo_id,
+        DatasetInfo, EvalResultEntry, HFRepository, InferenceProviderMapping, KernelInfo, ModelInfo, RepoType,
+        SafeTensorsInfo, SpaceInfo, TransformersInfo, split_repo_id,
     };
     use crate::client::HFClient;
 
@@ -1771,6 +1925,48 @@ mod tests {
         let json = r#"{"id":"o/m","modelId":"o/m","brandNewField":42}"#;
         let info: ModelInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.id, "o/m");
+    }
+
+    /// Real `/api/kernels/{repo_id}` response shape (slim — no `tags`,
+    /// `cardData`, or `siblings`). The `authorData` and `_id` fields are
+    /// ignored on deserialize but must not break the parse.
+    #[test]
+    fn test_kernel_info_deserializes_real_response() {
+        let json = r#"{
+            "_id":"69d02879cbdc347de53cced2",
+            "author":"kernels-community",
+            "authorData":{"name":"kernels-community","type":"org"},
+            "trustedPublisher":false,
+            "downloads":7199,
+            "gated":false,
+            "id":"kernels-community/flash-attn2",
+            "isLikedByUser":false,
+            "lastModified":"2026-04-20T20:31:57.000Z",
+            "likes":6,
+            "private":false,
+            "repoType":"kernel",
+            "sha":"e16b327d7c5b015cac48944d4058f688e4d0c62f",
+            "supportedDriverFamilies":["cuda","xpu","cpu"]
+        }"#;
+        let info: KernelInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.id, "kernels-community/flash-attn2");
+        assert_eq!(info.author.as_deref(), Some("kernels-community"));
+        assert_eq!(info.sha.as_deref(), Some("e16b327d7c5b015cac48944d4058f688e4d0c62f"));
+        assert_eq!(info.downloads, Some(7199));
+        assert_eq!(info.likes, Some(6));
+        assert_eq!(info.trusted_publisher, Some(false));
+        assert_eq!(info.supported_driver_families.as_deref(), Some(&["cuda".into(), "xpu".into(), "cpu".into()][..]));
+        // `gated: false` is kept as JSON (consistent with ModelInfo/SpaceInfo).
+        assert_eq!(info.gated.as_ref().and_then(|v| v.as_bool()), Some(false));
+    }
+
+    /// `supportedDriverFamilies` is absent on some kernels — must remain optional.
+    #[test]
+    fn test_kernel_info_missing_supported_driver_families() {
+        let json = r#"{"id":"o/k","sha":"abc","downloads":0,"likes":0,"private":false,"gated":false}"#;
+        let info: KernelInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.id, "o/k");
+        assert!(info.supported_driver_families.is_none());
     }
 
     #[test]

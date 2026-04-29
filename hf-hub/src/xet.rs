@@ -13,7 +13,7 @@ use xet::error::XetError;
 use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileInfo, XetFileMetadata, XetFileUpload};
 
 use crate::client::HFClient;
-use crate::error::{HFError, HFResult};
+use crate::error::{HFError, HFResult, XetOperation};
 use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent};
 use crate::repository::{AddSource, HFRepository, RepoType};
 use crate::{constants, retry};
@@ -215,7 +215,7 @@ async fn xet_upload_inner(
                 .xet_session()?
                 .0
                 .new_upload_commit()
-                .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
+                .map_err(|e| HFError::xet(XetOperation::Upload, e))?
         },
     }
     .with_endpoint(conn.endpoint.clone())
@@ -223,7 +223,7 @@ async fn xet_upload_inner(
     .with_token_refresh_url(token_url, hf_client.auth_headers())
     .build()
     .await
-    .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?;
+    .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
     tracing::info!("xet upload commit built, queuing file uploads");
 
     let mut task_ids_in_order = Vec::with_capacity(files.len());
@@ -247,14 +247,14 @@ async fn xet_upload_inner(
                 commit
                     .upload_from_path(path.clone(), Sha256Policy::Compute)
                     .await
-                    .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
+                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?
             },
             AddSource::Bytes(bytes) => {
                 item_name_to_target_path.insert(target_path.clone(), target_path.clone());
                 commit
                     .upload_bytes(bytes.clone(), Sha256Policy::Compute, Some(target_path.clone()))
                     .await
-                    .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?
+                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?
             },
         };
         task_ids_in_order.push(handle.task_id());
@@ -306,10 +306,7 @@ async fn xet_upload_inner(
             }
         })
     });
-    let results = commit
-        .commit()
-        .await
-        .map_err(|e| HFError::Other(format!("Xet upload failed: {e}")))?;
+    let results = commit.commit().await.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
     if let Some(h) = poll_handle {
         h.abort();
     }
@@ -365,7 +362,7 @@ impl HFRepository {
         let repo_path = self.repo_path();
         let repo_type = Some(self.repo_type);
         let file_hash = crate::repository::extract_xet_hash(head_response)
-            .ok_or_else(|| HFError::Other("Missing X-Xet-Hash header".to_string()))?;
+            .ok_or_else(|| HFError::malformed_response("missing X-Xet-Hash header"))?;
 
         let file_size: u64 = crate::repository::extract_file_size(head_response).unwrap_or(0);
 
@@ -393,7 +390,7 @@ impl HFRepository {
                     .xet_session()?
                     .0
                     .new_file_download_group()
-                    .map_err(|e| HFError::Other(format!("Xet download failed: {e}")))?
+                    .map_err(|e| HFError::xet(XetOperation::Download, e))?
             },
         }
         .with_endpoint(conn.endpoint.clone())
@@ -401,14 +398,14 @@ impl HFRepository {
         .with_token_refresh_url(token_url, self.hf_client.auth_headers())
         .build()
         .await
-        .map_err(|e| HFError::Other(format!("Xet download failed: {e}")))?;
+        .map_err(|e| HFError::xet(XetOperation::Download, e))?;
 
         let file_info = XetFileInfo::new(file_hash, file_size);
 
         let handle = group
             .download_file_to_path(file_info, dest_path.clone())
             .await
-            .map_err(|e| HFError::Other(format!("Xet download failed: {e}")))?;
+            .map_err(|e| HFError::xet(XetOperation::Download, e))?;
 
         let tracked = Arc::new(vec![TrackedDownload {
             handle,
@@ -422,7 +419,7 @@ impl HFRepository {
         if let Some(h) = poll_handle {
             h.abort();
         }
-        result.map_err(|e| HFError::Other(format!("Xet download failed: {e}")))?;
+        result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
         emit_remaining_completes(progress, &tracked);
 
         Ok(dest_path)
@@ -463,7 +460,7 @@ impl HFRepository {
                     .xet_session()?
                     .0
                     .new_file_download_group()
-                    .map_err(|e| HFError::Other(format!("Xet download failed: {e}")))?
+                    .map_err(|e| HFError::xet(XetOperation::Download, e))?
             },
         }
         .with_endpoint(conn.endpoint.clone())
@@ -471,14 +468,14 @@ impl HFRepository {
         .with_token_refresh_url(token_url, self.hf_client.auth_headers())
         .build()
         .await
-        .map_err(|e| HFError::Other(format!("Xet download failed: {e}")))?;
+        .map_err(|e| HFError::xet(XetOperation::Download, e))?;
 
         let file_info = XetFileInfo::new(file_hash.to_string(), file_size);
 
         let handle = group
             .download_file_to_path(file_info, incomplete_path.clone())
             .await
-            .map_err(|e| HFError::Other(format!("Xet download failed: {e}")))?;
+            .map_err(|e| HFError::xet(XetOperation::Download, e))?;
 
         let tracked = Arc::new(vec![TrackedDownload {
             handle,
@@ -492,7 +489,7 @@ impl HFRepository {
         if let Some(h) = poll_handle {
             h.abort();
         }
-        result.map_err(|e| HFError::Other(format!("Xet download failed: {e}")))?;
+        result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
         emit_remaining_completes(progress, &tracked);
 
         std::fs::rename(&incomplete_path, path)?;
@@ -529,7 +526,7 @@ impl HFRepository {
                     .xet_session()?
                     .0
                     .new_file_download_group()
-                    .map_err(|e| HFError::Other(format!("Xet batch download failed: {e}")))?
+                    .map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?
             },
         }
         .with_endpoint(conn.endpoint.clone())
@@ -537,7 +534,7 @@ impl HFRepository {
         .with_token_refresh_url(token_url, self.hf_client.auth_headers())
         .build()
         .await
-        .map_err(|e| HFError::Other(format!("Xet batch download failed: {e}")))?;
+        .map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
 
         let mut tracked_vec = Vec::with_capacity(files.len());
         let mut incomplete_paths = Vec::with_capacity(files.len());
@@ -553,7 +550,7 @@ impl HFRepository {
             let handle = group
                 .download_file_to_path(file_info, incomplete.clone())
                 .await
-                .map_err(|e| HFError::Other(format!("Xet batch download failed: {e}")))?;
+                .map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
 
             tracked_vec.push(TrackedDownload {
                 handle,
@@ -571,7 +568,7 @@ impl HFRepository {
         if let Some(h) = poll_handle {
             h.abort();
         }
-        result.map_err(|e| HFError::Other(format!("Xet batch download failed: {e}")))?;
+        result.map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
         emit_remaining_completes(progress, &tracked);
 
         for (incomplete, final_path) in &incomplete_paths {
@@ -611,7 +608,7 @@ impl HFRepository {
                     .xet_session()?
                     .0
                     .new_download_stream_group()
-                    .map_err(|e| HFError::Other(format!("Xet stream download failed: {e}")))?
+                    .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?
             },
         }
         .with_endpoint(conn.endpoint.clone())
@@ -619,14 +616,14 @@ impl HFRepository {
         .with_token_refresh_url(token_url, self.hf_client.auth_headers())
         .build()
         .await
-        .map_err(|e| HFError::Other(format!("Xet stream download failed: {e}")))?;
+        .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?;
 
         let file_info = XetFileInfo::new(file_hash.to_string(), file_size);
 
         let mut stream = group
             .download_stream(file_info, range)
             .await
-            .map_err(|e| HFError::Other(format!("Xet stream download failed: {e}")))?;
+            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?;
 
         stream.start();
 
@@ -634,7 +631,7 @@ impl HFRepository {
             match stream.next().await {
                 Ok(Some(bytes)) => Some((Ok(bytes), stream)),
                 Ok(None) => None,
-                Err(e) => Some((Err(HFError::Other(format!("Xet stream read failed: {e}"))), stream)),
+                Err(e) => Some((Err(HFError::xet(XetOperation::StreamDownload, e)), stream)),
             }
         }))
     }
@@ -709,7 +706,7 @@ impl crate::buckets::HFBucket {
                     .xet_session()?
                     .0
                     .new_file_download_group()
-                    .map_err(|e| HFError::Other(format!("Xet bucket batch download failed: {e}")))?
+                    .map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?
             },
         }
         .with_endpoint(conn.endpoint.clone())
@@ -717,7 +714,7 @@ impl crate::buckets::HFBucket {
         .with_token_refresh_url(token_url, self.hf_client.auth_headers())
         .build()
         .await
-        .map_err(|e| HFError::Other(format!("Xet bucket batch download failed: {e}")))?;
+        .map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
 
         let mut tracked_vec = Vec::with_capacity(files.len());
         let mut incomplete_paths = Vec::with_capacity(files.len());
@@ -733,7 +730,7 @@ impl crate::buckets::HFBucket {
             let handle = group
                 .download_file_to_path(file_info, incomplete.clone())
                 .await
-                .map_err(|e| HFError::Other(format!("Xet bucket batch download failed: {e}")))?;
+                .map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
 
             tracked_vec.push(TrackedDownload {
                 handle,
@@ -751,7 +748,7 @@ impl crate::buckets::HFBucket {
         if let Some(h) = poll_handle {
             h.abort();
         }
-        result.map_err(|e| HFError::Other(format!("Xet bucket batch download failed: {e}")))?;
+        result.map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
         emit_remaining_completes(progress, &tracked);
 
         for (incomplete, final_path) in &incomplete_paths {
@@ -799,9 +796,15 @@ mod tests {
     #[test]
     fn test_xet_error_message_preserved_in_hferror() {
         let xet_err = XetError::Network("connection reset by peer".into());
-        let hf_err = HFError::Other(format!("Xet download failed: {xet_err}"));
+        let hf_err = HFError::xet(XetOperation::Download, xet_err);
         let msg = hf_err.to_string();
         assert!(msg.contains("Xet download failed"), "missing prefix: {msg}");
         assert!(msg.contains("connection reset by peer"), "missing original message: {msg}");
+
+        // Variant + operation are observable to callers without parsing the message.
+        match hf_err {
+            HFError::Xet { operation, .. } => assert_eq!(operation, XetOperation::Download),
+            other => panic!("expected HFError::Xet, got {other:?}"),
+        }
     }
 }

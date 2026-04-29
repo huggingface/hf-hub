@@ -10,16 +10,13 @@ use hf_hub::HFClient;
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
 
-    client.auth_check().send().await?;
-    println!("Token is valid");
-
     let me = client.whoami().send().await?;
     println!("Logged in as: {} (type: {:?}, pro: {:?})", me.username, me.user_type, me.is_pro);
 
-    let user = client.get_user_overview().username("julien-c").send().await?;
+    let user = client.user_overview().username("julien-c").send().await?;
     println!("\nUser overview: {} (fullname: {:?})", user.username, user.fullname);
 
-    let org = client.get_organization_overview().organization("huggingface").send().await?;
+    let org = client.organization_overview().organization("huggingface").send().await?;
     println!("Org overview: {} (fullname: {:?})", org.name, org.fullname);
 
     let followers = client.list_user_followers().username("julien-c").send()?;

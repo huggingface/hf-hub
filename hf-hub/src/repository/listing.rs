@@ -3,14 +3,13 @@
 //! Builders on [`HFRepository`] for inspecting what's in a repo without downloading file
 //! contents:
 //!
-//! - [`HFRepository::list_files`] — flat list of file paths at a revision.
 //! - [`HFRepository::list_tree`] — paginated stream of [`RepoTreeEntry`] (files and directories), optionally recursive
 //!   and prefix-filtered.
 //! - [`HFRepository::get_paths_info`] — batched lookup of metadata for a known set of paths.
 //! - [`HFRepository::get_file_metadata`] — HEAD-based metadata for one file (size, ETag, commit hash, xet hash).
 
 use bon::bon;
-use futures::stream::{Stream, StreamExt};
+use futures::stream::Stream;
 use reqwest::Url;
 
 use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash};
@@ -20,40 +19,11 @@ use crate::{constants, retry};
 
 #[bon]
 impl HFRepository {
-    /// Return a flat list of file paths in the repository at the given revision.
-    ///
-    /// This is a convenience wrapper around a recursive [`HFRepository::list_tree`]
-    /// call that drops directory entries and returns only file paths.
-    ///
-    /// # Parameters
-    ///
-    /// - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn list_files(
-        &self,
-        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-    ) -> HFResult<Vec<String>> {
-        let stream = self.list_tree().maybe_revision(revision).recursive(true).send()?;
-        futures::pin_mut!(stream);
-
-        let mut files = Vec::new();
-        while let Some(entry) = stream.next().await {
-            let entry = entry?;
-            if let RepoTreeEntry::File { path, .. } = entry {
-                files.push(path);
-            }
-        }
-        Ok(files)
-    }
-
     /// Stream file and directory entries in the repository tree.
     ///
     /// Returns `HFResult<impl Stream<Item = HFResult<RepoTreeEntry>>>`.
     ///
-    /// Use [`HFRepository::list_files`] when you only need paths, or
-    /// [`HFRepository::get_paths_info`] when you already know the exact paths
+    /// Use [`HFRepository::get_paths_info`] when you already know the exact paths
     /// you want to inspect.
     ///
     /// # Parameters
@@ -175,10 +145,12 @@ impl HFRepository {
             .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Entry { path: filename.clone() })
             .await?;
 
-        let etag =
-            extract_etag(&response).ok_or_else(|| HFError::Other(format!("Missing ETag header for {filename}")))?;
-        let commit_hash = extract_commit_hash(&response)
-            .ok_or_else(|| HFError::Other(format!("Missing X-Repo-Commit header for {filename}")))?;
+        let etag = extract_etag(&response).ok_or_else(|| {
+            HFError::malformed_response_at(format!("missing ETag header for {filename}"), url.to_string())
+        })?;
+        let commit_hash = extract_commit_hash(&response).ok_or_else(|| {
+            HFError::malformed_response_at(format!("missing X-Repo-Commit header for {filename}"), url.to_string())
+        })?;
         let xet_hash = extract_xet_hash(&response);
         let file_size = extract_file_size(&response).unwrap_or_else(|| {
             tracing::warn!(
@@ -201,20 +173,11 @@ impl HFRepository {
 }
 
 #[cfg(feature = "blocking")]
+use futures::stream::StreamExt as _;
+
+#[cfg(feature = "blocking")]
 #[bon]
 impl crate::blocking::HFRepositorySync {
-    /// Blocking counterpart of [`HFRepository::list_files`]. See the async method for parameters
-    /// and behavior.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn list_files(
-        &self,
-        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-    ) -> HFResult<Vec<String>> {
-        self.runtime.block_on(self.inner.list_files().maybe_revision(revision).send())
-    }
-
     /// Blocking counterpart of [`HFRepository::list_tree`]. Returns the collected stream as a
     /// `Vec<RepoTreeEntry>`.
     #[builder(finish_fn = send, derive(Debug, Clone))]

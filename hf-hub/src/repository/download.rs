@@ -31,8 +31,8 @@ struct DownloadFileParams {
     filename: String,
     local_dir: Option<PathBuf>,
     revision: Option<String>,
-    force_download: Option<bool>,
-    local_files_only: Option<bool>,
+    force_download: bool,
+    local_files_only: bool,
     progress: Option<Progress>,
 }
 
@@ -50,8 +50,8 @@ struct SnapshotDownloadParams {
     allow_patterns: Option<Vec<String>>,
     ignore_patterns: Option<Vec<String>>,
     local_dir: Option<PathBuf>,
-    force_download: Option<bool>,
-    local_files_only: Option<bool>,
+    force_download: bool,
+    local_files_only: bool,
     max_workers: Option<usize>,
     progress: Option<Progress>,
 }
@@ -318,7 +318,7 @@ impl HFRepository {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let cache_dir = self.hf_client.cache_dir();
         let repo_folder = cache::repo_folder_name(&self.repo_path(), Some(self.repo_type));
-        let force_download = params.force_download.unwrap_or(false);
+        let force_download = params.force_download;
 
         if cache::is_commit_hash(revision) && !force_download {
             let snap = cache::snapshot_path(cache_dir, &repo_folder, revision, &params.filename);
@@ -327,7 +327,7 @@ impl HFRepository {
             }
         }
 
-        if params.local_files_only.unwrap_or(false) {
+        if params.local_files_only {
             return self.resolve_from_cache_only(&repo_folder, revision, &params.filename);
         }
 
@@ -393,20 +393,20 @@ impl HFRepository {
         }
 
         if status == reqwest::StatusCode::NOT_MODIFIED {
-            let etag =
-                cached_etag.ok_or_else(|| HFError::Other("Received 304 but no cached etag available".to_string()))?;
+            let etag = cached_etag
+                .ok_or_else(|| HFError::malformed_response_at("304 Not Modified without cached ETag", url.clone()))?;
             let commit_hash = if cache::is_commit_hash(revision) {
                 revision.to_string()
             } else {
-                cache::read_ref(cache_dir, repo_folder, revision)
-                    .await?
-                    .ok_or_else(|| HFError::Other("Received 304 but no cached commit hash".to_string()))?
+                cache::read_ref(cache_dir, repo_folder, revision).await?.ok_or_else(|| {
+                    HFError::malformed_response_at("304 Not Modified without cached commit hash", url.clone())
+                })?
             };
             return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await;
         }
 
-        let etag =
-            extract_etag(&head_response).ok_or_else(|| HFError::Other("Missing ETag header in response".to_string()));
+        let etag = extract_etag(&head_response)
+            .ok_or_else(|| HFError::malformed_response_at("missing ETag header", url.clone()));
         let commit_hash = extract_commit_hash(&head_response);
         let xet_hash = extract_xet_hash(&head_response);
         let has_xet_hash = xet_hash.is_some();
@@ -428,7 +428,8 @@ impl HFRepository {
         }
 
         let etag = etag?;
-        let commit_hash = commit_hash.ok_or_else(|| HFError::Other("Missing X-Repo-Commit header".to_string()))?;
+        let commit_hash =
+            commit_hash.ok_or_else(|| HFError::malformed_response_at("missing X-Repo-Commit header", url.clone()))?;
 
         params.progress.emit(DownloadEvent::Start {
             total_files: 1,
@@ -436,7 +437,8 @@ impl HFRepository {
         });
 
         if has_xet_hash {
-            let xet_hash = xet_hash.ok_or_else(|| HFError::Other("Missing X-Xet-Hash header".to_string()))?;
+            let xet_hash =
+                xet_hash.ok_or_else(|| HFError::malformed_response_at("missing X-Xet-Hash header", url.clone()))?;
             let blob = cache::blob_path(cache_dir, repo_folder, &etag);
             if !blob.exists() || force_download {
                 if let Some(parent) = blob.parent() {
@@ -507,7 +509,9 @@ impl HFRepository {
             RepoType::Space => self.space_info(Some(revision.to_string()), None).await?.sha,
             _ => self.model_info(Some(revision.to_string()), None).await?.sha,
         };
-        sha.ok_or_else(|| HFError::Other(format!("No commit hash returned for {}/{}", repo_path, revision)))
+        sha.ok_or_else(|| {
+            HFError::malformed_response(format!("repo info for {}@{} returned no commit sha", repo_path, revision))
+        })
     }
 
     async fn list_filtered_files(
@@ -546,7 +550,7 @@ impl HFRepository {
         let repo_folder = cache::repo_folder_name(&self.repo_path(), Some(self.repo_type));
         let cache_dir = self.hf_client.cache_dir();
 
-        if params.local_files_only == Some(true) {
+        if params.local_files_only {
             let commit_hash = if cache::is_commit_hash(revision) {
                 revision.to_string()
             } else {
@@ -572,7 +576,7 @@ impl HFRepository {
             .await?;
 
         let total_files = filenames.len();
-        let force = params.force_download == Some(true);
+        let force = params.force_download;
 
         let mut cached_filenames = Vec::new();
         if !force && params.local_dir.is_none() {
@@ -618,8 +622,9 @@ impl HFRepository {
                         let context = Box::new(crate::error::HttpErrorContext::from_response(resp).await);
                         return Err(HFError::Http { context });
                     }
-                    let etag =
-                        extract_etag(&resp).ok_or_else(|| HFError::Other(format!("Missing ETag for {filename}")))?;
+                    let etag = extract_etag(&resp).ok_or_else(|| {
+                        HFError::malformed_response_at(format!("missing ETag header for {filename}"), url.clone())
+                    })?;
                     let commit = extract_commit_hash(&resp).unwrap_or_else(|| commit_hash_ref.clone());
                     let xet_hash = extract_xet_hash(&resp);
                     let file_size: u64 = extract_file_size(&resp).unwrap_or_else(|| {
@@ -852,7 +857,7 @@ fn build_download_params(
     filenames: &[String],
     _repo_type: Option<RepoType>,
     commit_hash: &str,
-    force_download: Option<bool>,
+    force_download: bool,
     local_dir: Option<PathBuf>,
     progress: &Option<Progress>,
 ) -> Vec<DownloadFileParams> {
@@ -863,7 +868,7 @@ fn build_download_params(
             local_dir: local_dir.clone(),
             revision: Some(commit_hash.to_string()),
             force_download,
-            local_files_only: None,
+            local_files_only: false,
             progress: progress.clone(),
         })
         .collect()
@@ -983,8 +988,8 @@ impl HFRepository {
     /// - `local_dir`: local directory to download the file into. When set, the file is saved with its repo path
     ///   structure.
     /// - `revision`: Git revision. Defaults to the main branch.
-    /// - `force_download`: re-download the file even if a cached copy exists.
-    /// - `local_files_only`: only return the file if cached locally; never make a network request.
+    /// - `force_download` (default `false`): re-download the file even if a cached copy exists.
+    /// - `local_files_only` (default `false`): only return the file if cached locally; never make a network request.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file(
@@ -999,10 +1004,12 @@ impl HFRepository {
         #[builder(into)]
         revision: Option<String>,
         /// Re-download the file even if a cached copy exists.
-        force_download: Option<bool>,
+        #[builder(default)]
+        force_download: bool,
         /// Only return the file if cached locally; never make a network request.
-        local_files_only: Option<bool>,
-        /// Optional progress handler.
+        #[builder(default)]
+        local_files_only: bool,
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
@@ -1048,7 +1055,7 @@ impl HFRepository {
         /// `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
         /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
-        /// Optional progress handler. `Start` is emitted before the stream is returned; `Progress` is emitted
+        /// Progress handler. `Start` is emitted before the stream is returned; `Progress` is emitted
         /// as the caller polls each chunk; `Complete` is emitted when the stream is exhausted.
         #[builder(into)]
         progress: Option<Progress>,
@@ -1093,7 +1100,7 @@ impl HFRepository {
         /// `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
         /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
-        /// Optional progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
+        /// Progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
         /// drained, identically to [`HFRepository::download_file_stream`].
         #[builder(into)]
         progress: Option<Progress>,
@@ -1125,8 +1132,8 @@ impl HFRepository {
     ///   matches at least one pattern are downloaded.
     /// - `ignore_patterns`: globs of repository files to skip. Matched against the same repo paths as `allow_patterns`.
     /// - `local_dir`: local directory to download into.
-    /// - `force_download`: re-download all files even if cached.
-    /// - `local_files_only`: resolve only from the local cache.
+    /// - `force_download` (default `false`): re-download all files even if cached.
+    /// - `local_files_only` (default `false`): resolve only from the local cache.
     /// - `max_workers`: maximum concurrent file downloads (default 8).
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -1144,12 +1151,14 @@ impl HFRepository {
         #[builder(into)]
         local_dir: Option<PathBuf>,
         /// Re-download all files even if cached.
-        force_download: Option<bool>,
+        #[builder(default)]
+        force_download: bool,
         /// Resolve only from the local cache.
-        local_files_only: Option<bool>,
+        #[builder(default)]
+        local_files_only: bool,
         /// Maximum concurrent file downloads (default 8).
         max_workers: Option<usize>,
-        /// Optional progress handler.
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
@@ -1185,10 +1194,12 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)]
         revision: Option<String>,
         /// Re-download the file even if a cached copy exists.
-        force_download: Option<bool>,
+        #[builder(default)]
+        force_download: bool,
         /// Only return the file if cached locally; never make a network request.
-        local_files_only: Option<bool>,
-        /// Optional progress handler.
+        #[builder(default)]
+        local_files_only: bool,
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
@@ -1198,8 +1209,8 @@ impl crate::blocking::HFRepositorySync {
                 .filename(filename)
                 .maybe_local_dir(local_dir)
                 .maybe_revision(revision)
-                .maybe_force_download(force_download)
-                .maybe_local_files_only(local_files_only)
+                .force_download(force_download)
+                .local_files_only(local_files_only)
                 .maybe_progress(progress)
                 .send(),
         )
@@ -1221,7 +1232,7 @@ impl crate::blocking::HFRepositorySync {
         /// `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
         /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
-        /// Optional progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
+        /// Progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
         /// drained, identically to [`HFRepository::download_file_stream`].
         #[builder(into)]
         progress: Option<Progress>,
@@ -1254,12 +1265,14 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)]
         local_dir: Option<PathBuf>,
         /// Re-download all files even if cached.
-        force_download: Option<bool>,
+        #[builder(default)]
+        force_download: bool,
         /// Resolve only from the local cache.
-        local_files_only: Option<bool>,
+        #[builder(default)]
+        local_files_only: bool,
         /// Maximum concurrent file downloads (default 8).
         max_workers: Option<usize>,
-        /// Optional progress handler.
+        /// Progress handler.
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
@@ -1270,8 +1283,8 @@ impl crate::blocking::HFRepositorySync {
                 .maybe_allow_patterns(allow_patterns)
                 .maybe_ignore_patterns(ignore_patterns)
                 .maybe_local_dir(local_dir)
-                .maybe_force_download(force_download)
-                .maybe_local_files_only(local_files_only)
+                .force_download(force_download)
+                .local_files_only(local_files_only)
                 .maybe_max_workers(max_workers)
                 .maybe_progress(progress)
                 .send(),

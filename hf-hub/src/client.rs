@@ -182,7 +182,8 @@ impl HFClientBuilder {
         });
         default_headers.insert(
             USER_AGENT,
-            HeaderValue::from_str(&user_agent).map_err(|e| HFError::Other(format!("Invalid user agent: {e}")))?,
+            HeaderValue::from_str(&user_agent)
+                .map_err(|e| HFError::InvalidParameter(format!("invalid user agent {user_agent:?}: {e}")))?,
         );
 
         let client = match self.client {
@@ -267,15 +268,28 @@ impl HFClient {
         &self.inner.retry_config
     }
 
-    pub(crate) fn endpoint(&self) -> &str {
+    /// Hub base URL this client targets, with any trailing slash trimmed.
+    ///
+    /// Resolved at [`build`](HFClientBuilder::build) time from
+    /// [`HFClientBuilder::endpoint`] → `HF_ENDPOINT` → the default
+    /// (`https://huggingface.co`).
+    pub fn endpoint(&self) -> &str {
         &self.inner.endpoint
     }
 
-    pub(crate) fn cache_dir(&self) -> &std::path::Path {
+    /// Local cache directory used for downloaded files.
+    ///
+    /// Resolved at [`build`](HFClientBuilder::build) time from
+    /// [`HFClientBuilder::cache_dir`] → `HF_HUB_CACHE` → `$HF_HOME/hub` →
+    /// `~/.cache/huggingface/hub`. Returned even when caching is disabled —
+    /// see [`cache_enabled`](Self::cache_enabled) to check that.
+    pub fn cache_dir(&self) -> &std::path::Path {
         &self.inner.cache_dir
     }
 
-    pub(crate) fn cache_enabled(&self) -> bool {
+    /// Whether the local file cache is enabled. Set via
+    /// [`HFClientBuilder::cache_enabled`]; defaults to `true`.
+    pub fn cache_enabled(&self) -> bool {
         self.inner.cache_enabled
     }
 
@@ -390,7 +404,7 @@ impl HFClient {
 
         let session = xet::xet_session::XetSessionBuilder::new()
             .build()
-            .map_err(|e| HFError::Other(format!("Failed to build xet session: {e}")))?;
+            .map_err(|e| HFError::xet(crate::error::XetOperation::Session, e))?;
         guard.session = Some(session.clone());
         guard.generation += 1;
         Ok((session, guard.generation))

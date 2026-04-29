@@ -13,12 +13,6 @@ async fn main() -> hf_hub::HFResult<()> {
 
     // --- Read operations ---
 
-    let files = model.list_files().send().await?;
-    println!("Files in gpt2: {}", files.len());
-    for f in files.iter().take(5) {
-        println!("  - {f}");
-    }
-
     let tree_stream = model.list_tree().recursive(true).send()?;
     futures::pin_mut!(tree_stream);
     println!("\nTree entries in gpt2:");
@@ -76,7 +70,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .upload_file()
-        .source(AddSource::Bytes(b"Hello from Rust!".to_vec()))
+        .source(AddSource::bytes(b"Hello from Rust!"))
         .path_in_repo("hello.txt")
         .commit_message("Add hello.txt via example")
         .send()

@@ -600,7 +600,7 @@ async fn test_upload_file_with_progress() {
 
     let result = repo
         .upload_file()
-        .source(AddSource::Bytes(b"hello from progress test".to_vec()))
+        .source(AddSource::bytes(b"hello from progress test"))
         .path_in_repo("progress_test.txt")
         .commit_message("upload with progress tracking")
         .progress(handler.clone())
@@ -688,7 +688,7 @@ async fn test_upload_with_no_progress_handler() {
 
     let result = repo
         .upload_file()
-        .source(AddSource::Bytes(b"no handler test".to_vec()))
+        .source(AddSource::bytes(b"no handler test"))
         .path_in_repo("no_handler.txt")
         .commit_message("upload without progress handler")
         .send()
