@@ -228,21 +228,21 @@ The client resolves authentication tokens in this order:
 
 1. Explicit token via `HFClientBuilder::token()`
 2. `HF_TOKEN` environment variable
-3. Token file at path specified by `HF_TOKEN_PATH`
+3. Token file at the path specified by `HF_TOKEN_PATH`
 4. Default token file at `~/.cache/huggingface/token`
 
 Set `HF_HUB_DISABLE_IMPLICIT_TOKEN` to any non-empty value to disable automatic token resolution.
 
 ## Configuration
 
-| Environment Variable | Description |
-|---|---|
-| `HF_ENDPOINT` | Hub API endpoint (default: `https://huggingface.co`) |
-| `HF_TOKEN` | Authentication token |
-| `HF_TOKEN_PATH` | Path to token file |
-| `HF_HOME` | Cache directory root (default: `~/.cache/huggingface`) |
-| `HF_HUB_DISABLE_IMPLICIT_TOKEN` | Disable automatic token loading |
-| `HF_HUB_USER_AGENT_ORIGIN` | Custom User-Agent origin string |
+| Environment Variable            | Description                                            |
+|---------------------------------|--------------------------------------------------------|
+| `HF_ENDPOINT`                   | Hub API endpoint (default: `https://huggingface.co`)   |
+| `HF_TOKEN`                      | Authentication token                                   |
+| `HF_TOKEN_PATH`                 | Path to token file                                     |
+| `HF_HOME`                       | Cache directory root (default: `~/.cache/huggingface`) |
+| `HF_HUB_DISABLE_IMPLICIT_TOKEN` | Disable automatic token loading                        |
+| `HF_HUB_USER_AGENT_ORIGIN`      | Custom User-Agent origin string                        |
 
 ## Error Handling
 

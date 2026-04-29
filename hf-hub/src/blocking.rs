@@ -187,7 +187,7 @@ impl HFRepositorySync {
         self.inner.owner()
     }
 
-    /// The repository name (without owner prefix).
+    /// The repository name (without the owner prefix).
     pub fn name(&self) -> &str {
         self.inner.name()
     }

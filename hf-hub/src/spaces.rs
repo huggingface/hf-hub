@@ -1,6 +1,6 @@
 //! Space handles, response types, and runtime/hardware/secrets APIs.
 //!
-//! Get a handle with [`HFClient::space`](crate::HFClient::space). It is an [`HFSpace`], which
+//! Get a handle with [`HFClient::space`](HFClient::space). It is an [`HFSpace`], which
 //! wraps an [`HFRepository`] pinned to [`RepoType::Space`] and adds
 //! Space-only methods (runtime, hardware, secrets, variables, pause/restart, duplicate).
 //!
@@ -43,7 +43,7 @@ pub struct SpaceRuntime {
     /// Persistent storage attached to the Space (`"small"`, `"medium"`, or `"large"`), if any.
     #[serde(default)]
     pub storage: Option<String>,
-    /// Hot-reloading state for the Space, if a hot-reload commit is in progress.
+    /// Hot-reloading state for the Space if a hot-reload commit is in progress.
     #[serde(default)]
     pub hot_reloading: Option<SpaceHotReloading>,
     /// Volumes mounted in the Space. `None` if none are attached.

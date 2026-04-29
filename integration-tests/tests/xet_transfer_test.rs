@@ -1,6 +1,6 @@
 //! Integration tests for xet-based file transfers.
 //!
-//! Tests uploading large/binary files that require xet storage, and
+//! Tests uploading large/binary files that require xet storage and
 //! downloading files from xet-enabled repositories.
 //!
 //! Requires:
@@ -66,7 +66,7 @@ fn unique_suffix() -> String {
     format!("{:x}{:x}-{count}", t.as_secs(), t.subsec_nanos())
 }
 
-/// Split a `"owner/name"` repo_id into an [`HFRepository`] handle.
+/// Split an `"owner/name"` repo_id into an [`HFRepository`] handle.
 fn repo_handle(client: &HFClient, owner: &str, name: &str) -> HFRepository {
     client.model(owner, name)
 }

@@ -263,7 +263,7 @@ impl HFClient {
         &self.inner.no_redirect_client
     }
 
-    pub(crate) fn retry_config(&self) -> &retry::RetryConfig {
+    pub(crate) fn retry_config(&self) -> &RetryConfig {
         &self.inner.retry_config
     }
 
@@ -376,7 +376,7 @@ impl HFClient {
     /// that identifies which session instance this is. Pass it to
     /// [`replace_xet_session`](Self::replace_xet_session) so that only the
     /// caller that observed the error triggers a replacement — concurrent
-    /// callers that already obtained a fresh session won't clobber it.
+    /// callers that already got a session won't clobber it.
     pub(crate) fn xet_session(&self) -> HFResult<(xet::xet_session::XetSession, u64)> {
         let mut guard = self
             .inner
@@ -412,7 +412,7 @@ impl HFClient {
     }
 }
 
-/// Resolve token from environment or token file.
+/// Resolve token from environment or a token file.
 /// Priority: HF_TOKEN env → HF_TOKEN_PATH file → $HF_HOME/token file.
 fn resolve_token() -> Option<String> {
     if let Ok(val) = std::env::var(constants::HF_HUB_DISABLE_IMPLICIT_TOKEN)
@@ -523,7 +523,7 @@ mod tests {
     /// Simulates the call-site retry pattern used in xet.rs:
     /// 1. Get session + generation, factory call fails
     /// 2. Call replace_xet_session(generation) to drop the bad session
-    /// 3. Get fresh session, factory call succeeds
+    /// 3. Get a fresh session, factory call succeeds
     #[test]
     fn test_replace_and_retry_after_abort() {
         let client = HFClientBuilder::new().build().unwrap();

@@ -1502,7 +1502,6 @@ dependencies = [
 name = "integration-tests"
 version = "0.0.0"
 dependencies = [
- "bytes",
  "futures",
  "hf-hub",
  "rand 0.10.1",

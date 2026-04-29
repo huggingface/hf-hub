@@ -171,7 +171,7 @@ struct BlobInfo {
     modified: SystemTime,
 }
 
-fn resolve_blob_info(file_path: &Path) -> std::result::Result<BlobInfo, String> {
+fn resolve_blob_info(file_path: &Path) -> Result<BlobInfo, String> {
     let resolved =
         std::fs::canonicalize(file_path).map_err(|e| format!("Cannot resolve {}: {}", file_path.display(), e))?;
     let meta =
@@ -297,7 +297,7 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
             }
         }
 
-        let mut unique_blobs: std::collections::HashMap<std::path::PathBuf, u64> = std::collections::HashMap::new();
+        let mut unique_blobs: HashMap<PathBuf, u64> = HashMap::new();
         for rev in &revisions {
             for f in &rev.files {
                 unique_blobs.entry(f.blob_path.clone()).or_insert(f.size_on_disk);

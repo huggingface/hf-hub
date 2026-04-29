@@ -21,7 +21,7 @@ struct PaginationState {
 
 impl HFClient {
     /// Create a paginated stream from an initial URL and query params.
-    /// Query params are only sent on the first request; subsequent pages
+    /// Query params are only sent on the first request; later pages
     /// use the full URL from the Link header.
     /// If `limit` is `Some(n)`, the stream stops after yielding `n` items.
     pub(crate) fn paginate<T: DeserializeOwned + 'static>(
