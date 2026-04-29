@@ -32,7 +32,8 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let result = match args.r#type {
         RepoTypeArg::Model => {
             client
-                .create_repo::<RepoTypeModel>()
+                .create_repo()
+                .repo_type(RepoTypeModel)
                 .repo_id(args.repo_id)
                 .maybe_private(if args.private { Some(true) } else { None })
                 .exist_ok(args.exist_ok)
@@ -42,7 +43,8 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         },
         RepoTypeArg::Dataset => {
             client
-                .create_repo::<RepoTypeDataset>()
+                .create_repo()
+                .repo_type(RepoTypeDataset)
                 .repo_id(args.repo_id)
                 .maybe_private(if args.private { Some(true) } else { None })
                 .exist_ok(args.exist_ok)
@@ -52,7 +54,8 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         },
         RepoTypeArg::Space => {
             client
-                .create_repo::<RepoTypeSpace>()
+                .create_repo()
+                .repo_type(RepoTypeSpace)
                 .repo_id(args.repo_id)
                 .maybe_private(if args.private { Some(true) } else { None })
                 .exist_ok(args.exist_ok)

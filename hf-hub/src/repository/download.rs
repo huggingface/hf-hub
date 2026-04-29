@@ -95,7 +95,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(T::url_prefix(), &repo_path, revision, &params.filename);
+            .download_url(T::default().url_prefix(), &repo_path, revision, &params.filename);
 
         let headers = self.hf_client.auth_headers();
         let head_response = retry::retry(self.hf_client.retry_config(), || {
@@ -187,7 +187,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(T::url_prefix(), &repo_path, revision, &params.filename);
+            .download_url(T::default().url_prefix(), &repo_path, revision, &params.filename);
 
         let headers = self.hf_client.auth_headers();
         let head_response = retry::retry(self.hf_client.retry_config(), || {
@@ -318,7 +318,7 @@ impl<T: RepoType> HFRepository<T> {
     async fn download_file_to_cache(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let cache_dir = self.hf_client.cache_dir();
-        let repo_folder = cache::repo_folder_name(&self.repo_path(), T::plural());
+        let repo_folder = cache::repo_folder_name(&self.repo_path(), T::default().plural());
         let force_download = params.force_download;
 
         if cache::is_commit_hash(revision) && !force_download {
@@ -355,7 +355,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(T::url_prefix(), &repo_path, revision, &params.filename);
+            .download_url(T::default().url_prefix(), &repo_path, revision, &params.filename);
 
         let cached_etag = if !force_download {
             self.find_cached_etag(repo_folder, revision, &params.filename)
@@ -548,7 +548,7 @@ impl<T: RepoType> HFRepository<T> {
         }
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let max_workers = params.max_workers.unwrap_or(8);
-        let repo_folder = cache::repo_folder_name(&self.repo_path(), T::plural());
+        let repo_folder = cache::repo_folder_name(&self.repo_path(), T::default().plural());
         let cache_dir = self.hf_client.cache_dir();
 
         if params.local_files_only {
@@ -595,7 +595,7 @@ impl<T: RepoType> HFRepository<T> {
         let commit_hash_ref = &commit_hash;
         let head_futs = filenames.iter().map(|filename| {
                 let url = self
-                    .hf_client.download_url(T::url_prefix(), &repo_path, commit_hash_ref, filename);
+                    .hf_client.download_url(T::default().url_prefix(), &repo_path, commit_hash_ref, filename);
                 let auth = self.hf_client.auth_headers();
                 let filename = filename.clone();
                 let repo_folder_ref = &repo_folder;

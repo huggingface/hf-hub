@@ -84,7 +84,7 @@ struct DeleteFolderParams {
 impl<T: RepoType> HFRepository<T> {
     async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!("{}/commit/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), revision);
+        let url = format!("{}/commit/{}", self.hf_client.api_url(T::default().plural(), &self.repo_path()), revision);
 
         let add_ops_count = params
             .operations
@@ -371,7 +371,7 @@ impl<T: RepoType> HFRepository<T> {
         let upload_modes = self
             .fetch_upload_modes(
                 &self.repo_path(),
-                T::plural(),
+                T::default().plural(),
                 revision,
                 &file_infos
                     .iter()
@@ -469,7 +469,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         tracing::info!("calling LFS batch endpoint for transfer negotiation");
         let chosen_transfer = self
-            .post_lfs_batch_info(&repo_path, T::url_prefix(), revision, &objects)
+            .post_lfs_batch_info(&repo_path, T::default().url_prefix(), revision, &objects)
             .await?;
         tracing::info!(?chosen_transfer, "LFS batch transfer negotiation complete");
 

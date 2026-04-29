@@ -90,7 +90,8 @@ async fn main() -> hf_hub::HFResult<()> {
     let user = client.whoami().send().await?;
     let repo = client.model(&user.username, format!("example-progress-logger-{}", std::process::id()));
     client
-        .create_repo::<RepoTypeModel>()
+        .create_repo()
+        .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .private(true)
         .exist_ok(true)
@@ -109,7 +110,8 @@ async fn main() -> hf_hub::HFResult<()> {
     println!("Committed: {:?}", commit.commit_url);
 
     client
-        .delete_repo::<RepoTypeModel>()
+        .delete_repo()
+        .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .missing_ok(true)
         .send()

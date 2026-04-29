@@ -62,7 +62,8 @@ async fn create_test_repo(client: &HFClient) -> String {
     let username = cached_username(client).await;
     let repo_id = format!("{}/hfrs-progress-test-{}", username, uuid_short());
     client
-        .create_repo::<RepoTypeModel>()
+        .create_repo()
+        .repo_type(RepoTypeModel)
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(false)
@@ -73,7 +74,7 @@ async fn create_test_repo(client: &HFClient) -> String {
 }
 
 async fn delete_test_repo(client: &HFClient, repo_id: &str) {
-    let _ = client.delete_repo::<RepoTypeModel>().repo_id(repo_id).send().await;
+    let _ = client.delete_repo().repo_type(RepoTypeModel).repo_id(repo_id).send().await;
 }
 
 const TEST_MODEL_PARTS: (&str, &str) = ("hf-internal-testing", "tiny-gemma3");

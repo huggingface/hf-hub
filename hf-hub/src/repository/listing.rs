@@ -48,7 +48,7 @@ impl<T: RepoType> HFRepository<T> {
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<RepoTreeEntry>> + '_> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url_str = format!("{}/tree/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), revision);
+        let url_str = format!("{}/tree/{}", self.hf_client.api_url(T::default().plural(), &self.repo_path()), revision);
         let url = Url::parse(&url_str)?;
 
         let mut query: Vec<(String, String)> = Vec::new();
@@ -83,7 +83,8 @@ impl<T: RepoType> HFRepository<T> {
         revision: Option<String>,
     ) -> HFResult<Vec<RepoTreeEntry>> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!("{}/paths-info/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), revision);
+        let url =
+            format!("{}/paths-info/{}", self.hf_client.api_url(T::default().plural(), &self.repo_path()), revision);
 
         let body = serde_json::json!({ "paths": paths });
 
@@ -130,7 +131,9 @@ impl<T: RepoType> HFRepository<T> {
         let filename = filepath.clone();
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let repo_path = self.repo_path();
-        let url = self.hf_client.download_url(T::url_prefix(), &repo_path, revision, &filename);
+        let url = self
+            .hf_client
+            .download_url(T::default().url_prefix(), &repo_path, revision, &filename);
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {

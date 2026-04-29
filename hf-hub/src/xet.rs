@@ -353,7 +353,7 @@ impl<T: RepoType> HFRepository<T> {
         progress: &Option<Progress>,
     ) -> HFResult<PathBuf> {
         let repo_path = self.repo_path();
-        let api_segment = T::plural();
+        let api_segment = T::default().plural();
         let file_hash = crate::repository::extract_xet_hash(head_response)
             .ok_or_else(|| HFError::malformed_response("missing X-Xet-Hash header"))?;
 
@@ -428,7 +428,7 @@ impl<T: RepoType> HFRepository<T> {
         progress: &Option<Progress>,
     ) -> HFResult<()> {
         let repo_path = self.repo_path();
-        let api_segment = T::plural();
+        let api_segment = T::default().plural();
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
         let conn = fetch_xet_connection_info(
             &self.hf_client,
@@ -500,7 +500,7 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         let repo_path = self.repo_path();
-        let api_segment = T::plural();
+        let api_segment = T::default().plural();
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
         let conn = fetch_xet_connection_info(
             &self.hf_client,
@@ -582,7 +582,7 @@ impl<T: RepoType> HFRepository<T> {
         range: Option<std::ops::Range<u64>>,
     ) -> HFResult<impl futures::Stream<Item = HFResult<bytes::Bytes>> + use<T>> {
         let repo_path = self.repo_path();
-        let api_segment = T::plural();
+        let api_segment = T::default().plural();
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
         let conn = fetch_xet_connection_info(
             &self.hf_client,
@@ -639,7 +639,7 @@ impl<T: RepoType> HFRepository<T> {
         progress: &Option<Progress>,
     ) -> HFResult<Vec<XetFileInfo>> {
         let repo_path = self.repo_path();
-        let token_url = repo_xet_token_url(&self.hf_client, "write", &repo_path, T::plural(), revision);
+        let token_url = repo_xet_token_url(&self.hf_client, "write", &repo_path, T::default().plural(), revision);
         xet_upload_inner(
             &self.hf_client,
             files,

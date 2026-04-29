@@ -28,14 +28,19 @@ mod sealed {
 /// `"kernel"`), [`plural`](Self::plural) (the API segment — `"models"`, `"datasets"`,
 /// `"spaces"`, `"kernels"`), and [`url_prefix`](Self::url_prefix) (the path segment used by
 /// resolve URLs — `""` for models, `"<plural>/"` for everything else).
+///
+/// All methods return the same value regardless of the receiver — they're properties of
+/// the type itself. The marker structs are zero-sized and `Default`, so when only the
+/// type is in scope (inside an `impl<T: RepoType>` block, for example), use
+/// `T::default().singular()` to materialize an instance to call the method on.
 pub trait RepoType: sealed::Sealed + Default + Copy + Clone + std::fmt::Debug + Send + Sync + 'static {
     /// Lowercase singular name used in logs, error messages, and request bodies — e.g. `"model"`.
-    fn singular() -> &'static str;
+    fn singular(&self) -> &'static str;
     /// Lowercase plural form, used as the `/api/{plural}/...` segment — e.g. `"models"`.
-    fn plural() -> &'static str;
+    fn plural(&self) -> &'static str;
     /// Path prefix used in `<endpoint>/{prefix}{repo_id}/resolve/...` URLs.
     /// Empty for models; `"<plural>/"` for all other repo kinds.
-    fn url_prefix() -> &'static str;
+    fn url_prefix(&self) -> &'static str;
 }
 
 /// Marker for a model repository on the Hub. Implements [`RepoType`].
@@ -60,73 +65,73 @@ impl sealed::Sealed for RepoTypeSpace {}
 impl sealed::Sealed for RepoTypeKernel {}
 
 impl RepoType for RepoTypeModel {
-    fn singular() -> &'static str {
+    fn singular(&self) -> &'static str {
         "model"
     }
-    fn plural() -> &'static str {
+    fn plural(&self) -> &'static str {
         "models"
     }
-    fn url_prefix() -> &'static str {
+    fn url_prefix(&self) -> &'static str {
         ""
     }
 }
 
 impl RepoType for RepoTypeDataset {
-    fn singular() -> &'static str {
+    fn singular(&self) -> &'static str {
         "dataset"
     }
-    fn plural() -> &'static str {
+    fn plural(&self) -> &'static str {
         "datasets"
     }
-    fn url_prefix() -> &'static str {
+    fn url_prefix(&self) -> &'static str {
         "datasets/"
     }
 }
 
 impl RepoType for RepoTypeSpace {
-    fn singular() -> &'static str {
+    fn singular(&self) -> &'static str {
         "space"
     }
-    fn plural() -> &'static str {
+    fn plural(&self) -> &'static str {
         "spaces"
     }
-    fn url_prefix() -> &'static str {
+    fn url_prefix(&self) -> &'static str {
         "spaces/"
     }
 }
 
 impl RepoType for RepoTypeKernel {
-    fn singular() -> &'static str {
+    fn singular(&self) -> &'static str {
         "kernel"
     }
-    fn plural() -> &'static str {
+    fn plural(&self) -> &'static str {
         "kernels"
     }
-    fn url_prefix() -> &'static str {
+    fn url_prefix(&self) -> &'static str {
         "kernels/"
     }
 }
 
 impl std::fmt::Display for RepoTypeModel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(Self::singular())
+        f.write_str(self.singular())
     }
 }
 
 impl std::fmt::Display for RepoTypeDataset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(Self::singular())
+        f.write_str(self.singular())
     }
 }
 
 impl std::fmt::Display for RepoTypeSpace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(Self::singular())
+        f.write_str(self.singular())
     }
 }
 
 impl std::fmt::Display for RepoTypeKernel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(Self::singular())
+        f.write_str(self.singular())
     }
 }

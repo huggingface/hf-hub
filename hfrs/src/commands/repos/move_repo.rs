@@ -23,7 +23,8 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let result = match args.r#type {
         RepoTypeArg::Model => {
             client
-                .move_repo::<RepoTypeModel>()
+                .move_repo()
+                .repo_type(RepoTypeModel)
                 .from_id(args.from_id)
                 .to_id(args.to_id)
                 .send()
@@ -31,7 +32,8 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         },
         RepoTypeArg::Dataset => {
             client
-                .move_repo::<RepoTypeDataset>()
+                .move_repo()
+                .repo_type(RepoTypeDataset)
                 .from_id(args.from_id)
                 .to_id(args.to_id)
                 .send()
@@ -39,7 +41,8 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         },
         RepoTypeArg::Space => {
             client
-                .move_repo::<RepoTypeSpace>()
+                .move_repo()
+                .repo_type(RepoTypeSpace)
                 .from_id(args.from_id)
                 .to_id(args.to_id)
                 .send()

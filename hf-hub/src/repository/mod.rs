@@ -607,7 +607,7 @@ impl<T: RepoType> std::fmt::Debug for HFRepository<T> {
         f.debug_struct("HFRepository")
             .field("owner", &self.owner)
             .field("name", &self.name)
-            .field("repo_type", &T::singular())
+            .field("repo_type", &T::default().singular())
             .finish()
     }
 }
@@ -885,18 +885,22 @@ impl HFClient {
         Ok(self.paginate(url, query, limit))
     }
 
-    /// Create a new repository of kind `T`. Endpoint: `POST /api/repos/create`.
+    /// Create a new repository. Endpoint: `POST /api/repos/create`.
     ///
-    /// `T` is the repo kind picked at the call site via turbofish — e.g.
-    /// `client.create_repo::<RepoTypeDataset>()...` to create a dataset. The body
-    /// always includes the `type` field, matching the Hub's per-kind defaults.
+    /// The repo kind is picked at the call site by passing one of the four marker
+    /// structs to [`repo_type`](HFClientCreateRepoBuilder::repo_type) — e.g.
+    /// `client.create_repo().repo_type(RepoTypeDataset)...` to create a dataset.
+    /// The body always includes the `type` field, matching the Hub's per-kind
+    /// defaults.
     ///
     /// # Parameters
     ///
     /// - `repo_id` (required): repository ID in `"owner/name"` or `"name"` format.
+    /// - `repo_type` (required): the repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`], or
+    ///   [`RepoTypeKernel`]).
     /// - `private`: whether the repository should be private.
     /// - `exist_ok` (default `false`): if `true`, do not error when the repository already exists.
-    /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `T` is
+    /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
     ///   [`RepoTypeSpace`]; ignored for other repo kinds.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn create_repo<T: RepoType>(
@@ -904,12 +908,15 @@ impl HFClient {
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
+        /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
+        /// or [`RepoTypeKernel`]).
+        repo_type: T,
         /// Whether the repository should be private.
         private: Option<bool>,
         /// If `true`, do not error when the repository already exists.
         #[builder(default)]
         exist_ok: bool,
-        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `T` is
+        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
         /// [`RepoTypeSpace`]; ignored for other repo kinds.
         #[builder(into)]
         space_sdk: Option<String>,
@@ -921,7 +928,7 @@ impl HFClient {
         let mut body = serde_json::json!({
             "name": name,
             "private": private.unwrap_or(false),
-            "type": T::singular(),
+            "type": repo_type.singular(),
         });
 
         if let Some(ns) = namespace {
@@ -939,7 +946,7 @@ impl HFClient {
 
         if response.status().as_u16() == 409 && exist_ok {
             return Ok(RepoUrl {
-                url: format!("{}/{}{}", self.endpoint(), T::url_prefix(), repo_id),
+                url: format!("{}/{}{}", self.endpoint(), repo_type.url_prefix(), repo_id),
             });
         }
 
@@ -949,15 +956,18 @@ impl HFClient {
         Ok(response.json().await?)
     }
 
-    /// Delete a repository of kind `T`. Endpoint: `DELETE /api/repos/delete`.
+    /// Delete a repository. Endpoint: `DELETE /api/repos/delete`.
     ///
-    /// `T` is the repo kind picked at the call site via turbofish — e.g.
-    /// `client.delete_repo::<RepoTypeSpace>()...`. The body always includes
+    /// The repo kind is picked at the call site by passing one of the four marker
+    /// structs to [`repo_type`](HFClientDeleteRepoBuilder::repo_type) — e.g.
+    /// `client.delete_repo().repo_type(RepoTypeSpace)...`. The body always includes
     /// the `type` field.
     ///
     /// # Parameters
     ///
     /// - `repo_id` (required): repository ID in `"owner/name"` or `"name"` format.
+    /// - `repo_type` (required): the repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`], or
+    ///   [`RepoTypeKernel`]).
     /// - `missing_ok` (default `false`): if `true`, do not error when the repository does not exist.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn delete_repo<T: RepoType>(
@@ -965,6 +975,9 @@ impl HFClient {
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
+        /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
+        /// or [`RepoTypeKernel`]).
+        repo_type: T,
         /// If `true`, do not error when the repository does not exist.
         #[builder(default)]
         missing_ok: bool,
@@ -975,7 +988,7 @@ impl HFClient {
 
         let mut body = serde_json::json!({
             "name": name,
-            "type": T::singular(),
+            "type": repo_type.singular(),
         });
         if let Some(ns) = namespace {
             body["organization"] = serde_json::Value::String(ns.to_string());
@@ -996,16 +1009,19 @@ impl HFClient {
         Ok(())
     }
 
-    /// Move (rename) a repository of kind `T`. Endpoint: `POST /api/repos/move`.
+    /// Move (rename) a repository. Endpoint: `POST /api/repos/move`.
     ///
-    /// `T` is the repo kind picked at the call site via turbofish — e.g.
-    /// `client.move_repo::<RepoTypeModel>()...`. The body always includes
+    /// The repo kind is picked at the call site by passing one of the four marker
+    /// structs to [`repo_type`](HFClientMoveRepoBuilder::repo_type) — e.g.
+    /// `client.move_repo().repo_type(RepoTypeModel)...`. The body always includes
     /// the `type` field.
     ///
     /// # Parameters
     ///
     /// - `from_id` (required): current repository ID in `"owner/name"` format.
     /// - `to_id` (required): new repository ID in `"owner/name"` format.
+    /// - `repo_type` (required): the repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`], or
+    ///   [`RepoTypeKernel`]).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn move_repo<T: RepoType>(
         &self,
@@ -1015,12 +1031,15 @@ impl HFClient {
         /// New repository ID in `"owner/name"` format.
         #[builder(into)]
         to_id: String,
+        /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
+        /// or [`RepoTypeKernel`]).
+        repo_type: T,
     ) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/move", self.endpoint());
         let body = serde_json::json!({
             "fromRepo": from_id,
             "toRepo": to_id,
-            "type": T::singular(),
+            "type": repo_type.singular(),
         });
 
         let headers = self.auth_headers();
@@ -1032,7 +1051,7 @@ impl HFClient {
         self.check_response(response, None, crate::error::NotFoundContext::Generic)
             .await?;
         Ok(RepoUrl {
-            url: format!("{}/{}{}", self.endpoint(), T::url_prefix(), to_id),
+            url: format!("{}/{}{}", self.endpoint(), repo_type.url_prefix(), to_id),
         })
     }
 }
@@ -1076,10 +1095,10 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Lowercase singular name of this repo's kind (`"model"`, `"dataset"`, `"space"`, or `"kernel"`).
     ///
-    /// Equivalent to `T::singular()` for the type parameter on this handle. Useful for
+    /// Equivalent to `T::default().singular()` for the type parameter on this handle. Useful for
     /// logs and error messages without naming `T` explicitly.
     pub fn repo_type(&self) -> &'static str {
-        T::singular()
+        T::default().singular()
     }
 
     /// Fetch repo info for this repository's kind, deserializing into `I`.
@@ -1089,7 +1108,7 @@ impl<T: RepoType> HFRepository<T> {
         revision: Option<String>,
         expand: Option<Vec<String>>,
     ) -> HFResult<I> {
-        let mut url = self.hf_client.api_url(T::plural(), &self.repo_path());
+        let mut url = self.hf_client.api_url(T::default().plural(), &self.repo_path());
         if let Some(ref revision) = revision {
             url = format!("{url}/revision/{revision}");
         }
@@ -1123,7 +1142,7 @@ impl<T: RepoType> HFRepository<T> {
     /// ([`HFError::AuthRequired`] or [`HFError::Forbidden`]), not `Ok(false)`.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn exists(&self) -> HFResult<bool> {
-        let url = self.hf_client.api_url(T::plural(), &self.repo_path());
+        let url = self.hf_client.api_url(T::default().plural(), &self.repo_path());
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()
@@ -1154,7 +1173,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         revision: String,
     ) -> HFResult<bool> {
-        let url = format!("{}/revision/{}", self.hf_client.api_url(T::plural(), &self.repo_path()), revision);
+        let url = format!("{}/revision/{}", self.hf_client.api_url(T::default().plural(), &self.repo_path()), revision);
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()
@@ -1188,7 +1207,7 @@ impl<T: RepoType> HFRepository<T> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = self
             .hf_client
-            .download_url(T::url_prefix(), &self.repo_path(), revision, &filename);
+            .download_url(T::default().url_prefix(), &self.repo_path(), revision, &filename);
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().head(&url).headers(headers.clone()).send()
@@ -1264,7 +1283,7 @@ impl<T: RepoType> HFRepository<T> {
             gated_notifications_mode: gated_notifications.as_ref().map(|g| &g.mode),
         };
 
-        let url = format!("{}/settings", self.hf_client.api_url(T::plural(), &self.repo_path()));
+        let url = format!("{}/settings", self.hf_client.api_url(T::default().plural(), &self.repo_path()));
         let headers = self.hf_client.auth_headers();
 
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -1567,20 +1586,24 @@ impl crate::blocking::HFClientSync {
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
+        /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
+        /// or [`RepoTypeKernel`]).
+        repo_type: T,
         /// Whether the repository should be private.
         private: Option<bool>,
         /// If `true`, do not error when the repository already exists.
         #[builder(default)]
         exist_ok: bool,
-        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `T` is
+        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
         /// [`RepoTypeSpace`]; ignored for other repo kinds.
         #[builder(into)]
         space_sdk: Option<String>,
     ) -> HFResult<RepoUrl> {
         self.runtime.block_on(
             self.inner
-                .create_repo::<T>()
+                .create_repo()
                 .repo_id(repo_id)
+                .repo_type(repo_type)
                 .maybe_private(private)
                 .exist_ok(exist_ok)
                 .maybe_space_sdk(space_sdk)
@@ -1596,12 +1619,21 @@ impl crate::blocking::HFClientSync {
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
+        /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
+        /// or [`RepoTypeKernel`]).
+        repo_type: T,
         /// If `true`, do not error when the repository does not exist.
         #[builder(default)]
         missing_ok: bool,
     ) -> HFResult<()> {
-        self.runtime
-            .block_on(self.inner.delete_repo::<T>().repo_id(repo_id).missing_ok(missing_ok).send())
+        self.runtime.block_on(
+            self.inner
+                .delete_repo()
+                .repo_id(repo_id)
+                .repo_type(repo_type)
+                .missing_ok(missing_ok)
+                .send(),
+        )
     }
 
     /// Blocking counterpart of [`HFClient::move_repo`]. See the async method for parameters and
@@ -1615,9 +1647,12 @@ impl crate::blocking::HFClientSync {
         /// New repository ID in `"owner/name"` format.
         #[builder(into)]
         to_id: String,
+        /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
+        /// or [`RepoTypeKernel`]).
+        repo_type: T,
     ) -> HFResult<RepoUrl> {
         self.runtime
-            .block_on(self.inner.move_repo::<T>().from_id(from_id).to_id(to_id).send())
+            .block_on(self.inner.move_repo().from_id(from_id).to_id(to_id).repo_type(repo_type).send())
     }
 }
 
@@ -1786,22 +1821,22 @@ mod tests {
 
     #[test]
     fn test_marker_struct_singular_and_plural() {
-        assert_eq!(RepoTypeModel::singular(), "model");
-        assert_eq!(RepoTypeDataset::singular(), "dataset");
-        assert_eq!(RepoTypeSpace::singular(), "space");
-        assert_eq!(RepoTypeKernel::singular(), "kernel");
-        assert_eq!(RepoTypeModel::plural(), "models");
-        assert_eq!(RepoTypeDataset::plural(), "datasets");
-        assert_eq!(RepoTypeSpace::plural(), "spaces");
-        assert_eq!(RepoTypeKernel::plural(), "kernels");
+        assert_eq!(RepoTypeModel.singular(), "model");
+        assert_eq!(RepoTypeDataset.singular(), "dataset");
+        assert_eq!(RepoTypeSpace.singular(), "space");
+        assert_eq!(RepoTypeKernel.singular(), "kernel");
+        assert_eq!(RepoTypeModel.plural(), "models");
+        assert_eq!(RepoTypeDataset.plural(), "datasets");
+        assert_eq!(RepoTypeSpace.plural(), "spaces");
+        assert_eq!(RepoTypeKernel.plural(), "kernels");
     }
 
     #[test]
     fn test_marker_struct_url_prefix() {
-        assert_eq!(RepoTypeModel::url_prefix(), "");
-        assert_eq!(RepoTypeDataset::url_prefix(), "datasets/");
-        assert_eq!(RepoTypeSpace::url_prefix(), "spaces/");
-        assert_eq!(RepoTypeKernel::url_prefix(), "kernels/");
+        assert_eq!(RepoTypeModel.url_prefix(), "");
+        assert_eq!(RepoTypeDataset.url_prefix(), "datasets/");
+        assert_eq!(RepoTypeSpace.url_prefix(), "spaces/");
+        assert_eq!(RepoTypeKernel.url_prefix(), "kernels/");
     }
 
     #[test]

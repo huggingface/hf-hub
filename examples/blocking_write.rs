@@ -17,7 +17,8 @@ fn main() -> hf_hub::HFResult<()> {
     // --- Create repo ---
 
     let repo_url = client
-        .create_repo::<RepoTypeModel>()
+        .create_repo()
+        .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .private(true)
         .exist_ok(true)
@@ -107,7 +108,8 @@ fn main() -> hf_hub::HFResult<()> {
     // --- Clean up ---
 
     client
-        .delete_repo::<RepoTypeModel>()
+        .delete_repo()
+        .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .missing_ok(true)
         .send()?;

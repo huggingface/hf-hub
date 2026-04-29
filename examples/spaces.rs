@@ -22,7 +22,8 @@ async fn main() -> hf_hub::HFResult<()> {
     let space = client.space(&user.username, format!("example-space-{unique}"));
 
     client
-        .create_repo::<RepoTypeSpace>()
+        .create_repo()
+        .repo_type(RepoTypeSpace)
         .repo_id(space.repo_path())
         .private(true)
         .space_sdk("static")
@@ -50,7 +51,8 @@ async fn main() -> hf_hub::HFResult<()> {
     println!("Restarted space: {restarted:?}");
 
     client
-        .delete_repo::<RepoTypeSpace>()
+        .delete_repo()
+        .repo_type(RepoTypeSpace)
         .repo_id(space.repo_path())
         .missing_ok(true)
         .send()

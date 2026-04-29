@@ -78,7 +78,8 @@ async fn create_test_repo(client: &HFClient, suffix: &str) -> (String, String) {
     let name = format!("hf-hub-xet-test-{suffix}");
     let repo_id = format!("{username}/{name}");
     client
-        .create_repo::<RepoTypeModel>()
+        .create_repo()
+        .repo_type(RepoTypeModel)
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(true)
@@ -89,7 +90,7 @@ async fn create_test_repo(client: &HFClient, suffix: &str) -> (String, String) {
 }
 
 async fn delete_test_repo(client: &HFClient, repo_id: &str) {
-    let _ = client.delete_repo::<RepoTypeModel>().repo_id(repo_id).send().await;
+    let _ = client.delete_repo().repo_type(RepoTypeModel).repo_id(repo_id).send().await;
 }
 
 fn generate_random_bytes(size: usize) -> Vec<u8> {

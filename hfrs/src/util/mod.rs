@@ -35,11 +35,10 @@ macro_rules! with_typed_repo {
     }};
 }
 
-/// Match on a [`crate::cli::RepoTypeArg`] and call a method that is generic over the repo
-/// kind via turbofish. Used for client-level methods like `create_repo::<T>()` and
-/// `delete_repo::<T>()` which don't take a typed repo handle.
+/// Match on a [`crate::cli::RepoTypeArg`] and call a generic helper function with the
+/// matching marker struct as the type parameter via turbofish.
 ///
-/// Expands to `match $arg { Model => $body::<RepoTypeModel>, ... }`.
+/// Expands to `match $arg { Model => $body::<RepoTypeModel>(), ... }`.
 #[macro_export]
 macro_rules! dispatch_repo_type {
     ($arg:expr, $body:ident) => {

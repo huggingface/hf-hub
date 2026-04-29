@@ -185,9 +185,9 @@ impl<T: RepoType> HFRepositorySync<T> {
         self.inner.repo_path()
     }
 
-    /// Lowercase singular name of this repo's kind, equivalent to `T::singular()`.
+    /// Lowercase singular name of this repo's kind, equivalent to `T::default().singular()`.
     pub fn repo_type(&self) -> &'static str {
-        T::singular()
+        T::default().singular()
     }
 }
 

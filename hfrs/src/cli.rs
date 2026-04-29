@@ -66,8 +66,8 @@ pub enum OutputFormat {
 }
 
 /// User-facing CLI flag selecting the repo kind. Dispatched to the typed
-/// `HFClient::{model, dataset, space}` / `HFClient::create_repo::<T>()` etc. paths
-/// at the call site via a `match` (see [`crate::with_typed_repo`] /
+/// `HFClient::{model, dataset, space}` / `client.create_repo().repo_type(...)`
+/// paths at the call site via a `match` (see [`crate::with_typed_repo`] /
 /// [`crate::dispatch_repo_type`]).
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum RepoTypeArg {
