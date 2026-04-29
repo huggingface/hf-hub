@@ -107,7 +107,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo = client.model(&user.username, format!("example-download-upload-{}", std::process::id()));
 
     client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .private(true)
@@ -156,7 +156,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     // Cleanup
     client
-        .delete_repo()
+        .delete_repository()
         .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .missing_ok(true)

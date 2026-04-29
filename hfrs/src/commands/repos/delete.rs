@@ -24,7 +24,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     match args.r#type {
         RepoTypeArg::Model => {
             client
-                .delete_repo()
+                .delete_repository()
                 .repo_type(RepoTypeModel)
                 .repo_id(args.repo_id)
                 .missing_ok(args.missing_ok)
@@ -33,7 +33,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         },
         RepoTypeArg::Dataset => {
             client
-                .delete_repo()
+                .delete_repository()
                 .repo_type(RepoTypeDataset)
                 .repo_id(args.repo_id)
                 .missing_ok(args.missing_ok)
@@ -42,7 +42,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         },
         RepoTypeArg::Space => {
             client
-                .delete_repo()
+                .delete_repository()
                 .repo_type(RepoTypeSpace)
                 .repo_id(args.repo_id)
                 .missing_ok(args.missing_ok)

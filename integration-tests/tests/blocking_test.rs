@@ -285,7 +285,7 @@ fn create_test_repo(client: &HFClientSync) -> String {
     let whoami = client.whoami().send().expect("whoami failed");
     let repo_id = format!("{}/hf-hub-sync-test-{}", whoami.username, uuid_v4_short());
     client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeModel)
         .repo_id(&repo_id)
         .private(true)
@@ -307,7 +307,7 @@ fn create_test_repo(client: &HFClientSync) -> String {
 }
 
 fn delete_test_repo(client: &HFClientSync, repo_id: &str) {
-    let _ = client.delete_repo().repo_type(RepoTypeModel).repo_id(repo_id).send();
+    let _ = client.delete_repository().repo_type(RepoTypeModel).repo_id(repo_id).send();
 }
 
 #[test]
@@ -321,7 +321,7 @@ fn test_sync_create_and_delete_repo() {
     let repo_id = format!("{}/hf-hub-sync-test-{}", whoami.username, uuid_v4_short());
 
     let url = client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeModel)
         .repo_id(&repo_id)
         .private(true)
@@ -344,7 +344,12 @@ fn test_sync_create_and_delete_repo() {
 
     assert!(test_repo.file_exists().filename("test.txt").send().unwrap());
 
-    client.delete_repo().repo_type(RepoTypeModel).repo_id(&repo_id).send().unwrap();
+    client
+        .delete_repository()
+        .repo_type(RepoTypeModel)
+        .repo_id(&repo_id)
+        .send()
+        .unwrap();
 }
 
 #[test]

@@ -888,8 +888,8 @@ impl HFClient {
     /// Create a new repository. Endpoint: `POST /api/repos/create`.
     ///
     /// The repo kind is picked at the call site by passing one of the four marker
-    /// structs to [`repo_type`](HFClientCreateRepoBuilder::repo_type) — e.g.
-    /// `client.create_repo().repo_type(RepoTypeDataset)...` to create a dataset.
+    /// structs to [`repo_type`](HFClientCreateRepositoryBuilder::repo_type) — e.g.
+    /// `client.create_repository().repo_type(RepoTypeDataset)...` to create a dataset.
     /// The body always includes the `type` field, matching the Hub's per-kind
     /// defaults.
     ///
@@ -903,7 +903,7 @@ impl HFClient {
     /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
     ///   [`RepoTypeSpace`]; ignored for other repo kinds.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn create_repo<T: RepoType>(
+    pub async fn create_repository<T: RepoType>(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
@@ -959,8 +959,8 @@ impl HFClient {
     /// Delete a repository. Endpoint: `DELETE /api/repos/delete`.
     ///
     /// The repo kind is picked at the call site by passing one of the four marker
-    /// structs to [`repo_type`](HFClientDeleteRepoBuilder::repo_type) — e.g.
-    /// `client.delete_repo().repo_type(RepoTypeSpace)...`. The body always includes
+    /// structs to [`repo_type`](HFClientDeleteRepositoryBuilder::repo_type) — e.g.
+    /// `client.delete_repository().repo_type(RepoTypeSpace)...`. The body always includes
     /// the `type` field.
     ///
     /// # Parameters
@@ -970,7 +970,7 @@ impl HFClient {
     ///   [`RepoTypeKernel`]).
     /// - `missing_ok` (default `false`): if `true`, do not error when the repository does not exist.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn delete_repo<T: RepoType>(
+    pub async fn delete_repository<T: RepoType>(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
@@ -1012,8 +1012,8 @@ impl HFClient {
     /// Move (rename) a repository. Endpoint: `POST /api/repos/move`.
     ///
     /// The repo kind is picked at the call site by passing one of the four marker
-    /// structs to [`repo_type`](HFClientMoveRepoBuilder::repo_type) — e.g.
-    /// `client.move_repo().repo_type(RepoTypeModel)...`. The body always includes
+    /// structs to [`repo_type`](HFClientMoveRepositoryBuilder::repo_type) — e.g.
+    /// `client.move_repository().repo_type(RepoTypeModel)...`. The body always includes
     /// the `type` field.
     ///
     /// # Parameters
@@ -1023,7 +1023,7 @@ impl HFClient {
     /// - `repo_type` (required): the repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`], or
     ///   [`RepoTypeKernel`]).
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn move_repo<T: RepoType>(
+    pub async fn move_repository<T: RepoType>(
         &self,
         /// Current repository ID in `"owner/name"` format.
         #[builder(into)]
@@ -1578,10 +1578,10 @@ impl crate::blocking::HFClientSync {
         })
     }
 
-    /// Blocking counterpart of [`HFClient::create_repo`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFClient::create_repository`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn create_repo<T: RepoType>(
+    pub fn create_repository<T: RepoType>(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
@@ -1601,7 +1601,7 @@ impl crate::blocking::HFClientSync {
     ) -> HFResult<RepoUrl> {
         self.runtime.block_on(
             self.inner
-                .create_repo()
+                .create_repository()
                 .repo_id(repo_id)
                 .repo_type(repo_type)
                 .maybe_private(private)
@@ -1611,10 +1611,10 @@ impl crate::blocking::HFClientSync {
         )
     }
 
-    /// Blocking counterpart of [`HFClient::delete_repo`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFClient::delete_repository`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_repo<T: RepoType>(
+    pub fn delete_repository<T: RepoType>(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
@@ -1628,7 +1628,7 @@ impl crate::blocking::HFClientSync {
     ) -> HFResult<()> {
         self.runtime.block_on(
             self.inner
-                .delete_repo()
+                .delete_repository()
                 .repo_id(repo_id)
                 .repo_type(repo_type)
                 .missing_ok(missing_ok)
@@ -1636,10 +1636,10 @@ impl crate::blocking::HFClientSync {
         )
     }
 
-    /// Blocking counterpart of [`HFClient::move_repo`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFClient::move_repository`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn move_repo<T: RepoType>(
+    pub fn move_repository<T: RepoType>(
         &self,
         /// Current repository ID in `"owner/name"` format.
         #[builder(into)]
@@ -1651,8 +1651,14 @@ impl crate::blocking::HFClientSync {
         /// or [`RepoTypeKernel`]).
         repo_type: T,
     ) -> HFResult<RepoUrl> {
-        self.runtime
-            .block_on(self.inner.move_repo().from_id(from_id).to_id(to_id).repo_type(repo_type).send())
+        self.runtime.block_on(
+            self.inner
+                .move_repository()
+                .from_id(from_id)
+                .to_id(to_id)
+                .repo_type(repo_type)
+                .send(),
+        )
     }
 }
 

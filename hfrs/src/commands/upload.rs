@@ -90,7 +90,7 @@ async fn do_upload<T: RepoType>(
     if !repo.exists().send().await? {
         info!(repo_id = args.repo_id.as_str(), private = args.private, "creating repository");
         client
-            .create_repo()
+            .create_repository()
             .repo_type(T::default())
             .repo_id(args.repo_id.clone())
             .maybe_private(if args.private { Some(true) } else { None })

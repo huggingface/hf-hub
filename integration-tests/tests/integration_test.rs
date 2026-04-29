@@ -784,7 +784,7 @@ async fn test_create_and_delete_repo() {
 
     // Create
     let url = client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeModel)
         .repo_id(&repo_id)
         .private(true)
@@ -811,7 +811,7 @@ async fn test_create_and_delete_repo() {
 
     // Delete repo
     client
-        .delete_repo()
+        .delete_repository()
         .repo_type(RepoTypeModel)
         .repo_id(&repo_id)
         .send()
@@ -827,7 +827,7 @@ async fn create_test_repo(client: &HFClient) -> String {
     let username = cached_username().await;
     let repo_id = format!("{}/hf-hub-test-{}", username, uuid_v4_short());
     client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeModel)
         .repo_id(&repo_id)
         .private(true)
@@ -850,7 +850,12 @@ async fn create_test_repo(client: &HFClient) -> String {
 }
 
 async fn delete_test_repo(client: &HFClient, repo_id: &str) {
-    let _ = client.delete_repo().repo_type(RepoTypeModel).repo_id(repo_id).send().await;
+    let _ = client
+        .delete_repository()
+        .repo_type(RepoTypeModel)
+        .repo_id(repo_id)
+        .send()
+        .await;
 }
 
 #[tokio::test]
@@ -1121,7 +1126,7 @@ async fn test_move_repo() {
     let new_name = format!("{}/hf-hub-move-dst-{}", username, uuid_v4_short());
 
     client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeModel)
         .repo_id(&original_name)
         .private(true)
@@ -1130,7 +1135,7 @@ async fn test_move_repo() {
         .unwrap();
 
     client
-        .move_repo()
+        .move_repository()
         .repo_type(RepoTypeModel)
         .from_id(&original_name)
         .to_id(&new_name)
@@ -1141,7 +1146,7 @@ async fn test_move_repo() {
     assert!(repo(&client, &new_name).exists().send().await.unwrap());
 
     client
-        .delete_repo()
+        .delete_repository()
         .repo_type(RepoTypeModel)
         .repo_id(&new_name)
         .send()
@@ -1173,7 +1178,7 @@ async fn test_duplicate_space() {
     // Create a minimal source space to duplicate.
     let source_id = format!("{}/hub-rust-test-dup-src-{}", username, uuid_v4_short());
     client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeSpace)
         .repo_id(&source_id)
         .private(true)
@@ -1196,8 +1201,13 @@ async fn test_duplicate_space() {
     assert!(result.url.contains(&to_id));
 
     // Clean up both spaces.
-    let _ = client.delete_repo().repo_type(RepoTypeSpace).repo_id(&to_id).send().await;
-    let _ = client.delete_repo().repo_type(RepoTypeSpace).repo_id(&source_id).send().await;
+    let _ = client.delete_repository().repo_type(RepoTypeSpace).repo_id(&to_id).send().await;
+    let _ = client
+        .delete_repository()
+        .repo_type(RepoTypeSpace)
+        .repo_id(&source_id)
+        .send()
+        .await;
 }
 
 #[tokio::test]
@@ -1209,7 +1219,7 @@ async fn test_space_secrets_and_variables() {
     let username = cached_username().await;
     let space = client.space(username, format!("hub-rust-test-space-{}", uuid_v4_short()));
     client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeSpace)
         .repo_id(space.repo_path())
         .private(true)
@@ -1233,7 +1243,7 @@ async fn test_space_secrets_and_variables() {
     space.delete_variable().key("TEST_VAR").send().await.unwrap();
 
     let _ = client
-        .delete_repo()
+        .delete_repository()
         .repo_type(RepoTypeSpace)
         .repo_id(space.repo_path())
         .send()

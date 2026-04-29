@@ -56,7 +56,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo = client.model(&user.username, format!("example-commits-{unique}"));
 
     client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .private(true)
@@ -78,7 +78,7 @@ async fn main() -> hf_hub::HFResult<()> {
     println!("Deleted tag: v0.1.0");
 
     client
-        .delete_repo()
+        .delete_repository()
         .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .missing_ok(true)

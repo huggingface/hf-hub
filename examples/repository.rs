@@ -76,7 +76,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo = client.model(&user.username, format!("example-repo-{unique}"));
 
     let repo_url = client
-        .create_repo()
+        .create_repository()
         .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .private(true)
@@ -90,7 +90,7 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let new_name = format!("{}/example-repo-renamed-{unique}", user.username);
     let moved = client
-        .move_repo()
+        .move_repository()
         .repo_type(RepoTypeModel)
         .from_id(repo.repo_path())
         .to_id(&new_name)
@@ -99,7 +99,7 @@ async fn main() -> hf_hub::HFResult<()> {
     println!("Moved repo to: {}", moved.url);
 
     client
-        .delete_repo()
+        .delete_repository()
         .repo_type(RepoTypeModel)
         .repo_id(&new_name)
         .missing_ok(true)
