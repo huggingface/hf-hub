@@ -2,9 +2,23 @@ name: Benchmarks
 
 on:
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to post benchmark comment to (set by benchmark-trigger)"
+        required: false
+        type: string
+      check_run_id:
+        description: "Check run ID to update with results (set by benchmark-trigger)"
+        required: false
+        type: string
+      head_sha:
+        description: "PR head SHA for the check run (set by benchmark-trigger)"
+        required: false
+        type: string
 
 permissions:
   contents: write
+  checks: write
   pull-requests: write
 
 jobs:
@@ -12,6 +26,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Mark check run in progress
+        if: inputs.check_run_id != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/${{ github.repository }}/check-runs/${{ inputs.check_run_id }}" \
+            -X PATCH \
+            -f "status=in_progress" \
+            -f "output[title]=Benchmarks running" \
+            -f "output[summary]=Compiling and running benchmarks..."
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
@@ -40,14 +65,70 @@ jobs:
           output-file-path: bench_output.txt
           # On main pushes: update the gh-pages baseline
           auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          # On PRs: always post a comment with the comparison table
-          comment-always: ${{ github.event_name == 'pull_request' }}
           # Always write the comparison table to the job summary
           summary-always: true
           alert-comment-cc-users: '@mcpotato'
           # Fail the PR check if any benchmark regresses by more than 30%
           alert-threshold: '130%'
-          fail-on-alert: ${{ github.event_name == 'pull_request' }}
+          fail-on-alert: ${{ inputs.pr_number != '' }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           benchmark-data-dir-path: dev/bench
           gh-pages-branch: gh-pages
+
+      - name: Post results to PR
+        if: always() && inputs.pr_number != '' && hashFiles('bench_output.txt') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          {
+            echo "## Benchmark Results"
+            echo ""
+            echo "Commit: \`${{ inputs.head_sha }}\`"
+            echo ""
+            echo "See the [workflow run]($run_url) for the comparison table against the \`main\` baseline."
+            echo ""
+            echo '<details><summary>Raw benchmark output</summary>'
+            echo ""
+            echo '```'
+            cat bench_output.txt
+            echo '```'
+            echo ""
+            echo '</details>'
+          } > comparison.md
+
+          existing=$(gh api "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments" \
+            --jq '.[] | select(.body | startswith("## Benchmark Results")) | .id' | head -1)
+
+          if [ -n "$existing" ]; then
+            gh api "repos/${{ github.repository }}/issues/comments/$existing" \
+              -X PATCH -F "body=@comparison.md"
+          else
+            gh pr comment "${{ inputs.pr_number }}" --body-file comparison.md
+          fi
+
+      - name: Complete check run (success)
+        if: always() && inputs.check_run_id != '' && !failure() && !cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh api "repos/${{ github.repository }}/check-runs/${{ inputs.check_run_id }}" \
+            -X PATCH \
+            -f "status=completed" \
+            -f "conclusion=success" \
+            -f "output[title]=Benchmarks passed" \
+            -f "output[summary]=Benchmarks completed. See the [workflow run]($run_url) for the full comparison table."
+
+      - name: Complete check run (failure)
+        if: always() && inputs.check_run_id != '' && (failure() || cancelled())
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh api "repos/${{ github.repository }}/check-runs/${{ inputs.check_run_id }}" \
+            -X PATCH \
+            -f "status=completed" \
+            -f "conclusion=failure" \
+            -f "output[title]=Benchmarks failed" \
+            -f "output[summary]=Benchmark workflow failed or was cancelled. See the [workflow run]($run_url) for details."
