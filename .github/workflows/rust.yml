@@ -6,46 +6,114 @@ on:
       - main
   pull_request:
 
-jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+env:
+  CARGO_TERM_COLOR: always
 
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Rust Nightly
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo +nightly fmt --all -- --check
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Install Rust Stable
-        uses: actions-rs/toolchain@16499b5e05bf2e26879000db0c1d13f7e13fa3af  # v1
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
         with:
           toolchain: stable
-          components: rustfmt, clippy
-          override: true
+          components: clippy
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Clippy (default features)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Clippy (all features)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  build-and-test:
+    name: Build & Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.14"
+
+      - name: Build workspace (all targets, all features)
+        run: cargo build --workspace --all-targets --all-features --verbose
+
+      - name: Install huggingface_hub CLI
+        run: pip install huggingface_hub[cli]
+
+      - name: Run tests
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_CI_TOKEN: ${{ secrets.HF_CI_TOKEN }}
+          HF_PROD_TOKEN: ${{ secrets.HF_PROD_TOKEN }}
+          HF_TEST_WRITE: "1"
+        run: cargo test --workspace --all-features --all-targets --verbose
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings --cfg docsrs"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Rust Nightly
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Build docs
+        run: cargo +nightly doc --workspace --all-features --no-deps
+
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Rust Stable
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        with:
+          toolchain: stable
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
       - name: Install cargo audit
         run: cargo install cargo-audit
 
-      - name: Build
-        run: cargo build --all-targets --verbose
-
-      - name: Lint with Clippy
-        run: cargo clippy --all-targets --all-features --tests --examples -- -D warnings
-
-      - name: Run Tests
-        run: cargo test --all-features --verbose
-
-      - name: Run Tests (no ssl)
-        run: cargo test --no-default-features --verbose
-
-      - name: Run Tests (ssl cross)
-        run: >
-          cargo test --no-default-features --features ureq,native-tls &&
-          cargo test --no-default-features --features ureq,rustls-tls &&
-          cargo test --no-default-features --features tokio,native-tls &&
-          cargo test --no-default-features --features tokio,rustls-tls
-
-      - name: Run Audit
+      - name: Run audit
         run: cargo audit -D warnings

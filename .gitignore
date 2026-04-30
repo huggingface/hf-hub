@@ -1,3 +1,9 @@
-/target
-Cargo.lock
-/examples/socks/target/
+.idea
+venv/
+.vscode
+target
+.claude
+.worktrees
+.DS_Store
+runslow
+docs/superpowers

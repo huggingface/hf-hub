@@ -1,0 +1,34 @@
+[package]
+name = "hfrs"
+version = "1.0.0"
+edition = "2024"
+description = "Command-line interface for the Hugging Face Hub"
+license = "Apache-2.0"
+
+[dependencies]
+hf-hub = { path = "../hf-hub" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+clap = { version = "4", features = ["derive", "env", "color"] }
+indicatif = "0.18"
+owo-colors = "4"
+comfy-table = "7"
+anyhow = "1"
+tempfile = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures = "0.3"
+globset = "0.4"
+
+[dev-dependencies]
+integration-tests = { path = "../integration-tests" }
+anyhow = "1"
+serde_json = "1"
+rand = "0.9"
+libc = "0.2"
+
+[[bin]]
+name = "hfrs"
+path = "src/main.rs"
+doc = false

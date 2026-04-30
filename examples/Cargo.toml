@@ -1,0 +1,80 @@
+[package]
+name = "examples"
+version = "0.0.0"
+edition = "2024"
+publish = false
+autoexamples = false
+
+[dependencies]
+hf-hub = { path = "../hf-hub" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util"] }
+futures = "0.3"
+tempfile = "3"
+serde_json = "1"
+
+[features]
+blocking = ["hf-hub/blocking"]
+
+[[example]]
+name = "repository"
+path = "repository.rs"
+
+[[example]]
+name = "repository_handles"
+path = "repository_handles.rs"
+
+[[example]]
+name = "files"
+path = "files.rs"
+
+[[example]]
+name = "commits"
+path = "commits.rs"
+
+[[example]]
+name = "users"
+path = "users.rs"
+
+[[example]]
+name = "spaces"
+path = "spaces.rs"
+
+[[example]]
+name = "download_upload"
+path = "download_upload.rs"
+
+[[example]]
+name = "progress"
+path = "progress.rs"
+
+[[example]]
+name = "progress_logger"
+path = "progress_logger.rs"
+
+[[example]]
+name = "buckets"
+path = "buckets.rs"
+
+[[example]]
+name = "diff"
+path = "diff.rs"
+
+[[example]]
+name = "blocking_read"
+path = "blocking_read.rs"
+required-features = ["blocking"]
+
+[[example]]
+name = "blocking_write"
+path = "blocking_write.rs"
+required-features = ["blocking"]
+
+[[example]]
+name = "blocking_repository_handles"
+path = "blocking_repository_handles.rs"
+required-features = ["blocking"]
+
+[[example]]
+name = "blocking_spaces"
+path = "blocking_spaces.rs"
+required-features = ["blocking"]
