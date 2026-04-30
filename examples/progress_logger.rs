@@ -14,9 +14,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use hf_hub::HFClient;
 use hf_hub::progress::{ProgressEvent, ProgressHandler};
 use hf_hub::repository::AddSource;
+use hf_hub::{HFClient, RepoTypeModel};
 
 /// Logs each `ProgressEvent` to stderr with a millisecond offset from when
 /// the handler was constructed, plus an event counter. Thread-safe — uses
@@ -90,7 +90,8 @@ async fn main() -> hf_hub::HFResult<()> {
     let user = client.whoami().send().await?;
     let repo = client.model(&user.username, format!("example-progress-logger-{}", std::process::id()));
     client
-        .create_repo()
+        .create_repository()
+        .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .private(true)
         .exist_ok(true)
@@ -108,7 +109,13 @@ async fn main() -> hf_hub::HFResult<()> {
         .await?;
     println!("Committed: {:?}", commit.commit_url);
 
-    client.delete_repo().repo_id(repo.repo_path()).missing_ok(true).send().await?;
+    client
+        .delete_repository()
+        .repo_type(RepoTypeModel)
+        .repo_id(repo.repo_path())
+        .missing_ok(true)
+        .send()
+        .await?;
 
     Ok(())
 }

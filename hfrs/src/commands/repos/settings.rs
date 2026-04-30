@@ -42,9 +42,6 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
-
     let gated: Option<GatedApprovalMode> = args.gated.map(|g| g.parse()).transpose()?;
     let gated_notifications_mode: Option<GatedNotificationsMode> =
         args.gated_notifications_mode.map(|m| m.parse()).transpose()?;
@@ -55,13 +52,15 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         (None, None) => None,
     };
 
-    repo.update_settings()
-        .maybe_private(args.private)
-        .maybe_gated(gated)
-        .maybe_description(args.description)
-        .maybe_discussions_disabled(args.discussions_disabled)
-        .maybe_gated_notifications(gated_notifications)
-        .send()
-        .await?;
+    crate::with_typed_repo!(client, &args.repo_id, args.r#type, |repo| {
+        repo.update_settings()
+            .maybe_private(args.private)
+            .maybe_gated(gated)
+            .maybe_description(args.description)
+            .maybe_discussions_disabled(args.discussions_disabled)
+            .maybe_gated_notifications(gated_notifications)
+            .send()
+            .await?
+    });
     Ok(CommandResult::Silent)
 }

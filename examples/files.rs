@@ -4,8 +4,8 @@
 //! Run: cargo run -p examples --example files
 
 use futures::StreamExt;
-use hf_hub::HFClient;
 use hf_hub::repository::{AddSource, CommitOperation, RepoTreeEntry};
+use hf_hub::{HFClient, RepoTypeModel};
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
@@ -60,7 +60,8 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo = client.model(&user.username, format!("example-files-{unique}"));
 
     client
-        .create_repo()
+        .create_repository()
+        .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .private(true)
         .exist_ok(true)
@@ -108,7 +109,13 @@ async fn main() -> hf_hub::HFResult<()> {
     repo.delete_folder().path_in_repo("data").send().await?;
     println!("Deleted data/ folder");
 
-    client.delete_repo().repo_id(repo.repo_path()).missing_ok(true).send().await?;
+    client
+        .delete_repository()
+        .repo_type(RepoTypeModel)
+        .repo_id(repo.repo_path())
+        .missing_ok(true)
+        .send()
+        .await?;
     println!("Cleaned up test repo");
 
     Ok(())

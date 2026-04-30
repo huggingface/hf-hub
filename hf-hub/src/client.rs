@@ -303,22 +303,22 @@ impl HFClient {
         headers
     }
 
-    /// Build a URL for the API: {endpoint}/api/{segment}/{repo_id}
-    pub(crate) fn api_url(&self, repo_type: Option<crate::repository::RepoType>, repo_id: &str) -> String {
-        let segment = constants::repo_type_api_segment(repo_type);
-        format!("{}/api/{}/{}", self.endpoint(), segment, repo_id)
+    /// Build a URL for the API: {endpoint}/api/{api_segment}/{repo_id}.
+    ///
+    /// `api_segment` is the plural form of the repo type — `"models"`, `"datasets"`,
+    /// `"spaces"`, or `"kernels"`. Pass [`crate::repository::RepoType::plural`] for the
+    /// concrete repo type at the call site.
+    pub(crate) fn api_url(&self, api_segment: &str, repo_id: &str) -> String {
+        format!("{}/api/{}/{}", self.endpoint(), api_segment, repo_id)
     }
 
-    /// Build a download URL: {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}
-    pub(crate) fn download_url(
-        &self,
-        repo_type: Option<crate::repository::RepoType>,
-        repo_id: &str,
-        revision: &str,
-        filename: &str,
-    ) -> String {
-        let prefix = constants::repo_type_url_prefix(repo_type);
-        format!("{}/{}{}/resolve/{}/{}", self.endpoint(), prefix, repo_id, revision, filename)
+    /// Build a download URL: {endpoint}/{url_prefix}{repo_id}/resolve/{revision}/{filename}.
+    ///
+    /// `url_prefix` is `""` for models or `"<plural>/"` for the other repo types. Pass
+    /// [`crate::repository::RepoType::url_prefix`] for the concrete repo type at the call
+    /// site.
+    pub(crate) fn download_url(&self, url_prefix: &str, repo_id: &str, revision: &str, filename: &str) -> String {
+        format!("{}/{}{}/resolve/{}/{}", self.endpoint(), url_prefix, repo_id, revision, filename)
     }
 
     /// Build a bucket API URL: `{endpoint}/api/buckets/{bucket_id}`

@@ -29,15 +29,13 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
-
-    let metadata = repo
-        .get_file_metadata()
-        .filepath(args.filepath)
-        .maybe_revision(args.revision)
-        .send()
-        .await?;
+    let metadata = crate::with_typed_repo!(client, &args.repo_id, args.r#type, |repo| {
+        repo.get_file_metadata()
+            .filepath(args.filepath)
+            .maybe_revision(args.revision)
+            .send()
+            .await?
+    });
 
     let json_value = json!({
         "filename": metadata.filename,

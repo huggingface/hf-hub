@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::Args as ClapArgs;
-use hf_hub::HFClient;
 use hf_hub::progress::Progress;
 use hf_hub::repository::AddSource;
+use hf_hub::{HFClient, HFRepository, RepoType};
 use tracing::info;
 
 use crate::cli::RepoTypeArg;
@@ -65,28 +65,39 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let local_path = args.local_path.unwrap_or_else(|| PathBuf::from("."));
-    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
-
-    // Ensure the repo exists, creating it if necessary
-    if !repo.exists().send().await? {
-        info!(repo_id = args.repo_id.as_str(), private = args.private, "creating repository");
-        client
-            .create_repo()
-            .repo_id(args.repo_id.clone())
-            .repo_type(repo_type)
-            .maybe_private(if args.private { Some(true) } else { None })
-            .exist_ok(true)
-            .send()
-            .await?;
-    }
+    let local_path = args.local_path.clone().unwrap_or_else(|| PathBuf::from("."));
 
     let handler: Option<Progress> = if args.quiet {
         None
     } else {
         multi.map(|multi| CliProgressHandler::new(multi).into())
     };
+
+    let url = crate::with_typed_repo!(client, &args.repo_id, args.r#type, |repo| {
+        do_upload(client, repo, args, local_path, handler).await?
+    });
+
+    Ok(CommandResult::Raw(url))
+}
+
+async fn do_upload<T: RepoType>(
+    client: &HFClient,
+    repo: HFRepository<T>,
+    args: Args,
+    local_path: PathBuf,
+    handler: Option<Progress>,
+) -> Result<String> {
+    if !repo.exists().send().await? {
+        info!(repo_id = args.repo_id.as_str(), private = args.private, "creating repository");
+        client
+            .create_repository()
+            .repo_type(T::default())
+            .repo_id(args.repo_id.clone())
+            .maybe_private(if args.private { Some(true) } else { None })
+            .exist_ok(true)
+            .send()
+            .await?;
+    }
 
     let commit_info = if local_path.is_file() {
         let path_in_repo = args.path_in_repo.unwrap_or_else(|| {
@@ -106,21 +117,9 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
             .send()
             .await?
     } else if local_path.is_dir() {
-        let allow_patterns = if !args.include.is_empty() {
-            Some(args.include)
-        } else {
-            None
-        };
-        let ignore_patterns = if !args.exclude.is_empty() {
-            Some(args.exclude)
-        } else {
-            None
-        };
-        let delete_patterns = if !args.delete.is_empty() {
-            Some(args.delete)
-        } else {
-            None
-        };
+        let allow_patterns = (!args.include.is_empty()).then_some(args.include);
+        let ignore_patterns = (!args.exclude.is_empty()).then_some(args.exclude);
+        let delete_patterns = (!args.delete.is_empty()).then_some(args.delete);
         repo.upload_folder()
             .folder_path(local_path)
             .maybe_path_in_repo(args.path_in_repo)
@@ -138,6 +137,5 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
         bail!("local path does not exist: {}", local_path.display());
     };
 
-    let url = commit_info.commit_url.or(commit_info.pr_url).unwrap_or_default();
-    Ok(CommandResult::Raw(url))
+    Ok(commit_info.commit_url.or(commit_info.pr_url).unwrap_or_default())
 }

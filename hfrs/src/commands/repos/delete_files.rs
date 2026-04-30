@@ -40,41 +40,39 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
-
     let matchers: Vec<_> = args
         .patterns
         .iter()
         .filter_map(|p| Glob::new(p).ok().map(|g| g.compile_matcher()))
         .collect();
 
-    let stream = repo.list_tree().maybe_revision(args.revision.clone()).recursive(true).send()?;
-    futures::pin_mut!(stream);
+    let result = crate::with_typed_repo!(client, &args.repo_id, args.r#type, |repo| {
+        let stream = repo.list_tree().maybe_revision(args.revision.clone()).recursive(true).send()?;
+        futures::pin_mut!(stream);
 
-    let mut matched_files: Vec<String> = Vec::new();
-    while let Some(entry) = stream.next().await {
-        if let RepoTreeEntry::File { path, .. } = entry?
-            && matchers.iter().any(|m| m.is_match(&path))
-        {
-            matched_files.push(path);
+        let mut matched_files: Vec<String> = Vec::new();
+        while let Some(entry) = stream.next().await {
+            if let RepoTreeEntry::File { path, .. } = entry?
+                && matchers.iter().any(|m| m.is_match(&path))
+            {
+                matched_files.push(path);
+            }
         }
-    }
 
-    if matched_files.is_empty() {
-        anyhow::bail!("No files matched the given patterns");
-    }
+        if matched_files.is_empty() {
+            anyhow::bail!("No files matched the given patterns");
+        }
 
-    let operations: Vec<CommitOperation> = matched_files.into_iter().map(CommitOperation::delete).collect();
-    let result = repo
-        .create_commit()
-        .operations(operations)
-        .commit_message(args.commit_message)
-        .maybe_commit_description(args.commit_description)
-        .maybe_revision(args.revision)
-        .create_pr(args.create_pr)
-        .send()
-        .await?;
+        let operations: Vec<CommitOperation> = matched_files.into_iter().map(CommitOperation::delete).collect();
+        repo.create_commit()
+            .operations(operations)
+            .commit_message(args.commit_message)
+            .maybe_commit_description(args.commit_description)
+            .maybe_revision(args.revision)
+            .create_pr(args.create_pr)
+            .send()
+            .await?
+    });
     let url = result.commit_url.or(result.pr_url).unwrap_or_default();
     Ok(CommandResult::Raw(url))
 }

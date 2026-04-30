@@ -7,7 +7,7 @@
 //! CI: The workflow sets HF_CI_TOKEN + HF_PROD_TOKEN.
 
 use hf_hub::repository::*;
-use hf_hub::{HFClientBuilder, HFClientSync};
+use hf_hub::{HFClientBuilder, HFClientSync, HFRepositorySync, RepoTypeDataset, RepoTypeModel};
 use integration_tests::test_utils::*;
 
 fn prod_sync_api() -> Option<HFClientSync> {
@@ -50,17 +50,27 @@ const TEST_MODEL_AUTHOR: &str = "openai-community";
 const TEST_MODEL_REPO: &str = "hf-internal-testing/tiny-gemma3";
 const TEST_DATASET_REPO: &str = "hf-internal-testing/cats_vs_dogs_sample";
 
-/// Split a `"owner/name"` string into an `HFRepositorySync` handle.
-fn repo_handle(client: &HFClientSync, repo_id: &str) -> hf_hub::HFRepositorySync {
+/// Split a `"owner/name"` string into an `HFRepositorySync<RepoTypeModel>` handle.
+fn repo_handle(client: &HFClientSync, repo_id: &str) -> HFRepositorySync<RepoTypeModel> {
+    let (owner, name) = split_id(repo_id);
+    client.model(owner, name)
+}
+
+fn dataset_handle(client: &HFClientSync, repo_id: &str) -> HFRepositorySync<RepoTypeDataset> {
+    let (owner, name) = split_id(repo_id);
+    client.dataset(owner, name)
+}
+
+fn split_id(repo_id: &str) -> (&str, &str) {
     let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
     if parts.len() == 2 {
-        client.model(parts[0], parts[1])
+        (parts[0], parts[1])
     } else {
-        client.model("", repo_id)
+        ("", repo_id)
     }
 }
 
-fn collect_file_paths(test_repo: &hf_hub::HFRepositorySync) -> std::collections::HashSet<String> {
+fn collect_file_paths<T: RepoType>(test_repo: &HFRepositorySync<T>) -> std::collections::HashSet<String> {
     test_repo
         .list_tree()
         .recursive(true)
@@ -74,15 +84,6 @@ fn collect_file_paths(test_repo: &hf_hub::HFRepositorySync) -> std::collections:
         .collect()
 }
 
-fn dataset_handle(client: &HFClientSync, repo_id: &str) -> hf_hub::HFRepositorySync {
-    let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
-    if parts.len() == 2 {
-        client.dataset(parts[0], parts[1])
-    } else {
-        client.dataset("", repo_id)
-    }
-}
-
 // --- Repo info ---
 
 #[test]
@@ -91,10 +92,7 @@ fn test_sync_model_info() {
     let model_repo = TEST_MODEL_REPO;
     let repo = repo_handle(&client, model_repo);
     let info = repo.info().send().unwrap();
-    match info {
-        RepoInfo::Model(model) => assert!(model.id.contains("tiny-gemma3")),
-        _ => panic!("expected model info"),
-    }
+    assert!(info.id.contains("tiny-gemma3"));
 }
 
 #[test]
@@ -103,10 +101,7 @@ fn test_sync_dataset_info() {
     let dataset_repo = TEST_DATASET_REPO;
     let repo = dataset_handle(&client, dataset_repo);
     let info = repo.info().send().unwrap();
-    match info {
-        RepoInfo::Dataset(ds) => assert_eq!(ds.id, dataset_repo),
-        _ => panic!("expected dataset info"),
-    }
+    assert_eq!(info.id, dataset_repo);
 }
 
 #[test]
@@ -116,10 +111,7 @@ fn test_sync_repo_handle_info_and_file_exists() {
     let repo = repo_handle(&client, model_repo);
 
     let info = repo.info().send().unwrap();
-    match info {
-        RepoInfo::Model(model) => assert_eq!(model.id, model_repo),
-        _ => panic!("expected model info"),
-    }
+    assert_eq!(info.id, model_repo);
 
     let exists = repo.file_exists().filename("config.json").send().unwrap();
     assert!(exists);
@@ -293,7 +285,8 @@ fn create_test_repo(client: &HFClientSync) -> String {
     let whoami = client.whoami().send().expect("whoami failed");
     let repo_id = format!("{}/hf-hub-sync-test-{}", whoami.username, uuid_v4_short());
     client
-        .create_repo()
+        .create_repository()
+        .repo_type(RepoTypeModel)
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(false)
@@ -314,7 +307,7 @@ fn create_test_repo(client: &HFClientSync) -> String {
 }
 
 fn delete_test_repo(client: &HFClientSync, repo_id: &str) {
-    let _ = client.delete_repo().repo_id(repo_id).send();
+    let _ = client.delete_repository().repo_type(RepoTypeModel).repo_id(repo_id).send();
 }
 
 #[test]
@@ -328,7 +321,8 @@ fn test_sync_create_and_delete_repo() {
     let repo_id = format!("{}/hf-hub-sync-test-{}", whoami.username, uuid_v4_short());
 
     let url = client
-        .create_repo()
+        .create_repository()
+        .repo_type(RepoTypeModel)
         .repo_id(&repo_id)
         .private(true)
         .exist_ok(true)
@@ -350,7 +344,12 @@ fn test_sync_create_and_delete_repo() {
 
     assert!(test_repo.file_exists().filename("test.txt").send().unwrap());
 
-    client.delete_repo().repo_id(&repo_id).send().unwrap();
+    client
+        .delete_repository()
+        .repo_type(RepoTypeModel)
+        .repo_id(&repo_id)
+        .send()
+        .unwrap();
 }
 
 #[test]

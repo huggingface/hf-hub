@@ -52,47 +52,46 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::MultiProgress>) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
-
     let handler: Option<Progress> = if args.quiet {
         None
     } else {
         multi.map(|multi| CliProgressHandler::new(multi).into())
     };
 
-    let path = if args.filenames.len() == 1 && args.include.is_empty() && args.exclude.is_empty() {
-        repo.download_file()
-            .filename(args.filenames.into_iter().next().unwrap())
-            .maybe_local_dir(args.local_dir)
-            .maybe_revision(args.revision)
-            .force_download(args.force_download)
-            .maybe_progress(handler.clone())
-            .send()
-            .await?
-    } else {
-        let allow_patterns = if !args.filenames.is_empty() {
-            Some(args.filenames)
-        } else if !args.include.is_empty() {
-            Some(args.include)
+    let path = crate::with_typed_repo!(client, &args.repo_id, args.r#type, |repo| {
+        if args.filenames.len() == 1 && args.include.is_empty() && args.exclude.is_empty() {
+            repo.download_file()
+                .filename(args.filenames.into_iter().next().unwrap())
+                .maybe_local_dir(args.local_dir)
+                .maybe_revision(args.revision)
+                .force_download(args.force_download)
+                .maybe_progress(handler.clone())
+                .send()
+                .await?
         } else {
-            None
-        };
-        let ignore_patterns = if !args.exclude.is_empty() {
-            Some(args.exclude)
-        } else {
-            None
-        };
-        repo.snapshot_download()
-            .maybe_revision(args.revision)
-            .maybe_allow_patterns(allow_patterns)
-            .maybe_ignore_patterns(ignore_patterns)
-            .maybe_local_dir(args.local_dir)
-            .force_download(args.force_download)
-            .maybe_progress(handler.clone())
-            .send()
-            .await?
-    };
+            let allow_patterns = if !args.filenames.is_empty() {
+                Some(args.filenames)
+            } else if !args.include.is_empty() {
+                Some(args.include)
+            } else {
+                None
+            };
+            let ignore_patterns = if !args.exclude.is_empty() {
+                Some(args.exclude)
+            } else {
+                None
+            };
+            repo.snapshot_download()
+                .maybe_revision(args.revision)
+                .maybe_allow_patterns(allow_patterns)
+                .maybe_ignore_patterns(ignore_patterns)
+                .maybe_local_dir(args.local_dir)
+                .force_download(args.force_download)
+                .maybe_progress(handler.clone())
+                .send()
+                .await?
+        }
+    });
 
     Ok(CommandResult::Raw(path.display().to_string()))
 }

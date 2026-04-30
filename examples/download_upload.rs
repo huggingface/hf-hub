@@ -13,8 +13,8 @@
 use std::io::Write;
 
 use futures::StreamExt;
-use hf_hub::HFClient;
 use hf_hub::repository::AddSource;
+use hf_hub::{HFClient, RepoTypeModel};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -107,7 +107,8 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo = client.model(&user.username, format!("example-download-upload-{}", std::process::id()));
 
     client
-        .create_repo()
+        .create_repository()
+        .repo_type(RepoTypeModel)
         .repo_id(repo.repo_path())
         .private(true)
         .exist_ok(true)
@@ -154,7 +155,13 @@ async fn main() -> hf_hub::HFResult<()> {
     println!("Uploaded folder: {:?}", commit.commit_url);
 
     // Cleanup
-    client.delete_repo().repo_id(repo.repo_path()).missing_ok(true).send().await?;
+    client
+        .delete_repository()
+        .repo_type(RepoTypeModel)
+        .repo_id(repo.repo_path())
+        .missing_ok(true)
+        .send()
+        .await?;
     println!("Cleaned up repo: {}", repo.repo_path());
 
     Ok(())

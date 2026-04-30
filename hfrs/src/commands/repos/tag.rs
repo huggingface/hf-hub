@@ -84,28 +84,28 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
 }
 
 async fn create(client: &HFClient, args: TagCreateArgs) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
-    repo.create_tag()
-        .tag(args.tag)
-        .maybe_revision(args.revision)
-        .maybe_message(args.message)
-        .send()
-        .await?;
+    crate::with_typed_repo!(client, &args.repo_id, args.r#type, |repo| {
+        repo.create_tag()
+            .tag(args.tag)
+            .maybe_revision(args.revision)
+            .maybe_message(args.message)
+            .send()
+            .await?
+    });
     Ok(CommandResult::Raw("Tag created.".to_string()))
 }
 
 async fn delete(client: &HFClient, args: TagDeleteArgs) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
-    repo.delete_tag().tag(args.tag).send().await?;
+    crate::with_typed_repo!(client, &args.repo_id, args.r#type, |repo| {
+        repo.delete_tag().tag(args.tag).send().await?
+    });
     Ok(CommandResult::Silent)
 }
 
 async fn list(client: &HFClient, args: TagListArgs) -> Result<CommandResult> {
-    let repo_type: hf_hub::RepoType = args.r#type.into();
-    let repo = crate::util::make_repo(client, &args.repo_id, repo_type);
-    let refs = repo.list_refs().include_pull_requests(false).send().await?;
+    let refs = crate::with_typed_repo!(client, &args.repo_id, args.r#type, |repo| {
+        repo.list_refs().include_pull_requests(false).send().await?
+    });
 
     if refs.tags.is_empty() && matches!(args.format, OutputFormat::Table) {
         return Ok(CommandResult::Raw("No tags found.".to_string()));

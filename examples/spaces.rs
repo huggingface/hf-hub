@@ -1,9 +1,9 @@
 //! Space operations: runtime info, secrets, variables, and lifecycle management.
 //!
-//! Requires HF_TOKEN and the "spaces" feature.
+//! Requires HF_TOKEN.
 //! Run: cargo run -p examples --example spaces
 
-use hf_hub::{HFClient, RepoType};
+use hf_hub::{HFClient, RepoTypeSpace};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
@@ -22,9 +22,9 @@ async fn main() -> hf_hub::HFResult<()> {
     let space = client.space(&user.username, format!("example-space-{unique}"));
 
     client
-        .create_repo()
+        .create_repository()
+        .repo_type(RepoTypeSpace)
         .repo_id(space.repo_path())
-        .repo_type(RepoType::Space)
         .private(true)
         .space_sdk("static")
         .exist_ok(true)
@@ -51,9 +51,9 @@ async fn main() -> hf_hub::HFResult<()> {
     println!("Restarted space: {restarted:?}");
 
     client
-        .delete_repo()
+        .delete_repository()
+        .repo_type(RepoTypeSpace)
         .repo_id(space.repo_path())
-        .repo_type(RepoType::Space)
         .missing_ok(true)
         .send()
         .await?;

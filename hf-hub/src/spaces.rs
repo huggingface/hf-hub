@@ -1,31 +1,25 @@
 //! Space handles, response types, and runtime/hardware/secrets APIs.
 //!
-//! Get a handle with [`HFClient::space`](HFClient::space). It is an [`HFSpace`], which
-//! wraps an [`HFRepository`] pinned to [`RepoType::Space`] and adds
-//! Space-only methods (runtime, hardware, secrets, variables, pause/restart, duplicate).
-//!
-//! [`HFSpace`] implements [`Deref`] to [`HFRepository`], so every repo method (`info`,
-//! `download_file`, `list_tree`, `create_commit`, …) is available on the same value without
-//! switching handles.
+//! Space-specific operations (runtime, hardware, secrets, variables, pause/restart, duplicate)
+//! live as methods on [`HFRepository<RepoTypeSpace>`](HFRepository). Get a handle with
+//! [`HFClient::space`](crate::HFClient::space) and call the methods directly — there is no separate
+//! `HFSpace` wrapper.
 //!
 //! Response structs such as [`SpaceRuntime`] and [`SpaceVariable`] live in this module; bon-generated
 //! `*Builder` types for each Space API appear here for rustdoc.
 
-use std::ops::Deref;
-use std::sync::Arc;
-
 use bon::bon;
 use serde::{Deserialize, Serialize};
 
-use crate::client::HFClient;
-use crate::error::{HFError, HFResult};
-use crate::repository::{HFRepository, RepoType, RepoUrl};
+use crate::error::HFResult;
+use crate::repository::{HFRepository, RepoTypeSpace, RepoUrl};
 use crate::retry;
 
 /// Runtime state of a Space: stage, hardware, storage, and mounted volumes.
 ///
 /// Returned by Space lifecycle methods such as
-/// [`HFSpace::runtime`], [`HFSpace::pause`], and [`HFSpace::restart`].
+/// [`runtime`](HFRepository::runtime), [`pause`](HFRepository::pause), and
+/// [`restart`](HFRepository::restart) on [`HFRepository<RepoTypeSpace>`](HFRepository).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceRuntime {
@@ -112,62 +106,8 @@ pub struct SpaceVariable {
     pub updated_at: Option<String>,
 }
 
-/// A handle for a Space repository, providing Space-specific operations on top of [`HFRepository`].
-///
-/// `HFSpace` wraps an [`HFRepository`] fixed to [`RepoType::Space`] and exposes hardware,
-/// secret, and variable management. It derefs to [`HFRepository`], so all general repo
-/// methods (e.g. `exists`, `info`, `download_file`) are accessible directly.
-///
-/// Created via [`HFClient::space`] or [`TryFrom<HFRepository>`].
-///
-/// # Example
-///
-/// ```rust,no_run
-/// # use hf_hub::HFClient;
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// let client = HFClient::builder().build()?;
-/// let space = client.space("huggingface", "diffusers-gallery");
-/// // General repo methods are available via Deref:
-/// let exists = space.exists().send().await?;
-/// # Ok(()) }
-/// ```
-#[derive(Clone)]
-pub struct HFSpace {
-    pub(crate) repo: Arc<HFRepository>,
-}
-
-impl std::fmt::Debug for HFSpace {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HFSpace").field("repo", &self.repo).finish()
-    }
-}
-
-impl HFClient {
-    /// Create an [`HFSpace`] handle for a Space repository.
-    pub fn space(&self, owner: impl Into<String>, name: impl Into<String>) -> HFSpace {
-        HFSpace::new(self.clone(), owner, name)
-    }
-}
-
-impl HFSpace {
-    /// Construct a new Space handle. Prefer [`HFClient::space`] in most cases.
-    pub fn new(client: HFClient, owner: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            repo: Arc::new(HFRepository::new(client, RepoType::Space, owner, name)),
-        }
-    }
-
-    /// Borrow the underlying [`HFRepository`].
-    ///
-    /// `HFSpace` already derefs to `HFRepository`, so this is mainly useful when you need an
-    /// explicit reference (e.g. to clone or to disambiguate trait resolution).
-    pub fn repo(&self) -> &HFRepository {
-        &self.repo
-    }
-}
-
 #[bon]
-impl HFSpace {
+impl HFRepository<RepoTypeSpace> {
     /// Fetch the current runtime state of the Space (hardware, stage, URL, etc.).
     ///
     /// Endpoint: `GET /api/spaces/{repo_id}/runtime`.
@@ -562,45 +502,17 @@ impl HFSpace {
     }
 }
 
-impl TryFrom<HFRepository> for HFSpace {
-    type Error = HFError;
-
-    fn try_from(repo: HFRepository) -> HFResult<Self> {
-        if repo.repo_type() != RepoType::Space {
-            return Err(HFError::InvalidRepoType {
-                expected: RepoType::Space,
-                actual: repo.repo_type(),
-            });
-        }
-        Ok(Self { repo: Arc::new(repo) })
-    }
-}
-
-impl From<HFSpace> for Arc<HFRepository> {
-    fn from(space: HFSpace) -> Self {
-        space.repo.clone()
-    }
-}
-
-impl Deref for HFSpace {
-    type Target = HFRepository;
-
-    fn deref(&self) -> &Self::Target {
-        &self.repo
-    }
-}
-
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFSpaceSync {
-    /// Blocking counterpart of [`HFSpace::runtime`]. See the async method for parameters and
+impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
+    /// Blocking counterpart of [`HFRepository::runtime`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn runtime(&self) -> HFResult<SpaceRuntime> {
-        self.repo_sync.runtime.block_on(self.inner.runtime().send())
+        self.runtime.block_on(self.inner.runtime().send())
     }
 
-    /// Blocking counterpart of [`HFSpace::request_hardware`]. See the async method for parameters
+    /// Blocking counterpart of [`HFRepository::request_hardware`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn request_hardware(
@@ -611,7 +523,7 @@ impl crate::blocking::HFSpaceSync {
         /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
         sleep_time: Option<u64>,
     ) -> HFResult<SpaceRuntime> {
-        self.repo_sync.runtime.block_on(
+        self.runtime.block_on(
             self.inner
                 .request_hardware()
                 .hardware(hardware)
@@ -620,7 +532,7 @@ impl crate::blocking::HFSpaceSync {
         )
     }
 
-    /// Blocking counterpart of [`HFSpace::set_sleep_time`]. See the async method for parameters
+    /// Blocking counterpart of [`HFRepository::set_sleep_time`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn set_sleep_time(
@@ -628,26 +540,24 @@ impl crate::blocking::HFSpaceSync {
         /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
         sleep_time: u64,
     ) -> HFResult<()> {
-        self.repo_sync
-            .runtime
-            .block_on(self.inner.set_sleep_time().sleep_time(sleep_time).send())
+        self.runtime.block_on(self.inner.set_sleep_time().sleep_time(sleep_time).send())
     }
 
-    /// Blocking counterpart of [`HFSpace::pause`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFRepository::pause`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn pause(&self) -> HFResult<SpaceRuntime> {
-        self.repo_sync.runtime.block_on(self.inner.pause().send())
+        self.runtime.block_on(self.inner.pause().send())
     }
 
-    /// Blocking counterpart of [`HFSpace::restart`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFRepository::restart`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn restart(&self) -> HFResult<SpaceRuntime> {
-        self.repo_sync.runtime.block_on(self.inner.restart().send())
+        self.runtime.block_on(self.inner.restart().send())
     }
 
-    /// Blocking counterpart of [`HFSpace::add_secret`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFRepository::add_secret`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn add_secret(
@@ -662,7 +572,7 @@ impl crate::blocking::HFSpaceSync {
         #[builder(into)]
         description: Option<String>,
     ) -> HFResult<()> {
-        self.repo_sync.runtime.block_on(
+        self.runtime.block_on(
             self.inner
                 .add_secret()
                 .key(key)
@@ -672,7 +582,7 @@ impl crate::blocking::HFSpaceSync {
         )
     }
 
-    /// Blocking counterpart of [`HFSpace::delete_secret`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFRepository::delete_secret`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_secret(
@@ -681,10 +591,10 @@ impl crate::blocking::HFSpaceSync {
         #[builder(into)]
         key: String,
     ) -> HFResult<()> {
-        self.repo_sync.runtime.block_on(self.inner.delete_secret().key(key).send())
+        self.runtime.block_on(self.inner.delete_secret().key(key).send())
     }
 
-    /// Blocking counterpart of [`HFSpace::add_variable`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFRepository::add_variable`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn add_variable(
@@ -699,7 +609,7 @@ impl crate::blocking::HFSpaceSync {
         #[builder(into)]
         description: Option<String>,
     ) -> HFResult<()> {
-        self.repo_sync.runtime.block_on(
+        self.runtime.block_on(
             self.inner
                 .add_variable()
                 .key(key)
@@ -709,7 +619,7 @@ impl crate::blocking::HFSpaceSync {
         )
     }
 
-    /// Blocking counterpart of [`HFSpace::delete_variable`]. See the async method for parameters
+    /// Blocking counterpart of [`HFRepository::delete_variable`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_variable(
@@ -718,10 +628,10 @@ impl crate::blocking::HFSpaceSync {
         #[builder(into)]
         key: String,
     ) -> HFResult<()> {
-        self.repo_sync.runtime.block_on(self.inner.delete_variable().key(key).send())
+        self.runtime.block_on(self.inner.delete_variable().key(key).send())
     }
 
-    /// Blocking counterpart of [`HFSpace::duplicate`]. See the async method for parameters and
+    /// Blocking counterpart of [`HFRepository::duplicate`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn duplicate(
@@ -747,7 +657,7 @@ impl crate::blocking::HFSpaceSync {
         /// Public (non-secret) environment variables to set on the duplicated Space.
         variables: Option<Vec<serde_json::Value>>,
     ) -> HFResult<RepoUrl> {
-        self.repo_sync.runtime.block_on(
+        self.runtime.block_on(
             self.inner
                 .duplicate()
                 .maybe_to_id(to_id)
@@ -764,33 +674,16 @@ impl crate::blocking::HFSpaceSync {
 
 #[cfg(test)]
 mod tests {
-    use super::{HFSpace, SpaceRuntime, SpaceVariable};
-    use crate::repository::{HFRepository, RepoType};
+    use super::{SpaceRuntime, SpaceVariable};
+    use crate::repository::RepoType;
 
     #[test]
-    fn test_hfspace_constructor_and_deref() {
+    fn test_space_handle_constructor() {
         let client = crate::HFClient::builder().build().unwrap();
-        let space = HFSpace::new(client, "huggingface-projects", "diffusers-gallery");
+        let space = client.space("huggingface-projects", "diffusers-gallery");
 
-        assert_eq!(space.repo_type(), RepoType::Space);
+        assert_eq!(space.repo_type().singular(), "space");
         assert_eq!(space.repo_path(), "huggingface-projects/diffusers-gallery");
-    }
-
-    #[test]
-    fn test_hfspace_try_from_repo() {
-        let client = crate::HFClient::builder().build().unwrap();
-        let space_repo = HFRepository::new(client.clone(), RepoType::Space, "owner", "space");
-        assert!(HFSpace::try_from(space_repo).is_ok());
-
-        let model_repo = HFRepository::new(client, RepoType::Model, "owner", "model");
-        let error = HFSpace::try_from(model_repo).unwrap_err();
-        match error {
-            crate::HFError::InvalidRepoType { expected, actual } => {
-                assert_eq!(expected, RepoType::Space);
-                assert_eq!(actual, RepoType::Model);
-            },
-            _ => panic!("expected invalid repo type error"),
-        }
     }
 
     #[test]

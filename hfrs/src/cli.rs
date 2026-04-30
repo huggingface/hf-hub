@@ -1,6 +1,5 @@
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use clap::{Parser, Subcommand, ValueEnum};
-use hf_hub::RepoType;
 
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Yellow.on_default().effects(Effects::BOLD))
@@ -66,19 +65,13 @@ pub enum OutputFormat {
     Json,
 }
 
-#[derive(Clone, ValueEnum)]
+/// User-facing CLI flag selecting the repo kind. Dispatched to the typed
+/// `HFClient::{model, dataset, space}` / `client.create_repository().repo_type(...)`
+/// paths at the call site via a `match` (see [`crate::with_typed_repo`] /
+/// [`crate::dispatch_repo_type`]).
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum RepoTypeArg {
     Model,
     Dataset,
     Space,
-}
-
-impl From<RepoTypeArg> for RepoType {
-    fn from(arg: RepoTypeArg) -> Self {
-        match arg {
-            RepoTypeArg::Model => RepoType::Model,
-            RepoTypeArg::Dataset => RepoType::Dataset,
-            RepoTypeArg::Space => RepoType::Space,
-        }
-    }
 }

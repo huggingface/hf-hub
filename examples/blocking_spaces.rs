@@ -1,11 +1,12 @@
-//! Synchronous Space operations using HFClientSync and HFSpaceSync.
+//! Synchronous Space operations using HFClientSync.
 //!
-//! Demonstrates runtime info, secrets, variables, and lifecycle management.
+//! Demonstrates runtime info, secrets, variables, and lifecycle management on a
+//! blocking `HFRepositorySync<RepoTypeSpace>`.
 //!
-//! Requires HF_TOKEN and the "blocking" + "spaces" features.
+//! Requires HF_TOKEN and the "blocking" feature.
 //! Run: cargo run -p examples --features blocking --example blocking_spaces
 
-use hf_hub::{HFClientSync, RepoType};
+use hf_hub::{HFClientSync, RepoTypeSpace};
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
@@ -23,9 +24,9 @@ fn main() -> hf_hub::HFResult<()> {
     let space = client.space(&user.username, format!("blocking-example-space-{unique}"));
 
     client
-        .create_repo()
+        .create_repository()
+        .repo_type(RepoTypeSpace)
         .repo_id(space.repo_path())
-        .repo_type(RepoType::Space)
         .private(true)
         .space_sdk("static")
         .exist_ok(true)
@@ -51,9 +52,9 @@ fn main() -> hf_hub::HFResult<()> {
     println!("Restarted space: {restarted:?}");
 
     client
-        .delete_repo()
+        .delete_repository()
+        .repo_type(RepoTypeSpace)
         .repo_id(space.repo_path())
-        .repo_type(RepoType::Space)
         .missing_ok(true)
         .send()?;
     println!("Cleaned up test space");

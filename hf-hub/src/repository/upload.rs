@@ -81,10 +81,10 @@ struct DeleteFolderParams {
     create_pr: bool,
 }
 
-impl HFRepository {
+impl<T: RepoType> HFRepository<T> {
     async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!("{}/commit/{}", self.hf_client.api_url(Some(self.repo_type), &self.repo_path()), revision);
+        let url = format!("{}/commit/{}", self.hf_client.api_url(T::default().plural(), &self.repo_path()), revision);
 
         let add_ops_count = params
             .operations
@@ -371,7 +371,7 @@ impl HFRepository {
         let upload_modes = self
             .fetch_upload_modes(
                 &self.repo_path(),
-                Some(self.repo_type),
+                T::default().plural(),
                 revision,
                 &file_infos
                     .iter()
@@ -407,11 +407,11 @@ impl HFRepository {
     async fn fetch_upload_modes(
         &self,
         repo_id: &str,
-        repo_type: Option<RepoType>,
+        api_segment: &str,
         revision: &str,
         files: &[(&str, u64, &[u8])],
     ) -> HFResult<HashMap<String, String>> {
-        let url = format!("{}/preupload/{}", self.hf_client.api_url(repo_type, repo_id), revision);
+        let url = format!("{}/preupload/{}", self.hf_client.api_url(api_segment, repo_id), revision);
 
         let files_payload: Vec<serde_json::Value> = files
             .iter()
@@ -469,7 +469,7 @@ impl HFRepository {
         let repo_path = self.repo_path();
         tracing::info!("calling LFS batch endpoint for transfer negotiation");
         let chosen_transfer = self
-            .post_lfs_batch_info(&repo_path, Some(self.repo_type), revision, &objects)
+            .post_lfs_batch_info(&repo_path, T::default().url_prefix(), revision, &objects)
             .await?;
         tracing::info!(?chosen_transfer, "LFS batch transfer negotiation complete");
 
@@ -502,12 +502,11 @@ impl HFRepository {
     async fn post_lfs_batch_info(
         &self,
         repo_id: &str,
-        repo_type: Option<RepoType>,
+        url_prefix: &str,
         revision: &str,
         objects: &[(&str, u64)],
     ) -> HFResult<Option<String>> {
-        let prefix = constants::repo_type_url_prefix(repo_type);
-        let url = format!("{}/{}{}.git/info/lfs/objects/batch", self.hf_client.endpoint(), prefix, repo_id);
+        let url = format!("{}/{}{}.git/info/lfs/objects/batch", self.hf_client.endpoint(), url_prefix, repo_id);
 
         let objects_payload: Vec<serde_json::Value> = objects
             .iter()
@@ -679,7 +678,7 @@ fn collect_files_recursive(
 }
 
 #[bon]
-impl HFRepository {
+impl<T: RepoType> HFRepository<T> {
     /// Create a commit with multiple operations.
     ///
     /// This is the lowest-level public mutation API in the files module. Use it when you need an
@@ -936,7 +935,7 @@ impl HFRepository {
 
 #[cfg(feature = "blocking")]
 #[bon]
-impl crate::blocking::HFRepositorySync {
+impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::create_commit`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
