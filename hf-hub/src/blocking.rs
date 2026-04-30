@@ -185,9 +185,11 @@ impl<T: RepoType> HFRepositorySync<T> {
         self.inner.repo_path()
     }
 
-    /// Lowercase singular name of this repo's kind, equivalent to `T::default().singular()`.
-    pub fn repo_type(&self) -> &'static str {
-        T::default().singular()
+    /// The marker for this handle's repo kind, equivalent to `T::default()`. Call
+    /// [`RepoType::singular`] / [`RepoType::plural`] / [`RepoType::url_prefix`] on it
+    /// to get the corresponding string.
+    pub fn repo_type(&self) -> impl RepoType {
+        T::default()
     }
 }
 
@@ -228,7 +230,7 @@ mod tests {
 
         assert_eq!(repo.owner(), "openai-community");
         assert_eq!(repo.name(), "gpt2");
-        assert_eq!(repo.repo_type(), "model");
-        assert_eq!(space.repo_type(), "space");
+        assert_eq!(repo.repo_type().singular(), "model");
+        assert_eq!(space.repo_type().singular(), "space");
     }
 }

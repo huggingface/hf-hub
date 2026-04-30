@@ -1093,12 +1093,15 @@ impl<T: RepoType> HFRepository<T> {
         }
     }
 
-    /// Lowercase singular name of this repo's kind (`"model"`, `"dataset"`, `"space"`, or `"kernel"`).
+    /// The marker for this handle's repo kind.
     ///
-    /// Equivalent to `T::default().singular()` for the type parameter on this handle. Useful for
-    /// logs and error messages without naming `T` explicitly.
-    pub fn repo_type(&self) -> &'static str {
-        T::default().singular()
+    /// Equivalent to `T::default()` — useful when you want to read the kind off a
+    /// repository handle (e.g. for logging) without naming `T` explicitly. Call
+    /// [`singular`](RepoType::singular), [`plural`](RepoType::plural), or
+    /// [`url_prefix`](RepoType::url_prefix) on the returned value to get the
+    /// corresponding string.
+    pub fn repo_type(&self) -> impl RepoType {
+        T::default()
     }
 
     /// Fetch repo info for this repository's kind, deserializing into `I`.
@@ -1822,7 +1825,7 @@ mod tests {
         assert_eq!(repo.owner(), "openai-community");
         assert_eq!(repo.name(), "gpt2");
         assert_eq!(repo.repo_path(), "openai-community/gpt2");
-        assert_eq!(repo.repo_type(), "model");
+        assert_eq!(repo.repo_type().singular(), "model");
     }
 
     #[test]

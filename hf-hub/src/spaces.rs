@@ -675,13 +675,14 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
 #[cfg(test)]
 mod tests {
     use super::{SpaceRuntime, SpaceVariable};
+    use crate::repository::RepoType;
 
     #[test]
     fn test_space_handle_constructor() {
         let client = crate::HFClient::builder().build().unwrap();
         let space = client.space("huggingface-projects", "diffusers-gallery");
 
-        assert_eq!(space.repo_type(), "space");
+        assert_eq!(space.repo_type().singular(), "space");
         assert_eq!(space.repo_path(), "huggingface-projects/diffusers-gallery");
     }
 
