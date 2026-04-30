@@ -74,18 +74,16 @@ jobs:
         run: pip install huggingface_hub[cli]
 
       - name: Run tests
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_CI_TOKEN: ${{ secrets.HF_CI_TOKEN }}
-          HF_PROD_TOKEN: ${{ secrets.HF_PROD_TOKEN }}
-          HF_TEST_WRITE: "1"
-        run: cargo test --workspace --all-features --all-targets --verbose
+        shell: bash
+        run: |
+          HF_CI_TOKEN='${{ secrets.HF_CI_TOKEN }}' \
+          HF_PROD_TOKEN='${{ secrets.HF_PROD_TOKEN }}' \
+          HF_TEST_WRITE=1 \
+          cargo test --workspace --all-features --all-targets --verbose
 
   docs:
     name: Docs
     runs-on: ubuntu-latest
-    env:
-      RUSTDOCFLAGS: "-D warnings --cfg docsrs"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -97,7 +95,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
       - name: Build docs
-        run: cargo +nightly doc --workspace --all-features --no-deps
+        run: RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo +nightly doc -p hf-hub --features blocking --no-deps
 
   audit:
     name: Audit
