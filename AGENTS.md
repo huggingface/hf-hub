@@ -101,7 +101,7 @@ Translation rules from `typed-builder` attributes (now removed):
 | required field, no attribute | `x: T` |
 
 bon also generates a `maybe_<field>(opt)` setter alongside each `Option<T>` parameter — use it
-when forwarding an existing `Option<T>` value (e.g. inside a sync mirror, or when porting a
+when forwarding an existing `Option<T>` value (e.g., inside a sync mirror, or when porting a
 helper that already has the field as an `Option<T>` local).
 
 #### Mandatory blocking counterpart
@@ -138,7 +138,7 @@ because the struct has no direct `runtime` field. Do NOT reintroduce the legacy 
 `sync_api_stream!` / `sync_api_async_stream!` macros — they were removed deliberately when the
 crate moved to bon.
 
-When parameters need a backing struct for internal helpers (e.g. `DownloadFileParams` is
+When parameters need a backing struct for internal helpers (e.g., `DownloadFileParams` is
 plumbed through several private functions in `repository/download.rs`), keep that struct
 **private** to the module with no `#[derive(TypedBuilder)]` and have the bon method assemble it.
 Never expose it publicly.
@@ -147,9 +147,9 @@ Never expose it publicly.
 
 > **Agents MUST update this section when adding new crates or large modules.**
 
-Types and API methods live together per component. Each component is either a single file (for smaller components) or a folder (when the impl block needs splitting). The user-facing types are re-exported flat at `hf_hub::<component>::…` (e.g. `hf_hub::repository::CommitOperation`); no `hf_hub::types` module exists.
+Types and API methods live together per component. Each component is either a single file (for smaller components) or a folder (when the impl block needs splitting). The user-facing types are re-exported flat at `hf_hub::<component>::…` (e.g., `hf_hub::repository::CommitOperation`); no `hf_hub::types` module exists.
 
-Submodules inside a component folder are declared `pub mod` rather than `mod`. This makes the bon-generated builder structs (e.g. `HFRepositoryListCommitsBuilder` from `repository/commits.rs`) reachable through their canonical path so rustdoc renders them. The user-visible types still appear flat at `hf_hub::<component>::…` via the existing `pub use` re-exports — `pub mod` just adds the per-submodule path as an additional location where rustdoc documents items.
+Submodules inside a component folder are declared `pub mod` rather than `mod`. This makes the bon-generated builder structs (e.g., `HFRepositoryListCommitsBuilder` from `repository/commits.rs`) reachable through their canonical path so rustdoc renders them. The user-visible types still appear flat at `hf_hub::<component>::…` via the existing `pub use` re-exports — `pub mod` just adds the per-submodule path as an additional location where rustdoc documents items.
 
 ```txt
 hf-hub/

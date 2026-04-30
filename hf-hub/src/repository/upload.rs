@@ -402,7 +402,7 @@ impl<T: RepoType> HFRepository<T> {
         self.upload_lfs_files_via_xet(params, revision, &lfs_files).await
     }
 
-    /// Call the Hub preupload endpoint to determine upload mode per file.
+    /// Call the Hub preupload endpoint to determine the upload mode per file.
     /// Returns a map of path -> upload mode ("lfs" or "regular").
     async fn fetch_upload_modes(
         &self,
@@ -497,8 +497,8 @@ impl<T: RepoType> HFRepository<T> {
         Ok(result)
     }
 
-    /// Call the LFS batch endpoint to negotiate transfer method.
-    /// Returns the chosen transfer (e.g. "xet", "basic", "multipart").
+    /// Call the LFS batch endpoint to negotiate the transfer method.
+    /// Returns the chosen transfer (e.g., "xet", "basic", "multipart").
     async fn post_lfs_batch_info(
         &self,
         repo_id: &str,
@@ -681,7 +681,7 @@ fn collect_files_recursive(
 impl<T: RepoType> HFRepository<T> {
     /// Create a commit with multiple operations.
     ///
-    /// This is the lowest-level public mutation API in the files module. Use it when you need an
+    /// This is the lowest-level public mutation API in the files' module. Use it when you need an
     /// explicit mix of add and delete operations in one commit. For one-shot workflows, prefer
     /// [`HFRepository::upload_file`], [`HFRepository::upload_folder`],
     /// [`HFRepository::delete_file`], or [`HFRepository::delete_folder`].
@@ -801,12 +801,12 @@ impl<T: RepoType> HFRepository<T> {
     /// - `commit_message`, `commit_description`: commit metadata.
     /// - `create_pr` (default `false`): create a pull request instead of committing directly.
     /// - `allow_patterns`: globs selecting which local files to include. Matched against each discovered file's path
-    ///   relative to `folder_path` (e.g. `data/train.bin`, not the absolute path and not prefixed with `path_in_repo`).
-    ///   When set, only files matching at least one pattern are uploaded.
+    ///   relative to `folder_path` (e.g., `data/train.bin`, not the absolute path and not prefixed with
+    ///   `path_in_repo`). When set, only files matching at least one pattern are uploaded.
     /// - `ignore_patterns`: globs of local files to skip. Matched against the same `folder_path`-relative paths as
     ///   `allow_patterns`.
     /// - `delete_patterns`: globs of *remote* files to delete in the same commit. Matched against each existing file's
-    ///   full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g. `old/*.bin` to remove
+    ///   full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g., `old/*.bin` to remove
     ///   every `.bin` directly under `old/` at the repo root.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -831,14 +831,14 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(default)]
         create_pr: bool,
         /// Globs selecting which local files to include. Matched against each discovered file's path
-        /// relative to `folder_path` (e.g. `data/train.bin`, not the absolute path and not prefixed with
+        /// relative to `folder_path` (e.g., `data/train.bin`, not the absolute path and not prefixed with
         /// `path_in_repo`). When set, only files matching at least one pattern are uploaded.
         allow_patterns: Option<Vec<String>>,
         /// Globs of local files to skip. Matched against the same `folder_path`-relative paths as
         /// `allow_patterns`.
         ignore_patterns: Option<Vec<String>>,
         /// Globs of *remote* files to delete in the same commit. Matched against each existing file's
-        /// full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g. `old/*.bin` to
+        /// full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g., `old/*.bin` to
         /// remove every `.bin` directly under `old/` at the repo root.
         delete_patterns: Option<Vec<String>>,
         /// Progress handler.

@@ -11,7 +11,7 @@ use crate::output::CommandResult;
 /// Delete files from a repository
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Repository ID (e.g. username/my-model)
+    /// Repository ID (e.g., username/my-model)
     pub repo_id: String,
 
     /// File patterns to delete (glob patterns or exact paths relative to the repository root)

@@ -1,7 +1,7 @@
 //! Repository handles, metadata types, and list/create/delete/move APIs.
 //!
-//! Start from [`crate::HFClient`] — [`crate::HFClient::model`], [`crate::HFClient::dataset`],
-//! [`crate::HFClient::space`], and [`crate::HFClient::kernel`] return a typed
+//! Start from [`HFClient`] — [`HFClient::model`], [`HFClient::dataset`],
+//! [`HFClient::space`], and [`HFClient::kernel`] return a typed
 //! [`HFRepository<T>`](HFRepository) for the corresponding repo kind. All read/write
 //! file and revision APIs hang off that value; methods that differ per repo kind (such
 //! as [`info`](HFRepository::info)) are resolved at compile time via the [`RepoType`]
@@ -119,7 +119,7 @@ pub struct RepoSibling {
 /// SafeTensors footprint for a model: per-dtype parameter counts and total.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SafeTensorsInfo {
-    /// Parameter counts keyed by dtype (e.g. `"F32"`, `"BF16"`, `"I8"`).
+    /// Parameter counts keyed by dtype (e.g., `"F32"`, `"BF16"`, `"I8"`).
     pub parameters: HashMap<String, u64>,
     /// Total number of parameters across all dtypes.
     pub total: u64,
@@ -129,7 +129,7 @@ pub struct SafeTensorsInfo {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TransformersInfo {
-    /// Name of the Transformers auto class for this model (e.g. `"AutoModelForCausalLM"`).
+    /// Name of the Transformers auto class for this model (e.g., `"AutoModelForCausalLM"`).
     pub auto_model: String,
     /// Custom Python class declared by the model, if any.
     #[serde(default)]
@@ -149,13 +149,13 @@ pub struct TransformersInfo {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceProviderMapping {
-    /// Provider name (e.g. `"hf-inference"`, `"together"`).
+    /// Provider name (e.g., `"hf-inference"`, `"together"`).
     pub provider: String,
     /// ID of the model on the provider's side.
     pub provider_id: String,
     /// Status of the mapping: `"error"`, `"live"`, or `"staging"`.
     pub status: String,
-    /// Task served by this provider (e.g. `"text-generation"`).
+    /// Task served by this provider (e.g., `"text-generation"`).
     pub task: String,
     /// Adapter name, if the mapping uses an adapter.
     #[serde(default)]
@@ -232,9 +232,9 @@ pub struct EvalResultEntry {
 /// Benchmark dataset and task identifiers for an [`EvalResultEntry`].
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EvalResultDataset {
-    /// Benchmark dataset ID (e.g. `"cais/hle"`).
+    /// Benchmark dataset ID (e.g., `"cais/hle"`).
     pub id: String,
-    /// Task identifier within the benchmark (e.g. `"gpqa_diamond"`).
+    /// Task identifier within the benchmark (e.g., `"gpqa_diamond"`).
     pub task_id: String,
     /// Git SHA of the benchmark dataset, if pinned.
     #[serde(default)]
@@ -281,7 +281,7 @@ pub struct ModelInfo {
     pub card_data: Option<serde_json::Value>,
     /// Number of children (derived) models.
     pub children_model_count: Option<u64>,
-    /// Model configuration (e.g. parsed `config.json` for Transformers models).
+    /// Model configuration (e.g., parsed `config.json` for Transformers models).
     pub config: Option<serde_json::Value>,
     /// ISO-8601 timestamp when the repo was created. The earliest possible value is
     /// `2022-03-02T23:29:04.000Z` (when the Hub started recording creation dates).
@@ -300,8 +300,8 @@ pub struct ModelInfo {
     pub gated: Option<serde_json::Value>,
     /// GGUF-specific metadata, when the repo contains GGUF files.
     pub gguf: Option<serde_json::Value>,
-    /// Inference-providers status. Currently `Some("warm")` when the model is served by at least one
-    /// provider, `None` otherwise.
+    /// Inference-providers status. Currently, `Some("warm")` when the model is served by at least
+    /// one provider, `None` otherwise.
     pub inference: Option<String>,
     /// Per-provider inference mappings, ordered by the user's provider preference.
     ///
@@ -311,7 +311,7 @@ pub struct ModelInfo {
     pub inference_provider_mapping: Option<Vec<InferenceProviderMapping>>,
     /// ISO-8601 timestamp of the most recent commit to the repo.
     pub last_modified: Option<String>,
-    /// Library this model is associated with (e.g. `"transformers"`, `"diffusers"`).
+    /// Library this model is associated with (e.g., `"transformers"`, `"diffusers"`).
     #[serde(rename = "library_name")]
     pub library_name: Option<String>,
     /// Number of likes on the repo.
@@ -322,7 +322,7 @@ pub struct ModelInfo {
     /// Model-index data describing benchmark results in the `model-index` format.
     #[serde(rename = "model-index")]
     pub model_index: Option<serde_json::Value>,
-    /// Primary task tag (e.g. `"text-generation"`, `"image-classification"`).
+    /// Primary task tag (e.g., `"text-generation"`, `"image-classification"`).
     #[serde(rename = "pipeline_tag")]
     pub pipeline_tag: Option<String>,
     /// Whether the repo is private.
@@ -341,7 +341,7 @@ pub struct ModelInfo {
     /// IDs of Spaces that use this model.
     pub spaces: Option<Vec<String>>,
     /// Hub tags. Includes both author-provided tags from the model card and tags computed by the Hub
-    /// (e.g. supported libraries, arXiv references).
+    /// (e.g., supported libraries, arXiv references).
     pub tags: Option<Vec<String>>,
     /// Transformers-specific metadata declared by the model.
     pub transformers_info: Option<TransformersInfo>,
@@ -448,7 +448,7 @@ pub struct SpaceInfo {
     pub siblings: Option<Vec<RepoSibling>>,
     /// Parsed YAML metadata from the Space card (`README.md` front matter).
     pub card_data: Option<serde_json::Value>,
-    /// SDK powering the Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`, `"static"`).
+    /// SDK powering the Space (e.g., `"gradio"`, `"streamlit"`, `"docker"`, `"static"`).
     pub sdk: Option<String>,
     /// Trending score used to rank the Space on the Hub's trending lists.
     pub trending_score: Option<f64>,
@@ -508,7 +508,7 @@ pub struct KernelInfo {
     /// Whether the publisher is trusted by the Hub. Kernels from trusted publishers receive a
     /// distinct badge in the UI.
     pub trusted_publisher: Option<bool>,
-    /// Driver families the prebuilt kernel artifacts support, e.g. `"cuda"`, `"xpu"`, `"cpu"`.
+    /// Driver families the prebuilt kernel artifacts support, e.g., `"cuda"`, `"xpu"`, `"cpu"`.
     /// May be absent when the kernel has not declared its supported drivers.
     pub supported_driver_families: Option<Vec<String>>,
 }
@@ -520,7 +520,7 @@ pub struct RepoUrl {
     pub url: String,
 }
 
-/// A handle for a single repository on the Hugging Face Hub, parameterised by the
+/// A handle for a single repository on the Hugging Face Hub, parameterized by the
 /// repo kind via the type-level marker `T`.
 ///
 /// `HFRepository<T>` is created via the typed factories on [`HFClient`] —
@@ -661,15 +661,15 @@ impl HFClient {
     ///
     /// - `search`: free-text query forwarded as the `?search=` parameter. The Hub matches it substring-style against
     ///   the model `id` and (when present) the model card description — it is **not** a tag filter.
-    /// - `author`: namespace owner to filter on, forwarded as `?author=`. Pass a Hub user or organization name (e.g.
+    /// - `author`: namespace owner to filter on, forwarded as `?author=`. Pass a Hub user or organization name (e.g.,
     ///   `"google"`, `"meta-llama"`) — bare names, not paths.
-    /// - `filter`: a single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+    /// - `filter`: a single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.,
     ///   `"pytorch"`, `"text-generation"`, `"license:apache-2.0"`, `"language:en"`, `"dataset:wikipedia"`,
     ///   `"region:us"`. To combine tags, narrow the results client-side (only one `filter` value is sent).
     /// - `sort`: API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
     ///   `"createdAt"`, `"lastModified"`, and `"trendingScore"`. Use the camelCase Hub field names (not Rust struct
     ///   field names).
-    /// - `pipeline_tag`: pipeline-tag filter (e.g. `"text-classification"`, `"automatic-speech-recognition"`),
+    /// - `pipeline_tag`: pipeline-tag filter (e.g., `"text-classification"`, `"automatic-speech-recognition"`),
     ///   forwarded as `?pipeline_tag=`. Same vocabulary as the `pipeline_tag` field on a model card.
     /// - `full`: fetch the full model information including all fields.
     /// - `card_data`: include the model card metadata in the response.
@@ -683,11 +683,11 @@ impl HFClient {
         /// the model `id` and (when present) the model card description — it is **not** a tag filter.
         #[builder(into)]
         search: Option<String>,
-        /// Namespace owner to filter on, forwarded as `?author=`. Pass a Hub user or organization name (e.g.
+        /// Namespace owner to filter on, forwarded as `?author=`. Pass a Hub user or organization name (e.g.,
         /// `"google"`, `"meta-llama"`) — bare names, not paths.
         #[builder(into)]
         author: Option<String>,
-        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.,
         /// `"pytorch"`, `"text-generation"`, `"license:apache-2.0"`, `"language:en"`, `"dataset:wikipedia"`,
         /// `"region:us"`. To combine tags, narrow the results client-side (only one `filter` value is sent).
         #[builder(into)]
@@ -697,7 +697,7 @@ impl HFClient {
         /// field names).
         #[builder(into)]
         sort: Option<String>,
-        /// Pipeline-tag filter (e.g. `"text-classification"`, `"automatic-speech-recognition"`),
+        /// Pipeline-tag filter (e.g., `"text-classification"`, `"automatic-speech-recognition"`),
         /// forwarded as `?pipeline_tag=`. Same vocabulary as the `pipeline_tag` field on a model card.
         #[builder(into)]
         pipeline_tag: Option<String>,
@@ -755,9 +755,9 @@ impl HFClient {
     ///
     /// - `search`: free-text query forwarded as `?search=`. The Hub matches it substring-style against the dataset `id`
     ///   and card description — not a tag filter.
-    /// - `author`: namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g.
+    /// - `author`: namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g.,
     ///   `"HuggingFaceH4"`, `"allenai"`).
-    /// - `filter`: a single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+    /// - `filter`: a single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.,
     ///   `"task_categories:text-classification"`, `"language:en"`, `"size_categories:10K<n<100K"`, `"license:mit"`. To
     ///   combine tags, narrow client-side — only one `filter` value is sent.
     /// - `sort`: API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
@@ -772,11 +772,11 @@ impl HFClient {
         /// and card description — not a tag filter.
         #[builder(into)]
         search: Option<String>,
-        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g.
+        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g.,
         /// `"HuggingFaceH4"`, `"allenai"`).
         #[builder(into)]
         author: Option<String>,
-        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.,
         /// `"task_categories:text-classification"`, `"language:en"`, `"size_categories:10K<n<100K"`, `"license:mit"`.
         /// To combine tags, narrow client-side — only one `filter` value is sent.
         #[builder(into)]
@@ -824,9 +824,9 @@ impl HFClient {
     ///
     /// - `search`: free-text query forwarded as `?search=`. The Hub matches it substring-style against the Space `id`
     ///   and card description — not a tag filter.
-    /// - `author`: namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g. `"openai"`,
-    ///   `"stabilityai"`).
-    /// - `filter`: a single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+    /// - `author`: namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g.,
+    ///   `"openai"`, `"stabilityai"`).
+    /// - `filter`: a single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.,
     ///   `"sdk:gradio"`, `"sdk:streamlit"`, `"sdk:docker"`, `"language:en"`, `"license:mit"`. To combine tags, narrow
     ///   client-side — only one `filter` value is sent.
     /// - `sort`: API field name to sort by, forwarded as `?sort=`. Common values are `"likes"`, `"createdAt"`,
@@ -841,11 +841,11 @@ impl HFClient {
         /// and card description — not a tag filter.
         #[builder(into)]
         search: Option<String>,
-        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g. `"openai"`,
+        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g., `"openai"`,
         /// `"stabilityai"`).
         #[builder(into)]
         author: Option<String>,
-        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
+        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.,
         /// `"sdk:gradio"`, `"sdk:streamlit"`, `"sdk:docker"`, `"language:en"`, `"license:mit"`. To combine tags,
         /// narrow client-side — only one `filter` value is sent.
         #[builder(into)]
@@ -888,7 +888,7 @@ impl HFClient {
     /// Create a new repository. Endpoint: `POST /api/repos/create`.
     ///
     /// The repo kind is picked at the call site by passing one of the four marker
-    /// structs to [`repo_type`](HFClientCreateRepositoryBuilder::repo_type) — e.g.
+    /// structs to [`repo_type`](HFClientCreateRepositoryBuilder::repo_type) — e.g.,
     /// `client.create_repository().repo_type(RepoTypeDataset)...` to create a dataset.
     /// The body always includes the `type` field, matching the Hub's per-kind
     /// defaults.
@@ -900,7 +900,7 @@ impl HFClient {
     ///   [`RepoTypeKernel`]).
     /// - `private`: whether the repository should be private.
     /// - `exist_ok` (default `false`): if `true`, do not error when the repository already exists.
-    /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
+    /// - `space_sdk`: SDK for a Space (e.g., `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
     ///   [`RepoTypeSpace`]; ignored for other repo kinds.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn create_repository(
@@ -916,7 +916,7 @@ impl HFClient {
         /// If `true`, do not error when the repository already exists.
         #[builder(default)]
         exist_ok: bool,
-        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
+        /// SDK for a Space (e.g., `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
         /// [`RepoTypeSpace`]; ignored for other repo kinds.
         #[builder(into)]
         space_sdk: Option<String>,
@@ -959,7 +959,7 @@ impl HFClient {
     /// Delete a repository. Endpoint: `DELETE /api/repos/delete`.
     ///
     /// The repo kind is picked at the call site by passing one of the four marker
-    /// structs to [`repo_type`](HFClientDeleteRepositoryBuilder::repo_type) — e.g.
+    /// structs to [`repo_type`](HFClientDeleteRepositoryBuilder::repo_type) — e.g.,
     /// `client.delete_repository().repo_type(RepoTypeSpace)...`. The body always includes
     /// the `type` field.
     ///
@@ -1012,7 +1012,7 @@ impl HFClient {
     /// Move (rename) a repository. Endpoint: `POST /api/repos/move`.
     ///
     /// The repo kind is picked at the call site by passing one of the four marker
-    /// structs to [`repo_type`](HFClientMoveRepositoryBuilder::repo_type) — e.g.
+    /// structs to [`repo_type`](HFClientMoveRepositoryBuilder::repo_type) — e.g.,
     /// `client.move_repository().repo_type(RepoTypeModel)...`. The body always includes
     /// the `type` field.
     ///
@@ -1095,8 +1095,8 @@ impl<T: RepoType> HFRepository<T> {
 
     /// The marker for this handle's repo kind.
     ///
-    /// Equivalent to `T::default()` — useful when you want to read the kind off a
-    /// repository handle (e.g. for logging) without naming `T` explicitly. Call
+    /// Equivalent to `T::default()` — useful when you want to read the kind from a
+    /// repository handle (e.g., for logging) without naming `T` explicitly. Call
     /// [`singular`](RepoType::singular), [`plural`](RepoType::plural), or
     /// [`url_prefix`](RepoType::url_prefix) on the returned value to get the
     /// corresponding string.
@@ -1240,7 +1240,7 @@ impl<T: RepoType> HFRepository<T> {
     /// # Parameters
     ///
     /// - `private`: whether the repository should be private.
-    /// - `gated`: access-gating mode for the repository (e.g. `auto`, `manual`, disabled).
+    /// - `gated`: access-gating mode for the repository (e.g., `auto`, `manual`, disabled).
     /// - `description`: repository description shown on the Hub page.
     /// - `discussions_disabled`: whether discussions are disabled on this repository.
     /// - `gated_notifications`: notification cadence (and optional email override) for gated-access requests. The
@@ -1250,7 +1250,7 @@ impl<T: RepoType> HFRepository<T> {
         &self,
         /// Whether the repository should be private.
         private: Option<bool>,
-        /// Access-gating mode for the repository (e.g. `auto`, `manual`, disabled).
+        /// Access-gating mode for the repository (e.g., `auto`, `manual`, disabled).
         gated: Option<GatedApprovalMode>,
         /// Repository description shown on the Hub page.
         #[builder(into)]
@@ -1313,7 +1313,7 @@ macro_rules! info_method_doc {
         "Fetch repository metadata for this repo kind, returning the concrete info struct.\n\n\
         # Parameters\n\n\
         - `revision`: Git revision (branch, tag, or commit SHA). Defaults to the main branch.\n\
-        - `expand`: list of properties to expand in the response (e.g. `\"trendingScore\"`, `\"cardData\"`).\n  \
+        - `expand`: list of properties to expand in the response (e.g., `\"trendingScore\"`, `\"cardData\"`).\n  \
           When set, only the listed properties (plus `_id` and `id`) are returned. Kernel info ignores this."
     };
 }
@@ -1333,7 +1333,7 @@ impl HFRepository<RepoTypeModel> {
         /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
-        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`).
+        /// List of properties to expand in the response (e.g., `"trendingScore"`, `"cardData"`).
         expand: Option<Vec<String>>,
     ) -> HFResult<ModelInfo> {
         self.fetch_repo_info(revision, expand).await
@@ -1355,7 +1355,7 @@ impl HFRepository<RepoTypeDataset> {
         /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
-        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`).
+        /// List of properties to expand in the response (e.g., `"trendingScore"`, `"cardData"`).
         expand: Option<Vec<String>>,
     ) -> HFResult<DatasetInfo> {
         self.fetch_repo_info(revision, expand).await
@@ -1377,7 +1377,7 @@ impl HFRepository<RepoTypeSpace> {
         /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
-        /// List of properties to expand in the response (e.g. `"trendingScore"`, `"cardData"`).
+        /// List of properties to expand in the response (e.g., `"trendingScore"`, `"cardData"`).
         expand: Option<Vec<String>>,
     ) -> HFResult<SpaceInfo> {
         self.fetch_repo_info(revision, expand).await

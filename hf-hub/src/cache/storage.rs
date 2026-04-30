@@ -103,7 +103,7 @@ pub(crate) fn is_commit_hash(revision: &str) -> bool {
 /// Build the folder name for the cache layout: `<plural>--<owner>--<name>`.
 ///
 /// `type_plural` is the API segment of the repo type — `"models"`, `"datasets"`, `"spaces"`,
-/// or `"kernels"` — i.e. the value returned by [`crate::repository::RepoType::plural`].
+/// or `"kernels"` — i.e., the value returned by [`crate::repository::RepoType::plural`].
 pub(crate) fn repo_folder_name(repo_id: &str, type_plural: &str) -> String {
     std::iter::once(type_plural)
         .chain(repo_id.split('/'))

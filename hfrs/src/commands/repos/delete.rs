@@ -8,7 +8,7 @@ use crate::output::CommandResult;
 /// Delete a repository
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Repository ID (e.g. username/my-model)
+    /// Repository ID (e.g., username/my-model)
     pub repo_id: String,
 
     /// Repository type

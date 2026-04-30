@@ -9,7 +9,7 @@ use crate::output::{CommandOutput, CommandResult};
 /// Show detailed information about a Space
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Space ID (e.g. gradio/hello_world)
+    /// Space ID (e.g., gradio/hello_world)
     pub space_id: String,
 
     /// Git revision (branch, tag, or commit SHA)

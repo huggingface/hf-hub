@@ -14,7 +14,7 @@ use crate::progress::CliProgressHandler;
 /// Upload files to the Hub
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Repository ID (e.g. username/my-model)
+    /// Repository ID (e.g., username/my-model)
     pub repo_id: String,
 
     /// Local file or folder to upload (defaults to current directory)

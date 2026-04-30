@@ -9,8 +9,6 @@
 //! or binary, the destination-side file size, and the relevant paths. This
 //! module does not parse patch hunks; it focuses on the metadata needed to
 //! inspect revision-to-revision file changes efficiently.
-//!
-//! Format reference: <https://git-scm.com/docs/diff-format#_raw_output_format>
 
 use bytes::Bytes;
 use futures::stream::{self, Stream, StreamExt};
@@ -214,7 +212,7 @@ fn parse_hf_diff_line(line: &str) -> Result<HFFileDiff, HFDiffParseError> {
 
 /// Stream-parse raw HF diff output line by line.
 ///
-/// Takes a byte stream (e.g. from `HFRepository::get_raw_diff_stream`) and returns
+/// Takes a byte stream (e.g., from `HFRepository::get_raw_diff_stream`) and returns
 /// a stream of `HFFileDiff` items, parsing each line as it arrives without buffering
 /// the entire response.
 pub(crate) fn stream_raw_diff<S, E>(byte_stream: S) -> impl Stream<Item = Result<HFFileDiff, HFDiffParseError>> + Unpin

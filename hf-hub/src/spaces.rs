@@ -23,7 +23,7 @@ use crate::retry;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceRuntime {
-    /// Lifecycle stage of the Space (e.g. `"RUNNING"`, `"BUILDING"`, `"PAUSED"`, `"SLEEPING"`).
+    /// Lifecycle stage of the Space (e.g., `"RUNNING"`, `"BUILDING"`, `"PAUSED"`, `"SLEEPING"`).
     pub stage: String,
     /// Current and requested hardware for the Space. `None` while a Space is `BUILDING` for the
     /// first time.
@@ -47,7 +47,7 @@ pub struct SpaceRuntime {
 /// Hardware running a Space, with the most recently requested hardware.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SpaceHardware {
-    /// Hardware currently running the Space (e.g. `"cpu-basic"`, `"t4-medium"`). `None` if no
+    /// Hardware currently running the Space (e.g., `"cpu-basic"`, `"t4-medium"`). `None` if no
     /// hardware is assigned yet.
     #[serde(default)]
     pub current: Option<String>,
@@ -61,7 +61,7 @@ pub struct SpaceHardware {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceHotReloading {
-    /// Status of the hot-reload commit, e.g. `"created"` or `"canceled"`.
+    /// Status of the hot-reload commit, e.g., `"created"` or `"canceled"`.
     pub status: String,
     /// Per-replica statuses, each a `[replica_hash, status]` pair.
     pub replica_statuses: Vec<serde_json::Value>,
@@ -74,7 +74,7 @@ pub struct Volume {
     /// Volume kind: `"bucket"`, `"model"`, `"dataset"`, or `"space"`.
     #[serde(rename = "type")]
     pub r#type: String,
-    /// Source identifier, e.g. `"username/my-bucket"` or `"username/my-model"`.
+    /// Source identifier, e.g., `"username/my-bucket"` or `"username/my-model"`.
     pub source: String,
     /// Mount path inside the container (must start with `/`).
     pub mount_path: String,
@@ -85,7 +85,7 @@ pub struct Volume {
     /// for buckets.
     #[serde(default)]
     pub read_only: Option<bool>,
-    /// Subfolder inside the source to mount (e.g. `"path/to/dir"`).
+    /// Subfolder inside the source to mount (e.g., `"path/to/dir"`).
     #[serde(default)]
     pub path: Option<String>,
 }
@@ -96,7 +96,7 @@ pub struct Volume {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceVariable {
-    /// Variable name (e.g. `"MODEL_REPO_ID"`).
+    /// Variable name (e.g., `"MODEL_REPO_ID"`).
     pub key: String,
     /// Variable value. `None` if the Hub returns the variable without a value.
     pub value: Option<String>,
@@ -143,12 +143,12 @@ impl HFRepository<RepoTypeSpace> {
     ///
     /// # Parameters
     ///
-    /// - `hardware` (required): hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
+    /// - `hardware` (required): hardware flavor to request (e.g., `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
     /// - `sleep_time`: seconds of inactivity before the Space is put to sleep. `0` means never sleep.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn request_hardware(
         &self,
-        /// Hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
+        /// Hardware flavor to request (e.g., `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
         #[builder(into)]
         hardware: String,
         /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.

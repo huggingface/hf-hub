@@ -9,7 +9,7 @@ use crate::output::{CommandOutput, CommandResult};
 /// Show detailed information about a dataset
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Dataset ID (e.g. fineweb or HuggingFaceFW/fineweb)
+    /// Dataset ID (e.g., fineweb or HuggingFaceFW/fineweb)
     pub dataset_id: String,
 
     /// Git revision (branch, tag, or commit SHA)

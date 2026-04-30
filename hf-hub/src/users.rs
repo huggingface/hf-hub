@@ -125,7 +125,7 @@ pub struct Organization {
     pub num_followers: Option<u64>,
     /// Number of papers authored by the organization.
     pub num_papers: Option<u64>,
-    /// Plan identifier (e.g. `"enterprise"`, `"team"`).
+    /// Plan identifier (e.g., `"enterprise"`, `"team"`).
     pub plan: Option<String>,
 }
 

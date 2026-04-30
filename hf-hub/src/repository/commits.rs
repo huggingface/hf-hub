@@ -52,11 +52,11 @@ pub struct GitCommitInfo {
     /// Full commit message.
     pub message: String,
     /// HTML-formatted commit title. Returned only when the request asks the Hub to format the
-    /// message (e.g. `?formatted=true`).
+    /// message (e.g., `?formatted=true`).
     #[serde(default, rename = "formattedTitle")]
     pub formatted_title: Option<String>,
     /// HTML-formatted commit message. Returned only when the request asks the Hub to format the
-    /// message (e.g. `?formatted=true`).
+    /// message (e.g., `?formatted=true`).
     #[serde(default, rename = "formattedMessage")]
     pub formatted_message: Option<String>,
     /// Parent commit SHAs.
@@ -186,17 +186,17 @@ impl<T: RepoType> HFRepository<T> {
     /// # Parameters
     ///
     /// - `compare` (required): revision spec describing what to compare. Either:
-    ///   - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`, `"v1.0"`,
+    ///   - A single revision (branch name, tag, or commit SHA), compared against its parent (e.g., `"main"`, `"v1.0"`,
     ///     `"abc123…"`), or
-    ///   - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
+    ///   - Two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g., `"main..feature"`,
     ///     `"<sha1>..<sha2>"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn get_commit_diff(
         &self,
         /// Revision spec describing what to compare. Either:
-        /// - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`,
+        /// - A single revision (branch name, tag, or commit SHA), compared against its parent (e.g., `"main"`,
         ///   `"v1.0"`, `"abc123…"`), or
-        /// - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
+        /// - Two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g., `"main..feature"`,
         ///   `"<sha1>..<sha2>"`).
         #[builder(into)]
         compare: String,
@@ -227,17 +227,17 @@ impl<T: RepoType> HFRepository<T> {
     /// # Parameters
     ///
     /// - `compare` (required): revision spec describing what to compare. Either:
-    ///   - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`, `"v1.0"`,
+    ///   - A single revision (branch name, tag, or commit SHA), compared against its parent (e.g., `"main"`, `"v1.0"`,
     ///     `"abc123…"`), or
-    ///   - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
+    ///   - Two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g., `"main..feature"`,
     ///     `"<sha1>..<sha2>"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn get_raw_diff(
         &self,
         /// Revision spec describing what to compare. Either:
-        /// - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`,
+        /// - A single revision (branch name, tag, or commit SHA), compared against its parent (e.g., `"main"`,
         ///   `"v1.0"`, `"abc123…"`), or
-        /// - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
+        /// - Two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g., `"main..feature"`,
         ///   `"<sha1>..<sha2>"`).
         #[builder(into)]
         compare: String,
@@ -272,17 +272,17 @@ impl<T: RepoType> HFRepository<T> {
     /// # Parameters
     ///
     /// - `compare` (required): revision spec describing what to compare. Either:
-    ///   - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`, `"v1.0"`,
+    ///   - A single revision (branch name, tag, or commit SHA), compared against its parent (e.g., `"main"`, `"v1.0"`,
     ///     `"abc123…"`), or
-    ///   - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
+    ///   - Two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g., `"main..feature"`,
     ///     `"<sha1>..<sha2>"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn get_raw_diff_stream(
         &self,
         /// Revision spec describing what to compare. Either:
-        /// - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`,
+        /// - A single revision (branch name, tag, or commit SHA), compared against its parent (e.g., `"main"`,
         ///   `"v1.0"`, `"abc123…"`), or
-        /// - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
+        /// - Two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g., `"main..feature"`,
         ///   `"<sha1>..<sha2>"`).
         #[builder(into)]
         compare: String,

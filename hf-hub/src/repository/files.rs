@@ -50,7 +50,7 @@ pub struct LastCommitInfo {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlobSecurityInfo {
-    /// Status string reported by the scanner (e.g. `"safe"`, `"unsafe"`, `"suspicious"`). The
+    /// Status string reported by the scanner (e.g., `"safe"`, `"unsafe"`, `"suspicious"`). The
     /// file is considered safe iff `status == "safe"`.
     pub status: String,
     /// Antivirus-scan details, when present.
@@ -181,7 +181,7 @@ pub enum CommitOperation {
 }
 
 impl CommitOperation {
-    /// Add operation backed by a local file path. Equivalent to
+    /// Add an operation backed by a local file path. Equivalent to
     /// `Add { path_in_repo, source: AddSource::file(source) }`. Prefer this
     /// for any non-trivial file size — see [`AddSource::File`] for the streaming
     /// behavior and memory cost.
@@ -213,25 +213,18 @@ impl CommitOperation {
 
 /// Source of content for a [`CommitOperation::Add`] operation.
 ///
-/// # Choosing a variant
+/// Use [`File`](Self::File) for content already on disk, especially large files:
+/// the path is stored, but file contents are read when the commit runs and are
+/// streamed where possible. Use [`Bytes`](Self::Bytes) for small in-memory content;
+/// the buffer is owned by the operation and may be cloned for LFS/xet uploads.
 ///
-/// - [`File`](Self::File) for any content already on disk, especially anything large enough to care about (model
-///   weights, datasets, etc.). The path is held by reference until the commit runs; bytes are read lazily — chunked
-///   streams for SHA-256 hashing and xet uploads, so peak memory stays bounded regardless of file size. The one
-///   exception is small files that the Hub accepts inline (non-LFS, non-xet): those are loaded into memory in full to
-///   be base64-encoded into the commit NDJSON, the same as `Bytes`.
-/// - [`Bytes`](Self::Bytes) for content you generated in-process (configs, READMEs, small JSON). The buffer is owned by
-///   the operation and lives until the commit completes; for LFS/xet uploads it is also cloned once when the upload
-///   plan is built. Avoid passing very large `Vec<u8>` here — use `File` and write a temp file instead.
-///
-/// The file must still exist on disk when [`HFRepository::create_commit`] runs;
-/// `AddSource::File` is **not** a snapshot. Don't move, truncate, or delete the
-/// file between constructing the operation and awaiting `send()`.
+/// `AddSource::File` is not a snapshot: the file must still exist, unchanged,
+/// when [`HFRepository::create_commit`] runs.
 #[derive(Debug, Clone)]
 pub enum AddSource {
-    /// Read file contents from this local path at commit time. Streamed for
-    /// hashing and xet uploads; loaded fully only for small inline files.
+    /// Read file contents from this local path at commit time.
     File(PathBuf),
+
     /// In-memory contents used as the file body.
     Bytes(Vec<u8>),
 }

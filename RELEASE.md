@@ -8,7 +8,7 @@ A single tag push releases one artifact:
 
 - **`hf-hub` Rust crate** on [crates.io](https://crates.io/crates/hf-hub), via `.github/workflows/rust-release.yml`.
 
-The workflow triggers on tags matching `v*` (e.g. `v1.0.0`, `v1.0.0-rc.0`). Tags containing `rc` are skipped by the publish step, so they can be used for pre-release validation without producing a crates.io upload.
+The workflow triggers on tags matching `v*` (e.g., `v1.0.0`, `v1.0.0-rc.0`). Tags containing `rc` are skipped by the publish step, so they can be used for pre-release validation without producing a crates.io upload.
 
 There are no Python components in this repo. The other workspace members are not published:
 

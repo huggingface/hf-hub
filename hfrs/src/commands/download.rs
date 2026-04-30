@@ -12,7 +12,7 @@ use crate::progress::CliProgressHandler;
 /// Download files from the Hub
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Repository ID (e.g. username/my-model)
+    /// Repository ID (e.g., username/my-model)
     pub repo_id: String,
 
     /// Specific filenames to download

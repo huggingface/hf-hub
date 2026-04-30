@@ -8,7 +8,7 @@ use crate::output::CommandResult;
 /// Create a new repository
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Repository ID (e.g. username/my-model)
+    /// Repository ID (e.g., username/my-model)
     pub repo_id: String,
 
     /// Repository type

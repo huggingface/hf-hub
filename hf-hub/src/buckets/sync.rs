@@ -77,7 +77,7 @@ pub struct BucketSyncOperation {
     pub path: String,
     /// File size in bytes, if known.
     pub size: Option<u64>,
-    /// Human-readable reason for this action (e.g. "new file", "size differs", "identical").
+    /// Human-readable reason for this action (e.g., "new file", "size differs", "identical").
     pub reason: String,
 }
 

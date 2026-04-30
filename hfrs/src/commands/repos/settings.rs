@@ -9,14 +9,14 @@ use crate::output::CommandResult;
 /// Update repository settings
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Repository ID (e.g. username/my-model)
+    /// Repository ID (e.g., username/my-model)
     pub repo_id: String,
 
     /// Repository type
     #[arg(long, visible_alias = "repo-type", value_enum, default_value = "model")]
     pub r#type: RepoTypeArg,
 
-    /// Gating strategy (e.g. "auto", "manual", or "false" to disable)
+    /// Gating strategy (e.g., "auto", "manual", or "false" to disable)
     #[arg(long)]
     pub gated: Option<String>,
 

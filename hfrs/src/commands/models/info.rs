@@ -9,7 +9,7 @@ use crate::output::{CommandOutput, CommandResult};
 /// Show detailed information about a model
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Model ID (e.g. gpt2 or openai-community/gpt2)
+    /// Model ID (e.g., gpt2 or openai-community/gpt2)
     pub model_id: String,
 
     /// Git revision (branch, tag, or commit SHA)

@@ -518,7 +518,7 @@ async fn test_get_paths_info_mixed_inputs() {
     let r = repo(&client, TEST_MODEL_REPO);
 
     // Find an actual directory in the repo tree so the test isn't pinned to a specific
-    // layout. tiny-gemma3 has subdirectories (e.g. `1_Pooling`); fall back gracefully if
+    // layout. tiny-gemma3 has subdirectories (e.g., `1_Pooling`); fall back gracefully if
     // it doesn't.
     let stream = r.list_tree().recursive(false).send().unwrap();
     futures::pin_mut!(stream);

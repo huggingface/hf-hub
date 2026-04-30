@@ -2082,7 +2082,7 @@ fn hf_log_level_debug() {
 
     let (code, _stdout, stderr) = hfrs.run_full(&["auth", "whoami", "--format", "json"]).unwrap();
     assert_eq!(code, 0);
-    // Debug logs (e.g. "resolved authentication token") go to stderr
+    // Debug logs (e.g., "resolved authentication token") go to stderr
     assert!(!stderr.is_empty(), "HF_LOG_LEVEL=debug should produce debug output on stderr");
 }
 

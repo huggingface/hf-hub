@@ -50,7 +50,7 @@ const TEST_MODEL_AUTHOR: &str = "openai-community";
 const TEST_MODEL_REPO: &str = "hf-internal-testing/tiny-gemma3";
 const TEST_DATASET_REPO: &str = "hf-internal-testing/cats_vs_dogs_sample";
 
-/// Split a `"owner/name"` string into an `HFRepositorySync<RepoTypeModel>` handle.
+/// Split an ` "owner / name"` string into an `HFRepositorySync<RepoTypeModel>` handle.
 fn repo_handle(client: &HFClientSync, repo_id: &str) -> HFRepositorySync<RepoTypeModel> {
     let (owner, name) = split_id(repo_id);
     client.model(owner, name)

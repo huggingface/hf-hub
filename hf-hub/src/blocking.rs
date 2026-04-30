@@ -33,7 +33,7 @@ pub struct HFClientSync {
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
 }
 
-/// Synchronous/blocking counterpart to [`HFRepository`], parameterised by the repo kind via `T`.
+/// Synchronous/blocking counterpart to [`HFRepository`], parameterized by the repo kind via `T`.
 ///
 /// Wraps an [`HFRepository<T>`] and blocks on the corresponding async methods.
 ///

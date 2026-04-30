@@ -15,7 +15,7 @@
 //!
 //! Upload and download events are distinct enums ([`UploadEvent`] and
 //! [`DownloadEvent`]) wrapped in a [`ProgressEvent`] discriminator. An
-//! individual operation only emits one variant family (e.g. `create_commit`
+//! individual operation only emits one variant family (e.g., `create_commit`
 //! only emits `Upload(*)`, `snapshot_download` only emits `Download(*)`).
 //!
 //! ## Upload event sequence
@@ -90,7 +90,7 @@
 //!   path itself — slow handlers directly slow the transfer.
 //! - **Not panic.** Panics propagate through the tokio runtime and can abort the operation.
 //! - **Be idempotent / tolerant of redundant state.** The library guarantees event *ordering* but not *deduplication*;
-//!   e.g. a file may receive multiple `FileStatus::Complete` events across `Progress` and a final cleanup emit in edge
+//!   e.g., a file may receive multiple `FileStatus::Complete` events across `Progress` and a final cleanup emit in edge
 //!   cases. Consumers that track completion should use a set keyed by filename to ignore repeats.
 
 use std::sync::Arc;
@@ -309,7 +309,7 @@ pub struct FileProgress {
     pub filename: String,
     /// Bytes transferred so far for this file.
     pub bytes_completed: u64,
-    /// Total bytes expected for this file. Zero when the size is unknown (e.g.
+    /// Total bytes expected for this file. Zero when the size is unknown (e.g.,
     /// fast-path cached files emitted purely to signal completion).
     pub total_bytes: u64,
     /// Current lifecycle stage.

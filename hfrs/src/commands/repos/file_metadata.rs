@@ -9,7 +9,7 @@ use crate::output::{CommandOutput, CommandResult};
 /// Show HEAD metadata for a file in a repository (commit, ETag, size, Xet hash)
 #[derive(ClapArgs)]
 pub struct Args {
-    /// Repository ID (e.g. openai-community/gpt2)
+    /// Repository ID (e.g., openai-community/gpt2)
     pub repo_id: String,
 
     /// File path within the repository

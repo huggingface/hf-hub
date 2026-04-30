@@ -5,7 +5,8 @@
 //!
 //! Run: HF_TOKEN=hf_xxx cargo test -p hf-hub --test cache_test
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use futures::StreamExt;
 use hf_hub::repository::RepoTreeEntry;
@@ -31,7 +32,7 @@ fn api() -> Option<HFClient> {
     }
 }
 
-fn api_with_cache(cache_dir: &std::path::Path) -> HFClient {
+fn api_with_cache(cache_dir: &Path) -> HFClient {
     if is_ci() {
         let token = std::env::var(HF_PROD_TOKEN).expect("HF_PROD_TOKEN required in CI for prod repo tests");
         HFClientBuilder::new()
@@ -55,7 +56,7 @@ const TEST_DATASET_REPO_ID: &str = "hf-internal-testing/cats_vs_dogs_sample";
 const TEST_MODEL_CACHE_FRAGMENT: &str = "hf-internal-testing--tiny-gemma3";
 const TEST_DATASET_CACHE_FRAGMENT: &str = "datasets--hf-internal-testing--cats_vs_dogs_sample";
 
-fn find_repo_folder(cache_dir: &Path, name_fragment: &str) -> std::path::PathBuf {
+fn find_repo_folder(cache_dir: &Path, name_fragment: &str) -> PathBuf {
     std::fs::read_dir(cache_dir)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -64,7 +65,7 @@ fn find_repo_folder(cache_dir: &Path, name_fragment: &str) -> std::path::PathBuf
         .path()
 }
 
-fn find_single_blob(cache_dir: &Path, repo_name_fragment: &str) -> std::path::PathBuf {
+fn find_single_blob(cache_dir: &Path, repo_name_fragment: &str) -> PathBuf {
     let repo_folder = find_repo_folder(cache_dir, repo_name_fragment);
     let blobs_dir = repo_folder.join("blobs");
     let blob = std::fs::read_dir(&blobs_dir)
@@ -170,7 +171,7 @@ async fn test_download_file_local_files_only_miss() {
         .local_files_only(true)
         .send()
         .await;
-    assert!(matches!(result, Err(hf_hub::HFError::LocalEntryNotFound { .. })));
+    assert!(matches!(result, Err(HFError::LocalEntryNotFound { .. })));
 }
 
 #[tokio::test]
@@ -1071,8 +1072,8 @@ fn python_available() -> bool {
     std::process::Command::new("python3").arg("--version").output().is_ok()
 }
 
-fn setup_python_venv() -> Option<&'static std::path::Path> {
-    static VENV: std::sync::OnceLock<Option<(tempfile::TempDir, std::path::PathBuf)>> = std::sync::OnceLock::new();
+fn setup_python_venv() -> Option<&'static Path> {
+    static VENV: OnceLock<Option<(tempfile::TempDir, PathBuf)>> = OnceLock::new();
     VENV.get_or_init(|| {
         if !python_available() {
             return None;
@@ -1110,7 +1111,7 @@ fn setup_python_venv() -> Option<&'static std::path::Path> {
     .map(|(_, p)| p.as_path())
 }
 
-fn python_bin(venv_dir: &std::path::Path) -> std::path::PathBuf {
+fn python_bin(venv_dir: &Path) -> PathBuf {
     venv_dir.join("bin").join("python")
 }
 
@@ -1903,7 +1904,7 @@ print(link)
         .unwrap();
     let rust_link_target = std::fs::read_link(&rust_path).unwrap().to_string_lossy().to_string();
 
-    // Both should use the same relative symlink format (e.g. "../../blobs/<etag>")
+    // Both should use the same relative symlink format (e.g., "../../blobs/<etag>")
     assert_eq!(python_link_target, rust_link_target, "Symlink target format should match between Python and Rust");
 }
 

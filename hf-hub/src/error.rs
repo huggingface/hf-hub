@@ -225,7 +225,7 @@ pub enum HFError {
     },
 
     /// Hub responded with success but the response is missing data the client
-    /// needs to proceed (e.g. an `ETag` or `X-Repo-Commit` header that should
+    /// needs to proceed (e.g., an `ETag` or `X-Repo-Commit` header that should
     /// always be present, or a `304 Not Modified` without a corresponding
     /// cached state).
     ///

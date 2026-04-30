@@ -80,8 +80,7 @@ impl<T: RepoType> HFRepository<T> {
     async fn download_file_stream_impl(
         &self,
         params: DownloadFileStreamParams,
-    ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
-    {
+    ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = Result<bytes::Bytes, HFError>> + Send + Unpin>)> {
         if let Some(ref range) = params.range
             && range.start >= range.end
         {
@@ -1035,7 +1034,7 @@ impl<T: RepoType> HFRepository<T> {
     /// - `revision`: Git revision. Defaults to the main branch.
     /// - `range`: byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
     ///   `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
-    ///   `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must be
+    ///   `0..=1023`). Internally, this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must be
     ///   strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
     /// - `progress`: optional progress handler. `Start` is emitted before the stream is returned; `Progress` is emitted
     ///   as the caller polls each chunk; `Complete` is emitted when the stream is exhausted.
@@ -1050,15 +1049,14 @@ impl<T: RepoType> HFRepository<T> {
         revision: Option<String>,
         /// Byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
         /// `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
-        /// `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
+        /// `0..=1023`). Internally, this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
         /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
         /// Progress handler. `Start` is emitted before the stream is returned; `Progress` is emitted
         /// as the caller polls each chunk; `Complete` is emitted when the stream is exhausted.
         #[builder(into)]
         progress: Option<Progress>,
-    ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = std::result::Result<bytes::Bytes, HFError>> + Send + Unpin>)>
-    {
+    ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = Result<bytes::Bytes, HFError>> + Send + Unpin>)> {
         self.download_file_stream_impl(DownloadFileStreamParams {
             filename,
             revision,
@@ -1080,7 +1078,7 @@ impl<T: RepoType> HFRepository<T> {
     /// - `revision`: Git revision. Defaults to the main branch.
     /// - `range`: byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
     ///   `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
-    ///   `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must be
+    ///   `0..=1023`). Internally, this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must be
     ///   strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
     /// - `progress`: optional progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
     ///   drained, identically to [`download_file_stream`](Self::download_file_stream).
@@ -1095,7 +1093,7 @@ impl<T: RepoType> HFRepository<T> {
         revision: Option<String>,
         /// Byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
         /// `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
-        /// `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
+        /// `0..=1023`). Internally, this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
         /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
         range: Option<std::ops::Range<u64>>,
         /// Progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
@@ -1114,13 +1112,13 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Download all selected files for a resolved revision.
     ///
-    /// When `local_dir` is `None`, files are stored in the HF cache and the returned path is the
+    /// When `local_dir` is `None`, files are stored in the HF cache, and the returned path is the
     /// cache snapshot directory for the resolved commit. When `local_dir` is `Some`, files are
     /// written directly under that directory.
     ///
     /// `allow_patterns` and `ignore_patterns` use [`globset`](https://docs.rs/globset) syntax
     /// (`*`, `?`, `**`, character classes, etc.). Both are matched against each candidate file's
-    /// **repository path** — forward-slash-joined and relative to the repo root, e.g.
+    /// **repository path** — forward-slash-joined and relative to the repo root, e.g.,
     /// `tokenizer.json` or `weights/model-00001-of-00003.safetensors`.
     ///
     /// # Parameters

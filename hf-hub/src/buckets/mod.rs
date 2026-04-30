@@ -275,7 +275,7 @@ impl HFBucket {
     /// entries per request.
     ///
     /// All paths in `add`, `delete`, and `copy` are **bucket-relative**, slash-separated paths
-    /// (e.g. `"data/train/0001.bin"`) — no leading slash, forward slashes regardless of platform,
+    /// (e.g., `"data/train/0001.bin"`) — no leading slash, forward slashes regardless of platform,
     /// no `bucket_id` prefix.
     ///
     /// # Parameters
@@ -286,7 +286,7 @@ impl HFBucket {
     ///     this call only registers metadata.
     ///   - `size` (`u64`): file size in bytes.
     ///   - `mtime` (`Option<u64>`): last modification time as a Unix timestamp in seconds.
-    ///   - `content_type` (`Option<String>`): MIME type (e.g. `"text/plain"`).
+    ///   - `content_type` (`Option<String>`): MIME type (e.g., `"text/plain"`).
     /// - `delete`: bucket-relative paths to remove from the bucket.
     /// - `copy`: server-side copies into this bucket. Each [`BucketCopyFile`] requires:
     ///   - `path` (`String`): bucket-relative destination path.
@@ -294,7 +294,7 @@ impl HFBucket {
     ///     repo or bucket — copies are by-hash, no data is transferred).
     ///   - `source_repo_type` ([`BucketCopySourceType`]): repo type of the source — one of `Bucket`, `Model`,
     ///     `Dataset`, or `Space`. Serializes to the lowercase wire string the Hub expects.
-    ///   - `source_repo_id` (`String`): full source identifier in `"namespace/name"` form (e.g. `"user/my-bucket"`).
+    ///   - `source_repo_id` (`String`): full source identifier in `"namespace/name"` form (e.g., `"user/my-bucket"`).
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn batch_operations(
         &self,
@@ -556,7 +556,7 @@ pub struct BucketAddFile {
     pub size: u64,
     /// Last modification time as a Unix timestamp (seconds).
     pub mtime: Option<u64>,
-    /// MIME content type (e.g. `"text/plain"`, `"application/octet-stream"`).
+    /// MIME content type (e.g., `"text/plain"`, `"application/octet-stream"`).
     pub content_type: Option<String>,
 }
 
@@ -602,7 +602,7 @@ pub struct BucketCopyFile {
     pub xet_hash: String,
     /// Source repo type. See [`BucketCopySourceType`].
     pub source_repo_type: BucketCopySourceType,
-    /// Source repo or bucket ID (e.g. `"user/my-bucket"`).
+    /// Source repo or bucket ID (e.g., `"user/my-bucket"`).
     pub source_repo_id: String,
     /// Source file size in bytes, when known. Forwarded to the batch endpoint as `size`.
     pub size: Option<u64>,
@@ -620,7 +620,7 @@ pub struct BucketCopyFile {
 /// [`HFClient::list_buckets`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketInfo {
-    /// Full bucket identifier, e.g. `"namespace/bucket_name"`.
+    /// Full bucket identifier, e.g., `"namespace/bucket_name"`.
     pub id: String,
     /// Whether the bucket is private.
     pub private: bool,
@@ -695,7 +695,7 @@ pub struct BucketUpload {
     /// Path on the local filesystem (absolute or relative to the current
     /// working directory) of the file to upload.
     pub local: PathBuf,
-    /// **Bucket-relative**, slash-separated destination path (e.g.
+    /// **Bucket-relative**, slash-separated destination path (e.g.,
     /// `"data/train/0001.bin"`) — no leading slash, forward slashes regardless
     /// of platform, and no `bucket_id` prefix.
     pub remote: String,
@@ -720,7 +720,7 @@ impl BucketUpload {
 /// [`BucketUpload`] would otherwise compile.
 #[derive(Debug, Clone)]
 pub struct BucketDownload {
-    /// **Bucket-relative**, slash-separated source path (e.g.
+    /// **Bucket-relative**, slash-separated source path (e.g.,
     /// `"data/train/0001.bin"`) — no leading slash, forward slashes regardless
     /// of platform, and no `bucket_id` prefix. Must resolve to a file entry;
     /// directory entries return [`HFError::InvalidParameter`].

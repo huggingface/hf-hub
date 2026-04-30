@@ -30,7 +30,7 @@ pub(crate) mod storage;
 #[derive(Debug, Clone)]
 pub struct CachedFileInfo {
     /// Path of the file relative to its revision's snapshot root, including
-    /// any subdirectories (e.g. `subdir/model.bin`).
+    /// any subdirectories (e.g., `subdir/model.bin`).
     pub file_name: String,
     /// Absolute path of the pointer file inside the `snapshots/` tree.
     /// Symlink on Unix, regular file (a copy of the blob) on Windows.
@@ -70,7 +70,7 @@ pub struct CachedRevisionInfo {
 /// A cached repository, with its revisions aggregated.
 #[derive(Debug, Clone)]
 pub struct CachedRepoInfo {
-    /// Hub repo identifier (e.g. `gpt2`, `google/bert-base-uncased`).
+    /// Hub repo identifier (e.g., `gpt2`, `google/bert-base-uncased`).
     pub repo_id: String,
     /// Lowercase singular name of the repo kind (`"model"`, `"dataset"`, `"space"`, or `"kernel"`)
     /// — see [`crate::repository::RepoType::singular`].

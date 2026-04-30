@@ -221,7 +221,7 @@ impl HFClientBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error if the endpoint URL is not a valid URL or if the `reqwest` client
+    /// Returns an error if the endpoint URL is not a valid URL, if the `reqwest` client
     /// cannot be constructed (e.g., an invalid `User-Agent` string was provided), or if the
     /// tokio runtime handle could not be correctly created for the blocking client.
     #[cfg(feature = "blocking")]

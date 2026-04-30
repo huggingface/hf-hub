@@ -1,7 +1,7 @@
 //! Type-level markers for the four Hugging Face Hub repo kinds.
 //!
 //! The [`RepoType`] sealed trait and its four marker structs ([`RepoTypeModel`],
-//! [`RepoTypeDataset`], [`RepoTypeSpace`], [`RepoTypeKernel`]) parameterise
+//! [`RepoTypeDataset`], [`RepoTypeSpace`], [`RepoTypeKernel`]) parameterize
 //! [`HFRepository<T>`](super::HFRepository) and
 //! [`HFRepositorySync<T>`](crate::HFRepositorySync) so the repo kind is encoded in the
 //! type system. Methods that differ per repo kind (such as
@@ -67,8 +67,8 @@ mod sealed {
 /// Each method returns the same value regardless of the receiver — they're properties
 /// of the type, not the instance. The receiver is `&self` so callers with a value
 /// in hand can write `marker.singular()`. Inside generic code where only the type
-/// is in scope (`impl<T: RepoType>`), materialise the marker on the fly with
-/// `T::default().singular()` — markers are zero-sized so it's a no-op:
+/// is in scope (`impl<T: RepoType>`), materialize the marker on the fly with
+/// `T::default().singular()` — markers are zero-sized, so it's a no-op:
 ///
 /// | trait method     | `RepoTypeModel` | `RepoTypeDataset` | `RepoTypeSpace` | `RepoTypeKernel` |
 /// | ---------------- | --------------- | ----------------- | --------------- | ---------------- |
