@@ -1,7 +1,6 @@
 name: Rust Release
 
-env:
-  CRATES_TOKEN: ${{ secrets.CRATES_TOKEN }}
+env: {}
 
 on:
   push:
@@ -24,4 +23,4 @@ jobs:
 
       - name: Publish package rust
         working-directory: ./hf-hub
-        run: echo "$CRATES_TOKEN" | cargo publish --token -
+        run: cargo publish --token "${{ secrets.CRATES_TOKEN }}"
