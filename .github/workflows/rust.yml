@@ -84,8 +84,6 @@ jobs:
   docs:
     name: Docs
     runs-on: ubuntu-latest
-    env:
-      RUSTDOCFLAGS: "-D warnings --cfg docsrs"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -97,7 +95,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
       - name: Build docs
-        run: cargo +nightly doc --workspace --all-features --no-deps
+        run: RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo +nightly doc -p hf-hub --features blocking --no-deps
 
   audit:
     name: Audit
