@@ -903,14 +903,14 @@ impl HFClient {
     /// - `space_sdk`: SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
     ///   [`RepoTypeSpace`]; ignored for other repo kinds.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn create_repository<T: RepoType>(
+    pub async fn create_repository(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
         /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
         /// or [`RepoTypeKernel`]).
-        repo_type: T,
+        repo_type: impl RepoType,
         /// Whether the repository should be private.
         private: Option<bool>,
         /// If `true`, do not error when the repository already exists.
@@ -970,14 +970,14 @@ impl HFClient {
     ///   [`RepoTypeKernel`]).
     /// - `missing_ok` (default `false`): if `true`, do not error when the repository does not exist.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn delete_repository<T: RepoType>(
+    pub async fn delete_repository(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
         /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
         /// or [`RepoTypeKernel`]).
-        repo_type: T,
+        repo_type: impl RepoType,
         /// If `true`, do not error when the repository does not exist.
         #[builder(default)]
         missing_ok: bool,
@@ -1023,7 +1023,7 @@ impl HFClient {
     /// - `repo_type` (required): the repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`], or
     ///   [`RepoTypeKernel`]).
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn move_repository<T: RepoType>(
+    pub async fn move_repository(
         &self,
         /// Current repository ID in `"owner/name"` format.
         #[builder(into)]
@@ -1033,7 +1033,7 @@ impl HFClient {
         to_id: String,
         /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
         /// or [`RepoTypeKernel`]).
-        repo_type: T,
+        repo_type: impl RepoType,
     ) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/move", self.endpoint());
         let body = serde_json::json!({
@@ -1584,14 +1584,14 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::create_repository`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn create_repository<T: RepoType>(
+    pub fn create_repository(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
         /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
         /// or [`RepoTypeKernel`]).
-        repo_type: T,
+        repo_type: impl RepoType,
         /// Whether the repository should be private.
         private: Option<bool>,
         /// If `true`, do not error when the repository already exists.
@@ -1617,14 +1617,14 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::delete_repository`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_repository<T: RepoType>(
+    pub fn delete_repository(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
         #[builder(into)]
         repo_id: String,
         /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
         /// or [`RepoTypeKernel`]).
-        repo_type: T,
+        repo_type: impl RepoType,
         /// If `true`, do not error when the repository does not exist.
         #[builder(default)]
         missing_ok: bool,
@@ -1642,7 +1642,7 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::move_repository`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn move_repository<T: RepoType>(
+    pub fn move_repository(
         &self,
         /// Current repository ID in `"owner/name"` format.
         #[builder(into)]
@@ -1652,7 +1652,7 @@ impl crate::blocking::HFClientSync {
         to_id: String,
         /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
         /// or [`RepoTypeKernel`]).
-        repo_type: T,
+        repo_type: impl RepoType,
     ) -> HFResult<RepoUrl> {
         self.runtime.block_on(
             self.inner
