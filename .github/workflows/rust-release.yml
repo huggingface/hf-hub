@@ -23,6 +23,5 @@ jobs:
           key: ubuntu-latest-cargo-registry-${{ hashFiles('**/Cargo.toml') }}
 
       - name: Publish package rust
-        if: ${{ !contains(github.ref, 'rc') }}
         working-directory: ./hf-hub
         run: echo "$CRATES_TOKEN" | cargo publish --token -
