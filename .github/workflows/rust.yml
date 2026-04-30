@@ -75,7 +75,6 @@ jobs:
 
       - name: Run tests
         run: |
-          HF_TOKEN='${{ secrets.HF_TOKEN }}' \
           HF_CI_TOKEN='${{ secrets.HF_CI_TOKEN }}' \
           HF_PROD_TOKEN='${{ secrets.HF_PROD_TOKEN }}' \
           HF_TEST_WRITE=1 \
