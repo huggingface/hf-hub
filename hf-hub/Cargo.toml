@@ -1,6 +1,6 @@
 [package]
 name = "hf-hub"
-version = "1.0.0"
+version = "1.0.0-rc.0"
 edition = "2024"
 description = "Rust client for the Hugging Face Hub API"
 license = "Apache-2.0"
