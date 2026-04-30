@@ -25,4 +25,4 @@ jobs:
       - name: Publish package rust
         if: ${{ !contains(github.ref, 'rc') }}
         working-directory: ./hf-hub
-        run: cargo publish --token ${CRATES_TOKEN}
+        run: echo "$CRATES_TOKEN" | cargo publish --token -
