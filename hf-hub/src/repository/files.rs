@@ -148,6 +148,22 @@ pub struct CommitInfo {
 }
 
 /// File mutation included in [`HFRepository::create_commit`].
+///
+/// Use the constructors ([`add_file`](Self::add_file), [`add_bytes`](Self::add_bytes),
+/// [`delete`](Self::delete)) — they read more linearly than the bare variants and
+/// pick the right [`AddSource`] for you. See [`AddSource`] for the trade-off
+/// between path-backed and in-memory uploads.
+///
+/// ```rust,no_run
+/// use hf_hub::repository::CommitOperation;
+///
+/// let ops = vec![
+///     CommitOperation::add_file("model.safetensors", "/local/path/model.safetensors"),
+///     CommitOperation::add_bytes("config.json", br#"{"vocab_size":50257}"#.to_vec()),
+///     CommitOperation::delete("old/checkpoint.bin"),
+/// ];
+/// # let _ = ops;
+/// ```
 #[derive(Debug, Clone)]
 pub enum CommitOperation {
     /// Add or replace a file in the repository.
@@ -165,7 +181,10 @@ pub enum CommitOperation {
 }
 
 impl CommitOperation {
-    /// Create an add operation backed by a local file path.
+    /// Add operation backed by a local file path. Equivalent to
+    /// `Add { path_in_repo, source: AddSource::file(source) }`. Prefer this
+    /// for any non-trivial file size — see [`AddSource::File`] for the streaming
+    /// behavior and memory cost.
     pub fn add_file(path_in_repo: impl Into<String>, source: impl Into<PathBuf>) -> Self {
         CommitOperation::Add {
             path_in_repo: path_in_repo.into(),
@@ -173,7 +192,10 @@ impl CommitOperation {
         }
     }
 
-    /// Create an add operation backed by in-memory bytes.
+    /// Add operation backed by in-memory bytes. Equivalent to
+    /// `Add { path_in_repo, source: AddSource::bytes(source) }`. The bytes are
+    /// retained in the operation and re-read at commit time — see
+    /// [`AddSource::Bytes`] for the memory cost.
     pub fn add_bytes(path_in_repo: impl Into<String>, source: impl Into<Vec<u8>>) -> Self {
         CommitOperation::Add {
             path_in_repo: path_in_repo.into(),
@@ -181,7 +203,7 @@ impl CommitOperation {
         }
     }
 
-    /// Create a delete operation for a repository path.
+    /// Delete operation for a repository path.
     pub fn delete(path_in_repo: impl Into<String>) -> Self {
         CommitOperation::Delete {
             path_in_repo: path_in_repo.into(),
@@ -190,27 +212,37 @@ impl CommitOperation {
 }
 
 /// Source of content for a [`CommitOperation::Add`] operation.
+///
+/// # Choosing a variant
+///
+/// - [`File`](Self::File) for any content already on disk, especially anything large enough to care about (model
+///   weights, datasets, etc.). The path is held by reference until the commit runs; bytes are read lazily — chunked
+///   streams for SHA-256 hashing and xet uploads, so peak memory stays bounded regardless of file size. The one
+///   exception is small files that the Hub accepts inline (non-LFS, non-xet): those are loaded into memory in full to
+///   be base64-encoded into the commit NDJSON, the same as `Bytes`.
+/// - [`Bytes`](Self::Bytes) for content you generated in-process (configs, READMEs, small JSON). The buffer is owned
+///   by the operation and lives until the commit completes; for LFS/xet uploads it is also cloned once when the upload
+///   plan is built. Avoid passing very large `Vec<u8>` here — use `File` and write a temp file instead.
+///
+/// The file must still exist on disk when [`HFRepository::create_commit`] runs;
+/// `AddSource::File` is **not** a snapshot. Don't move, truncate, or delete the
+/// file between constructing the operation and awaiting `send()`.
 #[derive(Debug, Clone)]
 pub enum AddSource {
-    /// Read file contents from this local path when creating the commit.
+    /// Read file contents from this local path at commit time. Streamed for
+    /// hashing and xet uploads; loaded fully only for small inline files.
     File(PathBuf),
-    /// Use these bytes as the file contents.
+    /// In-memory contents used as the file body.
     Bytes(Vec<u8>),
 }
 
 impl AddSource {
     /// Construct an [`AddSource::File`] from a local file path.
-    ///
-    /// Prefer this over `AddSource::File(path.into())` so the call site reads
-    /// linearly without exposing the variant.
     pub fn file(path: impl Into<PathBuf>) -> Self {
         AddSource::File(path.into())
     }
 
     /// Construct an [`AddSource::Bytes`] from in-memory contents.
-    ///
-    /// Prefer this over `AddSource::Bytes(bytes.into())` so the call site reads
-    /// linearly without exposing the variant.
     pub fn bytes(bytes: impl Into<Vec<u8>>) -> Self {
         AddSource::Bytes(bytes.into())
     }

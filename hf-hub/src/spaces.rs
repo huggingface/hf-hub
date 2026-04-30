@@ -517,10 +517,7 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn request_hardware(
         &self,
-        /// Hardware flavor to request (e.g. `"cpu-basic"`, `"t4-small"`, `"a10g-small"`).
-        #[builder(into)]
-        hardware: String,
-        /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
+        #[builder(into)] hardware: String,
         sleep_time: Option<u64>,
     ) -> HFResult<SpaceRuntime> {
         self.runtime.block_on(
@@ -535,11 +532,7 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     /// Blocking counterpart of [`HFRepository::set_sleep_time`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn set_sleep_time(
-        &self,
-        /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
-        sleep_time: u64,
-    ) -> HFResult<()> {
+    pub fn set_sleep_time(&self, sleep_time: u64) -> HFResult<()> {
         self.runtime.block_on(self.inner.set_sleep_time().sleep_time(sleep_time).send())
     }
 
@@ -562,15 +555,9 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn add_secret(
         &self,
-        /// Secret key name.
-        #[builder(into)]
-        key: String,
-        /// Secret value.
-        #[builder(into)]
-        value: String,
-        /// Human-readable description of the secret.
-        #[builder(into)]
-        description: Option<String>,
+        #[builder(into)] key: String,
+        #[builder(into)] value: String,
+        #[builder(into)] description: Option<String>,
     ) -> HFResult<()> {
         self.runtime.block_on(
             self.inner
@@ -585,12 +572,7 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     /// Blocking counterpart of [`HFRepository::delete_secret`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_secret(
-        &self,
-        /// Secret key name to delete.
-        #[builder(into)]
-        key: String,
-    ) -> HFResult<()> {
+    pub fn delete_secret(&self, #[builder(into)] key: String) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_secret().key(key).send())
     }
 
@@ -599,15 +581,9 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn add_variable(
         &self,
-        /// Variable key name.
-        #[builder(into)]
-        key: String,
-        /// Variable value.
-        #[builder(into)]
-        value: String,
-        /// Human-readable description of the variable.
-        #[builder(into)]
-        description: Option<String>,
+        #[builder(into)] key: String,
+        #[builder(into)] value: String,
+        #[builder(into)] description: Option<String>,
     ) -> HFResult<()> {
         self.runtime.block_on(
             self.inner
@@ -622,12 +598,7 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     /// Blocking counterpart of [`HFRepository::delete_variable`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_variable(
-        &self,
-        /// Variable key name to delete.
-        #[builder(into)]
-        key: String,
-    ) -> HFResult<()> {
+    pub fn delete_variable(&self, #[builder(into)] key: String) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_variable().key(key).send())
     }
 
@@ -636,25 +607,12 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn duplicate(
         &self,
-        /// Destination repository ID in `"owner/name"` format. Defaults to the authenticated user's namespace
-        /// with the same name.
-        #[builder(into)]
-        to_id: Option<String>,
-        /// Whether the duplicated Space should be private.
+        #[builder(into)] to_id: Option<String>,
         private: Option<bool>,
-        /// Hardware flavor identifier the duplicated Space should run on. When omitted, the Hub picks a default
-        /// (typically `"cpu-basic"`) — pass a value explicitly to mirror the source Space's hardware.
-        #[builder(into)]
-        hardware: Option<String>,
-        /// Persistent storage tier identifier. One of `"small"`, `"medium"`, or `"large"`. Omit to duplicate
-        /// without persistent storage.
-        #[builder(into)]
-        storage: Option<String>,
-        /// Seconds of inactivity before the Space is put to sleep. `0` means never sleep.
+        #[builder(into)] hardware: Option<String>,
+        #[builder(into)] storage: Option<String>,
         sleep_time: Option<u64>,
-        /// Encrypted environment variables to set on the duplicated Space.
         secrets: Option<Vec<serde_json::Value>>,
-        /// Public (non-secret) environment variables to set on the duplicated Space.
         variables: Option<Vec<serde_json::Value>>,
     ) -> HFResult<RepoUrl> {
         self.runtime.block_on(

@@ -271,40 +271,25 @@ impl crate::blocking::HFClientSync {
         self.runtime.block_on(self.inner.whoami().send())
     }
 
-    /// Blocking counterpart of [`HFClient::user_overview`].
+    /// Blocking counterpart of [`HFClient::user_overview`]. See the async method for parameters
+    /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn user_overview(
-        &self,
-        /// Hub handle (slug) of the user.
-        #[builder(into)]
-        username: String,
-    ) -> HFResult<User> {
+    pub fn user_overview(&self, #[builder(into)] username: String) -> HFResult<User> {
         self.runtime.block_on(self.inner.user_overview().username(username).send())
     }
 
-    /// Blocking counterpart of [`HFClient::organization_overview`].
+    /// Blocking counterpart of [`HFClient::organization_overview`]. See the async method for
+    /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn organization_overview(
-        &self,
-        /// Hub handle (slug) of the organization.
-        #[builder(into)]
-        organization: String,
-    ) -> HFResult<Organization> {
+    pub fn organization_overview(&self, #[builder(into)] organization: String) -> HFResult<Organization> {
         self.runtime
             .block_on(self.inner.organization_overview().organization(organization).send())
     }
 
     /// Blocking counterpart of [`HFClient::list_user_followers`]. Collects the stream into a
-    /// `Vec<User>`.
+    /// `Vec<User>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn list_user_followers(
-        &self,
-        /// Hub handle of the user.
-        #[builder(into)]
-        username: String,
-        /// Cap on the total number of items yielded.
-        limit: Option<usize>,
-    ) -> HFResult<Vec<User>> {
+    pub fn list_user_followers(&self, #[builder(into)] username: String, limit: Option<usize>) -> HFResult<Vec<User>> {
         use futures::StreamExt;
         self.runtime.block_on(async move {
             let stream = self.inner.list_user_followers().username(username).maybe_limit(limit).send()?;
@@ -318,16 +303,9 @@ impl crate::blocking::HFClientSync {
     }
 
     /// Blocking counterpart of [`HFClient::list_user_following`]. Collects the stream into a
-    /// `Vec<User>`.
+    /// `Vec<User>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn list_user_following(
-        &self,
-        /// Hub handle of the user.
-        #[builder(into)]
-        username: String,
-        /// Cap on the total number of items yielded.
-        limit: Option<usize>,
-    ) -> HFResult<Vec<User>> {
+    pub fn list_user_following(&self, #[builder(into)] username: String, limit: Option<usize>) -> HFResult<Vec<User>> {
         use futures::StreamExt;
         self.runtime.block_on(async move {
             let stream = self.inner.list_user_following().username(username).maybe_limit(limit).send()?;
@@ -341,14 +319,11 @@ impl crate::blocking::HFClientSync {
     }
 
     /// Blocking counterpart of [`HFClient::list_organization_members`]. Collects the stream into a
-    /// `Vec<User>`.
+    /// `Vec<User>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_organization_members(
         &self,
-        /// Hub handle of the organization.
-        #[builder(into)]
-        organization: String,
-        /// Cap on the total number of items yielded.
+        #[builder(into)] organization: String,
         limit: Option<usize>,
     ) -> HFResult<Vec<User>> {
         use futures::StreamExt;

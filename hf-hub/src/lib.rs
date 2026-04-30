@@ -175,20 +175,12 @@
 //!
 //! ## Caching
 //!
-//! Downloaded files are stored in a content-addressed cache under
-//! `HF_HUB_CACHE` (default:
-//! `$HF_HOME/hub` → `~/.cache/huggingface/hub`). Concurrent downloads of the same
-//! file are coordinated with an on-disk lock, and later calls resolve to the
-//! existing cached blob without re-downloading.
-//!
-//! Disable caching entirely with
+//! Downloads are content-addressed under `HF_HUB_CACHE`, with on-disk locking so
+//! concurrent fetches of the same file deduplicate. Disable caching with
 //! [`HFClientBuilder::cache_enabled(false)`][HFClientBuilder::cache_enabled], or
-//! bypass it for a single request by setting `.local_dir(...)` on the download
-//! builder.
-//!
-//! To inspect the cache — list cached repos, revisions, and disk usage — use
-//! [`HFClient::scan_cache`][crate::HFClient::scan_cache], which returns an
-//! [`HFCacheInfo`][crate::cache::HFCacheInfo] tree.
+//! bypass it per-request by setting `.local_dir(...)` on the download builder.
+//! Use [`HFClient::scan_cache`][crate::HFClient::scan_cache] to inspect what's
+//! cached on disk.
 //!
 //! ## Cargo features
 //!

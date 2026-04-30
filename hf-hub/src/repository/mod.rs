@@ -1423,40 +1423,18 @@ fn split_repo_id(repo_id: &str) -> (Option<&str>, &str) {
 #[bon]
 impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::list_models`]. Returns the collected stream as a
-    /// `Vec<ModelInfo>`.
+    /// `Vec<ModelInfo>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_models(
         &self,
-        /// Free-text query forwarded as the `?search=` parameter. The Hub matches it substring-style against
-        /// the model `id` and (when present) the model card description — it is **not** a tag filter.
-        #[builder(into)]
-        search: Option<String>,
-        /// Namespace owner to filter on, forwarded as `?author=`. Pass a Hub user or organization name (e.g.
-        /// `"google"`, `"meta-llama"`) — bare names, not paths.
-        #[builder(into)]
-        author: Option<String>,
-        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
-        /// `"pytorch"`, `"text-generation"`, `"license:apache-2.0"`, `"language:en"`, `"dataset:wikipedia"`,
-        /// `"region:us"`. To combine tags, narrow the results client-side (only one `filter` value is sent).
-        #[builder(into)]
-        filter: Option<String>,
-        /// API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
-        /// `"createdAt"`, `"lastModified"`, and `"trendingScore"`. Use the camelCase Hub field names (not Rust struct
-        /// field names).
-        #[builder(into)]
-        sort: Option<String>,
-        /// Pipeline-tag filter (e.g. `"text-classification"`, `"automatic-speech-recognition"`),
-        /// forwarded as `?pipeline_tag=`. Same vocabulary as the `pipeline_tag` field on a model card.
-        #[builder(into)]
-        pipeline_tag: Option<String>,
-        /// Fetch the full model information including all fields.
+        #[builder(into)] search: Option<String>,
+        #[builder(into)] author: Option<String>,
+        #[builder(into)] filter: Option<String>,
+        #[builder(into)] sort: Option<String>,
+        #[builder(into)] pipeline_tag: Option<String>,
         full: Option<bool>,
-        /// Include the model card metadata in the response.
         card_data: Option<bool>,
-        /// Include the model configuration in the response.
         fetch_config: Option<bool>,
-        /// Cap on the total number of items yielded by the stream. When less than 1000, also used as the server
-        /// page size.
         limit: Option<usize>,
     ) -> HFResult<Vec<ModelInfo>> {
         use futures::StreamExt;
@@ -1484,31 +1462,15 @@ impl crate::blocking::HFClientSync {
     }
 
     /// Blocking counterpart of [`HFClient::list_datasets`]. Returns the collected stream as a
-    /// `Vec<DatasetInfo>`.
+    /// `Vec<DatasetInfo>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_datasets(
         &self,
-        /// Free-text query forwarded as `?search=`. The Hub matches it substring-style against the dataset `id`
-        /// and card description — not a tag filter.
-        #[builder(into)]
-        search: Option<String>,
-        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g.
-        /// `"HuggingFaceH4"`, `"allenai"`).
-        #[builder(into)]
-        author: Option<String>,
-        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
-        /// `"task_categories:text-classification"`, `"language:en"`, `"size_categories:10K<n<100K"`, `"license:mit"`.
-        /// To combine tags, narrow client-side — only one `filter` value is sent.
-        #[builder(into)]
-        filter: Option<String>,
-        /// API field name to sort by, forwarded as `?sort=`. Common values are `"downloads"`, `"likes"`,
-        /// `"createdAt"`, `"lastModified"`, and `"trendingScore"` (Hub camelCase field names).
-        #[builder(into)]
-        sort: Option<String>,
-        /// Fetch the full dataset information including all fields.
+        #[builder(into)] search: Option<String>,
+        #[builder(into)] author: Option<String>,
+        #[builder(into)] filter: Option<String>,
+        #[builder(into)] sort: Option<String>,
         full: Option<bool>,
-        /// Cap on the total number of items yielded by the stream. When less than 1000, also used as the server
-        /// page size.
         limit: Option<usize>,
     ) -> HFResult<Vec<DatasetInfo>> {
         use futures::StreamExt;
@@ -1533,31 +1495,15 @@ impl crate::blocking::HFClientSync {
     }
 
     /// Blocking counterpart of [`HFClient::list_spaces`]. Returns the collected stream as a
-    /// `Vec<SpaceInfo>`.
+    /// `Vec<SpaceInfo>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_spaces(
         &self,
-        /// Free-text query forwarded as `?search=`. The Hub matches it substring-style against the Space `id`
-        /// and card description — not a tag filter.
-        #[builder(into)]
-        search: Option<String>,
-        /// Namespace owner forwarded as `?author=`. Pass a bare Hub user or organization name (e.g. `"openai"`,
-        /// `"stabilityai"`).
-        #[builder(into)]
-        author: Option<String>,
-        /// A single Hub **tag** value forwarded as `?filter=`. Tags use the Hub's namespaced format, e.g.
-        /// `"sdk:gradio"`, `"sdk:streamlit"`, `"sdk:docker"`, `"language:en"`, `"license:mit"`. To combine tags,
-        /// narrow client-side — only one `filter` value is sent.
-        #[builder(into)]
-        filter: Option<String>,
-        /// API field name to sort by, forwarded as `?sort=`. Common values are `"likes"`, `"createdAt"`,
-        /// `"lastModified"`, and `"trendingScore"` (Hub camelCase field names).
-        #[builder(into)]
-        sort: Option<String>,
-        /// Fetch the full Space information including all fields.
+        #[builder(into)] search: Option<String>,
+        #[builder(into)] author: Option<String>,
+        #[builder(into)] filter: Option<String>,
+        #[builder(into)] sort: Option<String>,
         full: Option<bool>,
-        /// Cap on the total number of items yielded by the stream. When less than 1000, also used as the server
-        /// page size.
         limit: Option<usize>,
     ) -> HFResult<Vec<SpaceInfo>> {
         use futures::StreamExt;
@@ -1586,21 +1532,11 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_repository(
         &self,
-        /// Repository ID in `"owner/name"` or `"name"` format.
-        #[builder(into)]
-        repo_id: String,
-        /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
-        /// or [`RepoTypeKernel`]).
+        #[builder(into)] repo_id: String,
         repo_type: impl RepoType,
-        /// Whether the repository should be private.
         private: Option<bool>,
-        /// If `true`, do not error when the repository already exists.
-        #[builder(default)]
-        exist_ok: bool,
-        /// SDK for a Space (e.g. `"gradio"`, `"streamlit"`, `"docker"`). Required when `repo_type` is
-        /// [`RepoTypeSpace`]; ignored for other repo kinds.
-        #[builder(into)]
-        space_sdk: Option<String>,
+        #[builder(default)] exist_ok: bool,
+        #[builder(into)] space_sdk: Option<String>,
     ) -> HFResult<RepoUrl> {
         self.runtime.block_on(
             self.inner
@@ -1619,15 +1555,9 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_repository(
         &self,
-        /// Repository ID in `"owner/name"` or `"name"` format.
-        #[builder(into)]
-        repo_id: String,
-        /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
-        /// or [`RepoTypeKernel`]).
+        #[builder(into)] repo_id: String,
         repo_type: impl RepoType,
-        /// If `true`, do not error when the repository does not exist.
-        #[builder(default)]
-        missing_ok: bool,
+        #[builder(default)] missing_ok: bool,
     ) -> HFResult<()> {
         self.runtime.block_on(
             self.inner
@@ -1644,14 +1574,8 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn move_repository(
         &self,
-        /// Current repository ID in `"owner/name"` format.
-        #[builder(into)]
-        from_id: String,
-        /// New repository ID in `"owner/name"` format.
-        #[builder(into)]
-        to_id: String,
-        /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
-        /// or [`RepoTypeKernel`]).
+        #[builder(into)] from_id: String,
+        #[builder(into)] to_id: String,
         repo_type: impl RepoType,
     ) -> HFResult<RepoUrl> {
         self.runtime.block_on(
@@ -1677,12 +1601,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::revision_exists`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn revision_exists(
-        &self,
-        /// Git revision to check for existence.
-        #[builder(into)]
-        revision: String,
-    ) -> HFResult<bool> {
+    pub fn revision_exists(&self, #[builder(into)] revision: String) -> HFResult<bool> {
         self.runtime.block_on(self.inner.revision_exists().revision(revision).send())
     }
 
@@ -1691,12 +1610,8 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn file_exists(
         &self,
-        /// Path of the file to check within the repository.
-        #[builder(into)]
-        filename: String,
-        /// Git revision to check. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
+        #[builder(into)] filename: String,
+        #[builder(into)] revision: Option<String>,
     ) -> HFResult<bool> {
         self.runtime
             .block_on(self.inner.file_exists().filename(filename).maybe_revision(revision).send())
@@ -1707,16 +1622,10 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn update_settings(
         &self,
-        /// Whether the repository should be private.
         private: Option<bool>,
-        /// Access-gating mode for the repository (e.g. `auto`, `manual`, disabled).
         gated: Option<GatedApprovalMode>,
-        /// Repository description shown on the Hub page.
-        #[builder(into)]
-        description: Option<String>,
-        /// Whether discussions are disabled on this repository.
+        #[builder(into)] description: Option<String>,
         discussions_disabled: Option<bool>,
-        /// Notification cadence (and optional email override) for gated-access requests.
         gated_notifications: Option<GatedNotifications>,
     ) -> HFResult<()> {
         self.runtime.block_on(

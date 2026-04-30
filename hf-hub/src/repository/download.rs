@@ -1182,24 +1182,12 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn download_file(
         &self,
-        /// Path of the file to download within the repository.
-        #[builder(into)]
-        filename: String,
-        /// Local directory to download the file into. When set, the file is saved with its repo path structure.
-        #[builder(into)]
-        local_dir: Option<PathBuf>,
-        /// Git revision. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Re-download the file even if a cached copy exists.
-        #[builder(default)]
-        force_download: bool,
-        /// Only return the file if cached locally; never make a network request.
-        #[builder(default)]
-        local_files_only: bool,
-        /// Progress handler.
-        #[builder(into)]
-        progress: Option<Progress>,
+        #[builder(into)] filename: String,
+        #[builder(into)] local_dir: Option<PathBuf>,
+        #[builder(into)] revision: Option<String>,
+        #[builder(default)] force_download: bool,
+        #[builder(default)] local_files_only: bool,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.runtime.block_on(
             self.inner
@@ -1219,21 +1207,10 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn download_file_to_bytes(
         &self,
-        /// Path of the file to download within the repository.
-        #[builder(into)]
-        filename: String,
-        /// Git revision. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Byte range to request, as a Rust `std::ops::Range<u64>`. The range follows standard Rust semantics —
-        /// `start` is **inclusive**, `end` is **exclusive** — so `0..1024` fetches the first 1024 bytes (offsets
-        /// `0..=1023`). Internally this is converted to the HTTP `Range: bytes=<start>-<end-1>` header. `start` must
-        /// be strictly less than `end`; an empty or inverted range returns [`HFError::InvalidParameter`].
+        #[builder(into)] filename: String,
+        #[builder(into)] revision: Option<String>,
         range: Option<std::ops::Range<u64>>,
-        /// Progress handler. Emits `Start`/`Progress`/`Complete` as the underlying stream is
-        /// drained, identically to [`HFRepository::download_file_stream`].
-        #[builder(into)]
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
         self.runtime.block_on(
             self.inner
@@ -1251,28 +1228,14 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn snapshot_download(
         &self,
-        /// Git revision. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Globs selecting which repository files to download. When set, only files whose repo path
-        /// matches at least one pattern are downloaded.
+        #[builder(into)] revision: Option<String>,
         allow_patterns: Option<Vec<String>>,
-        /// Globs of repository files to skip. Matched against the same repo paths as `allow_patterns`.
         ignore_patterns: Option<Vec<String>>,
-        /// Local directory to download into.
-        #[builder(into)]
-        local_dir: Option<PathBuf>,
-        /// Re-download all files even if cached.
-        #[builder(default)]
-        force_download: bool,
-        /// Resolve only from the local cache.
-        #[builder(default)]
-        local_files_only: bool,
-        /// Maximum concurrent file downloads (default 8).
+        #[builder(into)] local_dir: Option<PathBuf>,
+        #[builder(default)] force_download: bool,
+        #[builder(default)] local_files_only: bool,
         max_workers: Option<usize>,
-        /// Progress handler.
-        #[builder(into)]
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
         self.runtime.block_on(
             self.inner

@@ -97,117 +97,33 @@ pub trait RepoType: sealed::Sealed + Default + Copy + Clone + std::fmt::Debug + 
     fn url_prefix(&self) -> &'static str;
 }
 
-/// Marker for a model repository on the Hub.
-///
-/// Implements [`RepoType`] returning `"model"` / `"models"` / `""` for
-/// [`singular`](RepoType::singular), [`plural`](RepoType::plural), and
-/// [`url_prefix`](RepoType::url_prefix). API URLs for models are
-/// `/api/models/{repo_id}`; resolve URLs are unprefixed (`<endpoint>/{repo_id}/...`).
-///
-/// Use [`HFClient::model`](crate::HFClient::model) for the typed shortcut, or pass this
-/// marker explicitly:
-///
-/// ```rust,no_run
-/// use hf_hub::{HFClient, RepoTypeModel};
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// let client = HFClient::new()?;
-/// let repo = client.repository::<RepoTypeModel>("openai-community", "gpt2");
-///
-/// client
-///     .create_repository()
-///     .repo_id("acme/my-model")
-///     .repo_type(RepoTypeModel)
-///     .send()
-///     .await?;
-/// # let _ = repo; Ok(()) }
-/// ```
+/// Model-repository marker. See [`RepoType`] for the trait, the per-kind string
+/// table, and usage examples; use [`HFClient::model`](crate::HFClient::model) for the
+/// typed shortcut.
 #[derive(Default, Copy, Clone, Debug)]
 pub struct RepoTypeModel;
 
-/// Marker for a dataset repository on the Hub.
-///
-/// Implements [`RepoType`] returning `"dataset"` / `"datasets"` / `"datasets/"` for
-/// [`singular`](RepoType::singular), [`plural`](RepoType::plural), and
-/// [`url_prefix`](RepoType::url_prefix). API URLs are `/api/datasets/{repo_id}`;
-/// resolve URLs are `<endpoint>/datasets/{repo_id}/...`.
-///
-/// Use [`HFClient::dataset`](crate::HFClient::dataset) for the typed shortcut, or pass
-/// this marker explicitly:
-///
-/// ```rust,no_run
-/// use hf_hub::{HFClient, RepoTypeDataset};
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// let client = HFClient::new()?;
-/// let repo = client.repository::<RepoTypeDataset>("rajpurkar", "squad");
-///
-/// client
-///     .create_repository()
-///     .repo_id("acme/my-dataset")
-///     .repo_type(RepoTypeDataset)
-///     .send()
-///     .await?;
-/// # let _ = repo; Ok(()) }
-/// ```
+/// Dataset-repository marker. See [`RepoType`] for the trait, the per-kind string
+/// table, and usage examples; use [`HFClient::dataset`](crate::HFClient::dataset) for
+/// the typed shortcut.
 #[derive(Default, Copy, Clone, Debug)]
 pub struct RepoTypeDataset;
 
-/// Marker for a Space repository on the Hub.
-///
-/// Implements [`RepoType`] returning `"space"` / `"spaces"` / `"spaces/"` for
-/// [`singular`](RepoType::singular), [`plural`](RepoType::plural), and
-/// [`url_prefix`](RepoType::url_prefix). API URLs are `/api/spaces/{repo_id}`;
-/// resolve URLs are `<endpoint>/spaces/{repo_id}/...`.
-///
-/// Selects this marker to access Space-only methods on
+/// Space-repository marker. See [`RepoType`] for the trait, the per-kind string
+/// table, and usage examples; use [`HFClient::space`](crate::HFClient::space) for the
+/// typed shortcut. This is the marker used to access Space-only methods on
 /// [`HFRepository`](super::HFRepository) such as
-/// [`runtime`](super::HFRepository::runtime),
-/// [`pause`](super::HFRepository::pause),
-/// [`add_secret`](super::HFRepository::add_secret), and
-/// [`duplicate`](super::HFRepository::duplicate). Use
-/// [`HFClient::space`](crate::HFClient::space) for the typed shortcut, or pass this
-/// marker explicitly:
-///
-/// ```rust,no_run
-/// use hf_hub::{HFClient, RepoTypeSpace};
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// let client = HFClient::new()?;
-/// let space = client.repository::<RepoTypeSpace>("acme", "demo");
-/// let runtime = space.runtime().send().await?;
-///
-/// // `space_sdk` is required when creating a Space repo.
-/// client
-///     .create_repository()
-///     .repo_id("acme/another")
-///     .repo_type(RepoTypeSpace)
-///     .space_sdk("static")
-///     .send()
-///     .await?;
-/// # let _ = runtime; Ok(()) }
-/// ```
+/// [`runtime`](super::HFRepository::runtime) and
+/// [`pause`](super::HFRepository::pause).
 #[derive(Default, Copy, Clone, Debug)]
 pub struct RepoTypeSpace;
 
-/// Marker for a kernel repository on the Hub.
-///
-/// Implements [`RepoType`] returning `"kernel"` / `"kernels"` / `"kernels/"` for
-/// [`singular`](RepoType::singular), [`plural`](RepoType::plural), and
-/// [`url_prefix`](RepoType::url_prefix). API URLs are `/api/kernels/{repo_id}`;
-/// resolve URLs are `<endpoint>/kernels/{repo_id}/...`.
-///
-/// Note that [`HFRepository::<RepoTypeKernel>::info`](super::HFRepository::info) hits
-/// `/api/kernels/{repo_id}` which returns a slim shape (no `tags`, `cardData`, or
-/// `siblings`). For full model-style metadata on a kernel repo, build a model handle
-/// for the same id and call `info()` on that. Use
-/// [`HFClient::kernel`](crate::HFClient::kernel) for the typed shortcut, or pass this
-/// marker explicitly:
-///
-/// ```rust,no_run
-/// use hf_hub::{HFClient, RepoTypeKernel};
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// let client = HFClient::new()?;
-/// let repo = client.repository::<RepoTypeKernel>("kernels-community", "cutlass-mla");
-/// # let _ = repo; Ok(()) }
-/// ```
+/// Kernel-repository marker. See [`RepoType`] for the trait, the per-kind string
+/// table, and usage examples; use [`HFClient::kernel`](crate::HFClient::kernel) for the
+/// typed shortcut. Note that
+/// [`HFRepository::<RepoTypeKernel>::info`](super::HFRepository::info) returns a slim
+/// shape — to get full model-style metadata for a kernel repo, build a model handle
+/// for the same id and call `info()` on that.
 #[derive(Default, Copy, Clone, Debug)]
 pub struct RepoTypeKernel;
 

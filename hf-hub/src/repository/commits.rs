@@ -463,14 +463,11 @@ impl<T: RepoType> HFRepository<T> {
 #[bon]
 impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::list_commits`]. Collects the stream into a
-    /// `Vec<GitCommitInfo>`.
+    /// `Vec<GitCommitInfo>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_commits(
         &self,
-        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Maximum number of commits yielded.
+        #[builder(into)] revision: Option<String>,
         limit: Option<usize>,
     ) -> HFResult<Vec<GitCommitInfo>> {
         self.runtime.block_on(async move {
@@ -487,12 +484,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::list_refs`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn list_refs(
-        &self,
-        /// Include pull-request refs in the listing.
-        #[builder(default)]
-        include_pull_requests: bool,
-    ) -> HFResult<GitRefs> {
+    pub fn list_refs(&self, #[builder(default)] include_pull_requests: bool) -> HFResult<GitRefs> {
         self.runtime
             .block_on(self.inner.list_refs().include_pull_requests(include_pull_requests).send())
     }
@@ -500,48 +492,21 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::get_commit_diff`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_commit_diff(
-        &self,
-        /// Revision spec describing what to compare. Either:
-        /// - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`,
-        ///   `"v1.0"`, `"abc123…"`), or
-        /// - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
-        ///   `"<sha1>..<sha2>"`).
-        #[builder(into)]
-        compare: String,
-    ) -> HFResult<String> {
+    pub fn get_commit_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
         self.runtime.block_on(self.inner.get_commit_diff().compare(compare).send())
     }
 
     /// Blocking counterpart of [`HFRepository::get_raw_diff`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_raw_diff(
-        &self,
-        /// Revision spec describing what to compare. Either:
-        /// - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`,
-        ///   `"v1.0"`, `"abc123…"`), or
-        /// - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
-        ///   `"<sha1>..<sha2>"`).
-        #[builder(into)]
-        compare: String,
-    ) -> HFResult<String> {
+    pub fn get_raw_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
         self.runtime.block_on(self.inner.get_raw_diff().compare(compare).send())
     }
 
     /// Blocking counterpart of [`HFRepository::get_raw_diff_stream`]. Collects the parsed stream
-    /// into a `Vec<HFFileDiff>`.
+    /// into a `Vec<HFFileDiff>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_raw_diff_stream(
-        &self,
-        /// Revision spec describing what to compare. Either:
-        /// - a single revision (branch name, tag, or commit SHA), compared against its parent (e.g. `"main"`,
-        ///   `"v1.0"`, `"abc123…"`), or
-        /// - two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g. `"main..feature"`,
-        ///   `"<sha1>..<sha2>"`).
-        #[builder(into)]
-        compare: String,
-    ) -> HFResult<Vec<HFFileDiff>> {
+    pub fn get_raw_diff_stream(&self, #[builder(into)] compare: String) -> HFResult<Vec<HFFileDiff>> {
         self.runtime.block_on(async move {
             let stream = self.inner.get_raw_diff_stream().compare(compare).send().await?;
             futures::pin_mut!(stream);
@@ -558,12 +523,8 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_branch(
         &self,
-        /// Name of the branch to create.
-        #[builder(into)]
-        branch: String,
-        /// Revision to branch from. Defaults to the current main branch head.
-        #[builder(into)]
-        revision: Option<String>,
+        #[builder(into)] branch: String,
+        #[builder(into)] revision: Option<String>,
     ) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.create_branch().branch(branch).maybe_revision(revision).send())
@@ -572,12 +533,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::delete_branch`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_branch(
-        &self,
-        /// Name of the branch to delete.
-        #[builder(into)]
-        branch: String,
-    ) -> HFResult<()> {
+    pub fn delete_branch(&self, #[builder(into)] branch: String) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_branch().branch(branch).send())
     }
 
@@ -586,15 +542,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_tag(
         &self,
-        /// Name of the tag to create.
-        #[builder(into)]
-        tag: String,
-        /// Revision to tag. Defaults to the current main branch head.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Annotation message for the tag.
-        #[builder(into)]
-        message: Option<String>,
+        #[builder(into)] tag: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] message: Option<String>,
     ) -> HFResult<()> {
         self.runtime.block_on(
             self.inner
@@ -609,12 +559,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::delete_tag`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_tag(
-        &self,
-        /// Name of the tag to delete.
-        #[builder(into)]
-        tag: String,
-    ) -> HFResult<()> {
+    pub fn delete_tag(&self, #[builder(into)] tag: String) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_tag().tag(tag).send())
     }
 }

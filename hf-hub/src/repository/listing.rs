@@ -179,20 +179,13 @@ use futures::stream::StreamExt as _;
 #[bon]
 impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::list_tree`]. Returns the collected stream as a
-    /// `Vec<RepoTreeEntry>`.
+    /// `Vec<RepoTreeEntry>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_tree(
         &self,
-        /// Git revision to list. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Traverse subdirectories.
-        #[builder(default)]
-        recursive: bool,
-        /// Include per-file metadata such as size, LFS info, and last-commit summaries.
-        #[builder(default)]
-        expand: bool,
-        /// Cap the total number of entries yielded.
+        #[builder(into)] revision: Option<String>,
+        #[builder(default)] recursive: bool,
+        #[builder(default)] expand: bool,
         limit: Option<usize>,
     ) -> HFResult<Vec<RepoTreeEntry>> {
         self.runtime.block_on(async move {
@@ -218,11 +211,8 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn get_paths_info(
         &self,
-        /// Paths in the repository to fetch info for.
         paths: Vec<String>,
-        /// Git revision. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
+        #[builder(into)] revision: Option<String>,
     ) -> HFResult<Vec<RepoTreeEntry>> {
         self.runtime
             .block_on(self.inner.get_paths_info().paths(paths).maybe_revision(revision).send())
@@ -233,12 +223,8 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn get_file_metadata(
         &self,
-        /// Path of the file to inspect within the repository.
-        #[builder(into)]
-        filepath: String,
-        /// Git revision. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
+        #[builder(into)] filepath: String,
+        #[builder(into)] revision: Option<String>,
     ) -> HFResult<FileMetadataInfo> {
         self.runtime.block_on(
             self.inner

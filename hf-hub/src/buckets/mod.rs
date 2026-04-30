@@ -907,21 +907,11 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_bucket(
         &self,
-        /// Namespace (user or organization) that owns the bucket.
-        #[builder(into)]
-        namespace: String,
-        /// Bucket name within the namespace.
-        #[builder(into)]
-        name: String,
-        /// Whether the bucket should be private.
-        #[builder(default)]
-        private: bool,
-        /// Enterprise resource group ID.
-        #[builder(into)]
-        resource_group_id: Option<String>,
-        /// If `true`, do not error when the bucket already exists.
-        #[builder(default)]
-        exist_ok: bool,
+        #[builder(into)] namespace: String,
+        #[builder(into)] name: String,
+        #[builder(default)] private: bool,
+        #[builder(into)] resource_group_id: Option<String>,
+        #[builder(default)] exist_ok: bool,
     ) -> HFResult<BucketUrl> {
         self.runtime.block_on(
             self.inner
@@ -935,30 +925,22 @@ impl crate::blocking::HFClientSync {
         )
     }
 
-    /// Blocking counterpart of [`HFClient::delete_bucket`].
+    /// Blocking counterpart of [`HFClient::delete_bucket`]. See the async method for parameters
+    /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_bucket(
         &self,
-        /// Bucket ID in `"owner/name"` format.
-        #[builder(into)]
-        bucket_id: String,
-        /// If `true`, do not error when the bucket does not exist.
-        #[builder(default)]
-        missing_ok: bool,
+        #[builder(into)] bucket_id: String,
+        #[builder(default)] missing_ok: bool,
     ) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.delete_bucket().bucket_id(bucket_id).missing_ok(missing_ok).send())
     }
 
     /// Blocking counterpart of [`HFClient::list_buckets`]. Collects the stream into a
-    /// `Vec<BucketInfo>`.
+    /// `Vec<BucketInfo>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn list_buckets(
-        &self,
-        /// User or organization namespace to list buckets for.
-        #[builder(into)]
-        namespace: String,
-    ) -> HFResult<Vec<BucketInfo>> {
+    pub fn list_buckets(&self, #[builder(into)] namespace: String) -> HFResult<Vec<BucketInfo>> {
         self.runtime.block_on(async move {
             let stream = self.inner.list_buckets().namespace(namespace).send()?;
             futures::pin_mut!(stream);
@@ -970,17 +952,10 @@ impl crate::blocking::HFClientSync {
         })
     }
 
-    /// Blocking counterpart of [`HFClient::move_bucket`].
+    /// Blocking counterpart of [`HFClient::move_bucket`]. See the async method for parameters
+    /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn move_bucket(
-        &self,
-        /// Current bucket ID in `"owner/name"` format.
-        #[builder(into)]
-        from_id: String,
-        /// New bucket ID in `"owner/name"` format.
-        #[builder(into)]
-        to_id: String,
-    ) -> HFResult<()> {
+    pub fn move_bucket(&self, #[builder(into)] from_id: String, #[builder(into)] to_id: String) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.move_bucket().from_id(from_id).to_id(to_id).send())
     }
@@ -996,16 +971,12 @@ impl crate::blocking::HFBucketSync {
     }
 
     /// Blocking counterpart of [`HFBucket::list_tree`]. Collects the stream into a
-    /// `Vec<BucketTreeEntry>`.
+    /// `Vec<BucketTreeEntry>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_tree(
         &self,
-        /// Filter results to entries under this prefix.
-        #[builder(into)]
-        prefix: Option<String>,
-        /// Traverse subdirectories.
-        #[builder(default)]
-        recursive: bool,
+        #[builder(into)] prefix: Option<String>,
+        #[builder(default)] recursive: bool,
     ) -> HFResult<Vec<BucketTreeEntry>> {
         self.runtime.block_on(async move {
             let stream = self.inner.list_tree().maybe_prefix(prefix).recursive(recursive).send()?;
@@ -1021,22 +992,14 @@ impl crate::blocking::HFBucketSync {
     /// Blocking counterpart of [`HFBucket::get_paths_info`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_paths_info(
-        &self,
-        /// Paths to inspect.
-        paths: Vec<String>,
-    ) -> HFResult<Vec<BucketTreeEntry>> {
+    pub fn get_paths_info(&self, paths: Vec<String>) -> HFResult<Vec<BucketTreeEntry>> {
         self.runtime.block_on(self.inner.get_paths_info().paths(paths).send())
     }
 
-    /// Blocking counterpart of [`HFBucket::get_file_metadata`].
+    /// Blocking counterpart of [`HFBucket::get_file_metadata`]. See the async method for parameters
+    /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_file_metadata(
-        &self,
-        /// File path within the bucket.
-        #[builder(into)]
-        remote_path: String,
-    ) -> HFResult<BucketFileMetadata> {
+    pub fn get_file_metadata(&self, #[builder(into)] remote_path: String) -> HFResult<BucketFileMetadata> {
         self.runtime
             .block_on(self.inner.get_file_metadata().remote_path(remote_path).send())
     }
@@ -1046,15 +1009,9 @@ impl crate::blocking::HFBucketSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn batch_operations(
         &self,
-        /// Files to register in the bucket.
-        #[builder(default)]
-        add_files: Vec<BucketAddFile>,
-        /// Bucket-relative paths to remove from the bucket.
-        #[builder(default)]
-        delete: Vec<String>,
-        /// Server-side copies into this bucket.
-        #[builder(default)]
-        copy: Vec<BucketCopyFile>,
+        #[builder(default)] add_files: Vec<BucketAddFile>,
+        #[builder(default)] delete: Vec<String>,
+        #[builder(default)] copy: Vec<BucketCopyFile>,
     ) -> HFResult<()> {
         self.runtime.block_on(
             self.inner
@@ -1066,27 +1023,17 @@ impl crate::blocking::HFBucketSync {
         )
     }
 
-    /// Blocking counterpart of [`HFBucket::delete_files`].
+    /// Blocking counterpart of [`HFBucket::delete_files`]. See the async method for parameters
+    /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_files(
-        &self,
-        /// Paths to delete from the bucket.
-        paths: Vec<String>,
-    ) -> HFResult<()> {
+    pub fn delete_files(&self, paths: Vec<String>) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_files().paths(paths).send())
     }
 
     /// Blocking counterpart of [`HFBucket::upload_files`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn upload_files(
-        &self,
-        /// List of [`BucketUpload`] entries describing each `local` → `remote` mapping.
-        files: Vec<BucketUpload>,
-        /// Progress handler.
-        #[builder(into)]
-        progress: Option<Progress>,
-    ) -> HFResult<()> {
+    pub fn upload_files(&self, files: Vec<BucketUpload>, #[builder(into)] progress: Option<Progress>) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.upload_files().files(files).maybe_progress(progress).send())
     }
@@ -1096,11 +1043,8 @@ impl crate::blocking::HFBucketSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn download_files(
         &self,
-        /// List of [`BucketDownload`] entries describing each `remote` → `local` mapping.
         files: Vec<BucketDownload>,
-        /// Progress handler.
-        #[builder(into)]
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.download_files().files(files).maybe_progress(progress).send())

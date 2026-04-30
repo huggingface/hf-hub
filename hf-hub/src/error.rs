@@ -3,31 +3,22 @@ use std::time::Duration;
 use reqwest::header::HeaderMap;
 use thiserror::Error;
 
-/// Context captured from a failed HTTP response.
+/// Context captured from a failed HTTP response, carried by every HTTP-derived
+/// variant of [`HFError`]. `request_id`, `error_code`, and `server_message` come
+/// from the Hub's `X-Request-Id`, `X-Error-Code`, and `X-Error-Message` headers;
+/// `server_message` falls back to the JSON body's `"error"` field.
 ///
-/// Carried by every HTTP-derived variant of [`HFError`]. Populated from the
-/// response headers and body by [`HttpErrorContext::from_response`]. The
-/// request id, error code, and server message come from the Hub's
-/// `X-Request-Id`, `X-Error-Code`, and `X-Error-Message` headers when
-/// present; `server_message` falls back to the JSON body's `"error"` field.
-///
-/// This struct is `#[non_exhaustive]`: external crates cannot construct it
-/// directly and must use `..` when destructuring, so new fields can be added
-/// without a SemVer break.
+/// `#[non_exhaustive]`: destructure with `..` and use the public constructors —
+/// new fields may be added without a SemVer break.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct HttpErrorContext {
-    /// HTTP status code returned by the server.
     pub status: reqwest::StatusCode,
-    /// Final request URL.
     pub url: String,
-    /// Hub request id, when returned by the server.
     pub request_id: Option<String>,
-    /// Hub-specific error code, when returned by the server.
     pub error_code: Option<String>,
     /// Best-effort human-readable message from headers or JSON body.
     pub server_message: Option<String>,
-    /// Raw response body.
     pub body: String,
 }
 

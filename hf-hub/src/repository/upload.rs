@@ -941,26 +941,13 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_commit(
         &self,
-        /// List of file operations to include in the commit.
         operations: Vec<CommitOperation>,
-        /// Commit message.
-        #[builder(into)]
-        commit_message: String,
-        /// Extended description for the commit.
-        #[builder(into)]
-        commit_description: Option<String>,
-        /// Branch to commit to. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Create a pull request instead of committing directly.
-        #[builder(default)]
-        create_pr: bool,
-        /// Expected parent commit SHA. Fails if the branch head moved past it.
-        #[builder(into)]
-        parent_commit: Option<String>,
-        /// Progress handler.
-        #[builder(into)]
-        progress: Option<Progress>,
+        #[builder(into)] commit_message: String,
+        #[builder(into)] commit_description: Option<String>,
+        #[builder(into)] revision: Option<String>,
+        #[builder(default)] create_pr: bool,
+        #[builder(into)] parent_commit: Option<String>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner
@@ -981,29 +968,14 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn upload_file(
         &self,
-        /// File content source (bytes or local file path).
         source: AddSource,
-        /// Destination path within the repository.
-        #[builder(into)]
-        path_in_repo: String,
-        /// Branch to upload to. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Commit message. Same as [`HFRepository::create_commit`].
-        #[builder(into)]
-        commit_message: Option<String>,
-        /// Extended description for the commit. Same as [`HFRepository::create_commit`].
-        #[builder(into)]
-        commit_description: Option<String>,
-        /// Create a pull request instead of committing directly. Same as [`HFRepository::create_commit`].
-        #[builder(default)]
-        create_pr: bool,
-        /// Expected parent commit SHA. Same as [`HFRepository::create_commit`].
-        #[builder(into)]
-        parent_commit: Option<String>,
-        /// Progress handler. Same as [`HFRepository::create_commit`].
-        #[builder(into)]
-        progress: Option<Progress>,
+        #[builder(into)] path_in_repo: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(into)] commit_description: Option<String>,
+        #[builder(default)] create_pr: bool,
+        #[builder(into)] parent_commit: Option<String>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner
@@ -1025,38 +997,16 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn upload_folder(
         &self,
-        /// Local folder path to upload.
-        #[builder(into)]
-        folder_path: PathBuf,
-        /// Destination directory within the repository (default: repo root).
-        #[builder(into)]
-        path_in_repo: Option<String>,
-        /// Branch to upload to. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Commit message.
-        #[builder(into)]
-        commit_message: Option<String>,
-        /// Extended description for the commit.
-        #[builder(into)]
-        commit_description: Option<String>,
-        /// Create a pull request instead of committing directly.
-        #[builder(default)]
-        create_pr: bool,
-        /// Globs selecting which local files to include. Matched against each discovered file's path
-        /// relative to `folder_path` (e.g. `data/train.bin`, not the absolute path and not prefixed with
-        /// `path_in_repo`). When set, only files matching at least one pattern are uploaded.
+        #[builder(into)] folder_path: PathBuf,
+        #[builder(into)] path_in_repo: Option<String>,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(into)] commit_description: Option<String>,
+        #[builder(default)] create_pr: bool,
         allow_patterns: Option<Vec<String>>,
-        /// Globs of local files to skip. Matched against the same `folder_path`-relative paths as
-        /// `allow_patterns`.
         ignore_patterns: Option<Vec<String>>,
-        /// Globs of *remote* files to delete in the same commit. Matched against each existing file's
-        /// full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g. `old/*.bin` to
-        /// remove every `.bin` directly under `old/` at the repo root.
         delete_patterns: Option<Vec<String>>,
-        /// Progress handler.
-        #[builder(into)]
-        progress: Option<Progress>,
+        #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner
@@ -1080,18 +1030,10 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_file(
         &self,
-        /// Path of the file to delete.
-        #[builder(into)]
-        path_in_repo: String,
-        /// Branch to delete from. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Commit message.
-        #[builder(into)]
-        commit_message: Option<String>,
-        /// Create a pull request instead of committing directly.
-        #[builder(default)]
-        create_pr: bool,
+        #[builder(into)] path_in_repo: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(default)] create_pr: bool,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner
@@ -1109,18 +1051,10 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_folder(
         &self,
-        /// Folder path within the repository.
-        #[builder(into)]
-        path_in_repo: String,
-        /// Branch to delete from. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
-        /// Commit message.
-        #[builder(into)]
-        commit_message: Option<String>,
-        /// Create a pull request instead of committing directly.
-        #[builder(default)]
-        create_pr: bool,
+        #[builder(into)] path_in_repo: String,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(default)] create_pr: bool,
     ) -> HFResult<CommitInfo> {
         self.runtime.block_on(
             self.inner
