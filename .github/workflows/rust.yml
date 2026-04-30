@@ -74,6 +74,7 @@ jobs:
         run: pip install huggingface_hub[cli]
 
       - name: Run tests
+        shell: bash
         run: |
           HF_CI_TOKEN='${{ secrets.HF_CI_TOKEN }}' \
           HF_PROD_TOKEN='${{ secrets.HF_PROD_TOKEN }}' \
