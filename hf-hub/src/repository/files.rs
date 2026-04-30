@@ -220,8 +220,8 @@ impl CommitOperation {
 ///   streams for SHA-256 hashing and xet uploads, so peak memory stays bounded regardless of file size. The one
 ///   exception is small files that the Hub accepts inline (non-LFS, non-xet): those are loaded into memory in full to
 ///   be base64-encoded into the commit NDJSON, the same as `Bytes`.
-/// - [`Bytes`](Self::Bytes) for content you generated in-process (configs, READMEs, small JSON). The buffer is owned
-///   by the operation and lives until the commit completes; for LFS/xet uploads it is also cloned once when the upload
+/// - [`Bytes`](Self::Bytes) for content you generated in-process (configs, READMEs, small JSON). The buffer is owned by
+///   the operation and lives until the commit completes; for LFS/xet uploads it is also cloned once when the upload
 ///   plan is built. Avoid passing very large `Vec<u8>` here — use `File` and write a temp file instead.
 ///
 /// The file must still exist on disk when [`HFRepository::create_commit`] runs;
