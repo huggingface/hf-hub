@@ -35,6 +35,7 @@ sha2 = "0.11"
 [features]
 default = []
 blocking = ["tokio/rt"]
+rustls-tls = ["reqwest/rustls"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
