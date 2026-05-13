@@ -114,17 +114,10 @@ impl XetUploadSession {
     /// [`AddSource::Lfs`](super::AddSource::Lfs) in a subsequent
     /// [`create_commit`](super::HFRepository::create_commit) call.
     pub async fn finish(self) -> HFResult<HashMap<String, UploadedXetFile>> {
-        let results = self
-            .commit
-            .commit()
-            .await
-            .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+        let results = self.commit.commit().await.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
         tracing::info!(file_count = results.uploads.len(), "xet streaming upload session committed");
 
-        let path_to_task = self
-            .path_to_task
-            .into_inner()
-            .expect("xet upload session mutex poisoned");
+        let path_to_task = self.path_to_task.into_inner().expect("xet upload session mutex poisoned");
 
         let mut out: HashMap<String, UploadedXetFile> = HashMap::with_capacity(path_to_task.len());
         for (path, task_id) in path_to_task {
@@ -222,7 +215,8 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let api_segment = T::default().plural();
         let token_url = repo_xet_token_url(&self.hf_client, "write", &repo_path, api_segment, &revision);
-        let commit = new_xet_upload_commit(&self.hf_client, token_url, &repo_path, NotFoundContext::Repo, "repo").await?;
+        let commit =
+            new_xet_upload_commit(&self.hf_client, token_url, &repo_path, NotFoundContext::Repo, "repo").await?;
         Ok(XetUploadSession {
             commit,
             path_to_task: Mutex::new(Vec::new()),

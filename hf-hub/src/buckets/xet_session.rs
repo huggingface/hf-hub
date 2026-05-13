@@ -24,7 +24,7 @@ use std::sync::Mutex;
 
 use xet::xet_session::{Sha256Policy, UniqueID, XetFileUpload};
 
-use super::{HFBucket, BucketAddFile};
+use super::{BucketAddFile, HFBucket};
 use crate::error::{HFError, HFResult, NotFoundContext, XetOperation};
 use crate::repository::UploadedXetFile;
 use crate::xet::{bucket_xet_token_url, new_xet_upload_commit};
@@ -94,11 +94,7 @@ impl BucketXetUploadSession {
     /// files are visible — see [`finish_and_register`](Self::finish_and_register)
     /// for the common case.
     pub async fn finish(self) -> HFResult<HashMap<String, UploadedXetFile>> {
-        let results = self
-            .commit
-            .commit()
-            .await
-            .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+        let results = self.commit.commit().await.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
         tracing::info!(file_count = results.uploads.len(), "bucket xet streaming upload session committed");
 
         let path_to_task = self
@@ -112,11 +108,7 @@ impl BucketXetUploadSession {
                 .uploads
                 .get(&task_id)
                 .ok_or_else(|| HFError::Other(format!("xet upload result missing for {path:?}")))?;
-            let sha256_oid = metadata
-                .xet_info
-                .sha256()
-                .map(|s| s.to_string())
-                .unwrap_or_default(); // buckets use xet_hash, so sha256 is optional context.
+            let sha256_oid = metadata.xet_info.sha256().map(|s| s.to_string()).unwrap_or_default(); // buckets use xet_hash, so sha256 is optional context.
             let size = metadata
                 .xet_info
                 .file_size()

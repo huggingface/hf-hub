@@ -16,10 +16,6 @@
 pub mod sync;
 pub mod xet_session;
 
-pub use xet_session::BucketXetUploadSession;
-#[cfg(feature = "blocking")]
-pub use xet_session::BucketXetUploadSessionSync;
-
 use std::path::PathBuf;
 
 use bon::bon;
@@ -28,6 +24,9 @@ use futures::Stream;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use url::Url;
+pub use xet_session::BucketXetUploadSession;
+#[cfg(feature = "blocking")]
+pub use xet_session::BucketXetUploadSessionSync;
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, NotFoundContext};
