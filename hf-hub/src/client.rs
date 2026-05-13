@@ -52,12 +52,17 @@ impl std::fmt::Debug for HFClient {
 
 pub(crate) struct HFClientInner {
     pub(crate) client: reqwest::Client,
+    // The wasm32 reqwest backend ignores `redirect()` configuration — the browser
+    // (or fetch in Node) handles redirects opaquely — so we only carry a separate
+    // no-redirect client on native targets.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) no_redirect_client: reqwest::Client,
     pub(crate) retry_config: RetryConfig,
     pub(crate) endpoint: String,
     pub(crate) token: Option<String>,
     pub(crate) cache_dir: std::path::PathBuf,
     pub(crate) cache_enabled: bool,
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) xet_state: std::sync::Mutex<crate::xet::XetState>,
 }
 
@@ -187,9 +192,13 @@ impl HFClientBuilder {
 
         let client = match self.client {
             Some(c) => c,
-            None => reqwest::Client::builder().default_headers(default_headers.clone()).build()?,
+            None => {
+                let builder = reqwest::Client::builder().default_headers(default_headers.clone());
+                builder.build()?
+            },
         };
 
+        #[cfg(not(target_family = "wasm"))]
         let no_redirect_client = reqwest::Client::builder()
             .default_headers(default_headers)
             .redirect(reqwest::redirect::Policy::none())
@@ -203,12 +212,14 @@ impl HFClientBuilder {
         Ok(HFClient {
             inner: Arc::new(HFClientInner {
                 client,
+                #[cfg(not(target_family = "wasm"))]
                 no_redirect_client,
                 retry_config,
                 endpoint: endpoint.trim_end_matches('/').to_string(),
                 token,
                 cache_dir,
                 cache_enabled: self.cache_enabled.unwrap_or(true),
+                #[cfg(not(target_family = "wasm"))]
                 xet_state: std::sync::Mutex::new(crate::xet::XetState::default()),
             }),
         })
@@ -259,6 +270,7 @@ impl HFClient {
         &self.inner.client
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn no_redirect_client(&self) -> &reqwest::Client {
         &self.inner.no_redirect_client
     }
@@ -390,6 +402,7 @@ impl HFClient {
     /// [`replace_xet_session`](Self::replace_xet_session) so that only the
     /// caller that observed the error triggers a replacement — concurrent
     /// callers that already got a session won't clobber it.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn xet_session(&self) -> HFResult<(xet::xet_session::XetSession, u64)> {
         let mut guard = self
             .inner
@@ -414,6 +427,7 @@ impl HFClient {
     /// Called by xet call sites when a factory method returns an error.
     /// The generation check ensures that if another thread already replaced
     /// the session, this call is a no-op rather than discarding the fresh one.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn replace_xet_session(&self, generation: u64, err: &xet::error::XetError) {
         tracing::warn!(error = %err, generation, "replacing cached XetSession");
         let Ok(mut guard) = self.inner.xet_state.lock() else {

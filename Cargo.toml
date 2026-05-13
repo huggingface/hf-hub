@@ -1,5 +1,6 @@
 [workspace]
 members = ["hf-hub", "hfrs", "benches", "examples", "integration-tests"]
+exclude = ["wasm/smoke"]
 resolver = "2"
 
 [profile.bench]

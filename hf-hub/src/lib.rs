@@ -187,6 +187,11 @@
 //! - `blocking` — enables the synchronous `*Sync` handles.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// Many helpers in `client`, `error`, `pagination`, `progress`, and `retry` are
+// only reachable from `repository`/`buckets`/`cache`/etc., which are gated off
+// on wasm. Without this allow each one would surface a dead-code warning when
+// the crate is checked for `wasm32-unknown-unknown`.
+#![cfg_attr(target_family = "wasm", allow(dead_code))]
 
 mod client;
 pub(crate) mod constants;
@@ -194,26 +199,41 @@ mod error;
 mod pagination;
 mod retry;
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 mod blocking;
 
+// Filesystem-heavy modules (cache, bucket sync, snapshot downloads, blocking wrappers)
+// can't compile for `wasm32-unknown-unknown`. On wasm we expose only the API surface
+// that does pure HTTP / xet-streaming: `HFClient`, error types, and the
+// `wasm_streaming` helper. See `verify_wasm.sh` and `wasm_streaming.rs`.
+#[cfg(not(target_family = "wasm"))]
 pub mod buckets;
+#[cfg(not(target_family = "wasm"))]
 pub mod cache;
 pub mod progress;
+#[cfg(not(target_family = "wasm"))]
 pub mod repository;
+#[cfg(not(target_family = "wasm"))]
 pub mod spaces;
+#[cfg(not(target_family = "wasm"))]
 pub mod users;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) mod xet;
 
-#[cfg(feature = "blocking")]
+#[cfg(target_family = "wasm")]
+pub mod wasm_streaming;
+
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync};
+#[cfg(not(target_family = "wasm"))]
 #[doc(inline)]
 pub use buckets::HFBucket;
 pub use client::{HFClient, HFClientBuilder};
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult, XetOperation};
+#[cfg(not(target_family = "wasm"))]
 #[doc(inline)]
 pub use repository::{HFRepository, RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};

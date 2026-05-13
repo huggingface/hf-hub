@@ -68,6 +68,25 @@ These rules apply to ALL code written or modified in this repo:
 
 - Verify that every change is minimal and necessary — do not include unrelated modifications
 
+### WebAssembly compatibility
+
+`hf-hub` must compile for `wasm32-unknown-unknown`. The wasm target exposes a reduced
+public surface (`HFClient`, `wasm_streaming::xet_stream_file`); filesystem-heavy
+modules (`cache`, `buckets`, `blocking`, `repository::download`/`upload`, `spaces`,
+`users`, `xet`) are gated behind `#[cfg(not(target_family = "wasm"))]`. When adding
+or modifying code in `client`, `error`, `retry`, `pagination`, `progress`, or
+`wasm_streaming`:
+
+- Don't reach into the gated modules unconditionally — wrap with
+  `#[cfg(not(target_family = "wasm"))]` or factor the wasm-safe bit out.
+- The wasm reqwest backend has no `is_connect`, no `is_body`/`is_redirect`/etc.,
+  and ignores `ClientBuilder::redirect()`. Use cfg-conditional branches for
+  these (`retry.rs` and `error.rs::is_transient` already do this).
+- Avoid `std::fs` / `tokio::fs` / `std::process::id` / `std::path::absolute` /
+  `tokio::task::spawn_blocking` on wasm paths.
+- Verify with `./scripts/verify_wasm.sh` before pushing. CI runs the same check
+  in the `wasm` job of `.github/workflows/rust.yml`.
+
 ### Method builders (bon)
 
 All public methods on `HFClient`, `HFRepository`, `HFSpace`, and `HFBucket` use `bon`'s
@@ -184,8 +203,10 @@ hf-hub/
 │   │   │                           #   runtime/hardware/secrets/variables/duplicate
 │   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
 │   │   │                           #   user+org lookup, followers/following
-│   │   ├── xet.rs                  # Xet component (pub(crate)): XetConnectionInfo, xet transfer plumbing
-│   │   │                           #   used by repositories and buckets
+│   │   ├── xet.rs                  # Xet component (pub(crate), non-wasm): XetConnectionInfo, xet
+│   │   │                           #   transfer plumbing used by repositories and buckets
+│   │   ├── wasm_streaming.rs       # WASM-only: xet_stream_file() — minimal HFClient-based xet
+│   │   │                           #   streaming download, no filesystem dependencies
 │   │   ├── buckets/
 │   │   │   ├── mod.rs              # HFBucket handle, bucket types, create/list/tree/batch/download
 │   │   │   └── sync.rs             # BucketSync* types, HFBucket::sync — plan computation and execution
@@ -213,6 +234,13 @@ hf-hub/
 ├── benches/                        # Benchmark crate (package: hf-hub-benches)
 │   ├── Cargo.toml                  # Criterion benchmark setup
 │   └── sync_api.rs                 # Download/info benches for the sync API
+├── wasm/                           # WASM-only artifacts, excluded from the workspace
+│   └── smoke/                      # Tiny `wasm-bindgen` crate that exercises hf-hub's
+│                                   #   wasm-safe surface — verification target for the
+│                                   #   `wasm` CI job and `./scripts/verify_wasm.sh`
+├── scripts/
+│   └── verify_wasm.sh              # `cargo check --target wasm32-unknown-unknown` for
+│                                   #   hf-hub + wasm/smoke
 └── hfrs/                           # CLI crate (package: hfrs)
     ├── Cargo.toml                  # Crate manifest, binary dependencies
     ├── src/

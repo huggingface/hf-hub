@@ -207,6 +207,9 @@ pub enum HFError {
     InvalidParameter(String),
 
     /// Raw diff parsing error.
+    // Gated off on wasm because the `repository` module — and therefore
+    // `HFDiffParseError` — is non-wasm.
+    #[cfg(not(target_family = "wasm"))]
     #[error(transparent)]
     DiffParse(#[from] crate::repository::HFDiffParseError),
 
@@ -325,7 +328,15 @@ impl HFError {
     /// where falling back to a cached version is appropriate.
     pub(crate) fn is_transient(&self) -> bool {
         match self {
-            HFError::Request { source, .. } => source.is_connect() || source.is_timeout(),
+            // `reqwest::Error::is_connect` is not available on the wasm32 backend.
+            HFError::Request { source, .. } => {
+                let timeout = source.is_timeout();
+                #[cfg(not(target_family = "wasm"))]
+                let connect = source.is_connect();
+                #[cfg(target_family = "wasm")]
+                let connect = false;
+                timeout || connect
+            },
             HFError::Http { context } => {
                 matches!(context.status.as_u16(), 500 | 502 | 503 | 504)
             },

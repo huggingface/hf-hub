@@ -258,6 +258,25 @@ All fallible operations return `Result<T, HFError>`. The `HFError` enum provides
 - `HFError::RateLimited` — 429 response, too many requests
 - `HFError::Http` — other HTTP errors with status code, URL, and response body
 
+## WebAssembly support
+
+`hf-hub` compiles for `wasm32-unknown-unknown`. The wasm target exposes a
+reduced API surface: `HFClient` + `HFClientBuilder` + the
+`hf_hub::wasm_streaming::xet_stream_file` helper, which streams the bytes of
+a xet-backed Hub file through the xet streaming download path. Filesystem-
+heavy modules (`cache`, `buckets`, `blocking`, snapshot download, etc.) are
+gated off on wasm because they depend on `std::fs` / `tokio::fs`.
+
+Verify locally with `./scripts/verify_wasm.sh`. CI runs the same check in
+the `wasm` job of `.github/workflows/rust.yml`. The `wasm/smoke/` crate is a
+tiny `wasm-bindgen` library that exercises the wasm-safe surface end-to-end
+(see `wasm/smoke/src/lib.rs`).
+
+When modifying `client`, `error`, `retry`, or `wasm_streaming`, keep the
+wasm build green — reqwest's wasm backend has a reduced API (no
+`is_connect`, no `redirect()` policy), and filesystem APIs must stay behind
+`#[cfg(not(target_family = "wasm"))]` gates.
+
 ## License
 
 Apache-2.0
