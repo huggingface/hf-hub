@@ -98,6 +98,7 @@ impl<T: RepoType> HFRepository<T> {
                     total += match source {
                         AddSource::Bytes(b) => b.len() as u64,
                         AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+                        AddSource::Lfs { size, .. } => *size,
                     };
                 }
             }
@@ -202,6 +203,16 @@ impl<T: RepoType> HFRepository<T> {
         let content = match source {
             AddSource::File(path) => std::fs::read(path)?,
             AddSource::Bytes(bytes) => bytes.clone(),
+            // AddSource::Lfs is always routed through `lfs_uploaded` upstream of
+            // this call. Reaching this branch means a pre-uploaded LFS blob was
+            // classified as "regular" by preupload — a logic bug, not a user
+            // error.
+            AddSource::Lfs { .. } => {
+                return Err(HFError::Other(
+                    "internal: AddSource::Lfs reached inline-base64 path; this should be handled as lfsFile"
+                        .to_string(),
+                ));
+            },
         };
         let b64 = base64::engine::general_purpose::STANDARD.encode(&content);
         Ok(serde_json::json!({
@@ -338,6 +349,9 @@ impl<T: RepoType> HFRepository<T> {
     /// Check upload modes for all files and upload LFS files via xet.
     ///
     /// Always calls the preupload endpoint to determine upload mode per file.
+    /// Operations whose source is [`AddSource::Lfs`] short-circuit the preupload,
+    /// SHA-256, LFS-batch, and xet-upload steps — they are simply emitted
+    /// directly into the returned `lfsFile` map.
     ///
     /// Returns a map of path_in_repo -> (sha256_oid, size) for files that were
     /// uploaded via xet and should be referenced as lfsFile in the commit.
@@ -346,17 +360,24 @@ impl<T: RepoType> HFRepository<T> {
         params: &CreateCommitParams,
         revision: &str,
     ) -> HFResult<HashMap<String, (String, u64)>> {
-        let add_ops: Vec<(&String, &AddSource)> = params
-            .operations
-            .iter()
-            .filter_map(|op| match op {
-                CommitOperation::Add { path_in_repo, source } => Some((path_in_repo, source)),
-                _ => None,
-            })
-            .collect();
+        let mut prepared_lfs: HashMap<String, (String, u64)> = HashMap::new();
+        let mut add_ops: Vec<(&String, &AddSource)> = Vec::new();
+
+        for op in &params.operations {
+            if let CommitOperation::Add { path_in_repo, source } = op {
+                match source {
+                    AddSource::Lfs { sha256_oid, size } => {
+                        prepared_lfs.insert(path_in_repo.clone(), (sha256_oid.clone(), *size));
+                    },
+                    AddSource::Bytes(_) | AddSource::File(_) => {
+                        add_ops.push((path_in_repo, source));
+                    },
+                }
+            }
+        }
 
         if add_ops.is_empty() {
-            return Ok(HashMap::new());
+            return Ok(prepared_lfs);
         }
 
         // Step 1: Gather file info (path, size, sample) for preupload check
@@ -390,7 +411,7 @@ impl<T: RepoType> HFRepository<T> {
             .collect();
 
         if lfs_files.is_empty() {
-            return Ok(HashMap::new());
+            return Ok(prepared_lfs);
         }
 
         tracing::info!(
@@ -399,7 +420,14 @@ impl<T: RepoType> HFRepository<T> {
             "files requiring LFS upload"
         );
 
-        self.upload_lfs_files_via_xet(params, revision, &lfs_files).await
+        let mut uploaded = self.upload_lfs_files_via_xet(params, revision, &lfs_files).await?;
+        // Pre-uploaded LFS entries take precedence if a caller somehow passed
+        // both an `AddSource::Lfs` and a fresh upload for the same path — but
+        // `prepared_lfs` and `add_ops` are partitioned so this is purely defensive.
+        for (path, info) in prepared_lfs {
+            uploaded.entry(path).or_insert(info);
+        }
+        Ok(uploaded)
     }
 
     /// Call the Hub preupload endpoint to determine the upload mode per file.
@@ -601,6 +629,8 @@ async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
             .await
             .map_err(|e| HFError::Other(format!("sha256 task failed: {e}")))?
         },
+        // Already-uploaded blobs carry their own SHA-256 OID; no recomputation.
+        AddSource::Lfs { sha256_oid, .. } => Ok(sha256_oid.clone()),
     }
 }
 
@@ -620,6 +650,11 @@ fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
             sample.truncate(n);
             Ok((size, sample))
         },
+        // Lfs sources skip preupload classification entirely; callers must not
+        // route them through `read_size_and_sample`.
+        AddSource::Lfs { .. } => Err(HFError::Other(
+            "internal: AddSource::Lfs has no inline sample; route through lfs_uploaded directly".to_string(),
+        )),
     }
 }
 

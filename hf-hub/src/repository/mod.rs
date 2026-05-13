@@ -26,6 +26,7 @@ pub mod files;
 pub mod listing;
 pub mod repo_type;
 pub mod upload;
+pub mod xet_session;
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -41,6 +42,7 @@ pub use files::{
 pub(crate) use files::{extract_file_size, extract_xet_hash};
 use futures::Stream;
 pub use repo_type::{RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
+pub use xet_session::{UploadedXetFile, XetUploadSession};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
 use url::Url;

@@ -14,6 +14,11 @@
 //! - Use [`sync`] for one-way directory mirroring between a local folder and a bucket prefix.
 
 pub mod sync;
+pub mod xet_session;
+
+pub use xet_session::BucketXetUploadSession;
+#[cfg(feature = "blocking")]
+pub use xet_session::BucketXetUploadSessionSync;
 
 use std::path::PathBuf;
 

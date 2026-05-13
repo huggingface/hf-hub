@@ -59,7 +59,13 @@ async fn fetch_xet_connection_info(
     })
 }
 
-fn repo_xet_token_url(client: &HFClient, token_type: &str, repo_id: &str, api_segment: &str, revision: &str) -> String {
+pub(crate) fn repo_xet_token_url(
+    client: &HFClient,
+    token_type: &str,
+    repo_id: &str,
+    api_segment: &str,
+    revision: &str,
+) -> String {
     format!("{}/api/{}/{}/xet-{}-token/{}", client.endpoint(), api_segment, repo_id, token_type, revision)
 }
 
@@ -179,21 +185,19 @@ pub(crate) struct XetBatchFile {
     pub filename: String,
 }
 
-/// Shared xet upload flow for both repositories and buckets.
+/// Open a fresh xet upload commit against the given token URL.
 ///
-/// Callers build the xet write-token URL with the appropriate variant
-/// (repo + revision, or bucket id) and pass the corresponding `owner_id`
-/// and `NotFoundContext`. `owner_kind` is used as a structured tracing
-/// field value (`"repo"` or `"bucket"`).
-async fn xet_upload_inner(
+/// Extracted so [`xet_upload_inner`] (the all-at-once flow) and the streaming
+/// session (built by
+/// [`HFRepository::open_xet_upload_session`](crate::repository::HFRepository::open_xet_upload_session)
+/// and the bucket equivalent) share one session-bring-up code path.
+pub(crate) async fn new_xet_upload_commit(
     hf_client: &HFClient,
-    files: &[(String, AddSource)],
     token_url: String,
     owner_id: &str,
     not_found_ctx: crate::error::NotFoundContext,
     owner_kind: &'static str,
-    progress: &Option<Progress>,
-) -> HFResult<Vec<XetFileInfo>> {
+) -> HFResult<xet::xet_session::XetUploadCommit> {
     tracing::info!(owner_kind, owner = owner_id, "fetching xet write token");
     let conn = fetch_xet_connection_info(hf_client, &token_url, Some(owner_id), not_found_ctx).await?;
     tracing::info!(endpoint = conn.endpoint.as_str(), "xet write token obtained, building session");
@@ -217,6 +221,25 @@ async fn xet_upload_inner(
     .build()
     .await
     .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+    Ok(commit)
+}
+
+/// Shared xet upload flow for both repositories and buckets.
+///
+/// Callers build the xet write-token URL with the appropriate variant
+/// (repo + revision, or bucket id) and pass the corresponding `owner_id`
+/// and `NotFoundContext`. `owner_kind` is used as a structured tracing
+/// field value (`"repo"` or `"bucket"`).
+async fn xet_upload_inner(
+    hf_client: &HFClient,
+    files: &[(String, AddSource)],
+    token_url: String,
+    owner_id: &str,
+    not_found_ctx: crate::error::NotFoundContext,
+    owner_kind: &'static str,
+    progress: &Option<Progress>,
+) -> HFResult<Vec<XetFileInfo>> {
+    let commit = new_xet_upload_commit(hf_client, token_url, owner_id, not_found_ctx, owner_kind).await?;
     tracing::info!("xet upload commit built, queuing file uploads");
 
     let mut task_ids_in_order = Vec::with_capacity(files.len());
@@ -226,6 +249,15 @@ async fn xet_upload_inner(
     for (target_path, source) in files {
         tracing::info!(path = target_path.as_str(), "queuing xet upload");
         let handle = match source {
+            // `xet_upload_inner` is only reached for sources that the caller
+            // wants xet to actually transfer. Pre-uploaded blobs short-circuit
+            // before this point.
+            AddSource::Lfs { .. } => {
+                return Err(HFError::Other(
+                    "internal: AddSource::Lfs reached xet_upload_inner; should have been routed via lfsFile map"
+                        .to_string(),
+                ));
+            },
             AddSource::File(path) => {
                 // Mimic xet-core's `std::path::absolute()` logic to derive the
                 // item_name that will appear in ItemProgressReport.
@@ -311,6 +343,7 @@ async fn xet_upload_inner(
             let size = match source {
                 AddSource::Bytes(b) => b.len() as u64,
                 AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+                AddSource::Lfs { size, .. } => *size,
             };
             FileProgress {
                 filename: target_path.clone(),

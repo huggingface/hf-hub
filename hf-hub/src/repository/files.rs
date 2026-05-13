@@ -203,6 +203,16 @@ impl CommitOperation {
         }
     }
 
+    /// Add an operation that references already-uploaded content in xet CAS.
+    /// Equivalent to `Add { path_in_repo, source: AddSource::lfs(sha256_oid, size) }`.
+    /// See [`AddSource::Lfs`] for when to use this.
+    pub fn add_lfs(path_in_repo: impl Into<String>, sha256_oid: impl Into<String>, size: u64) -> Self {
+        CommitOperation::Add {
+            path_in_repo: path_in_repo.into(),
+            source: AddSource::lfs(sha256_oid, size),
+        }
+    }
+
     /// Delete operation for a repository path.
     pub fn delete(path_in_repo: impl Into<String>) -> Self {
         CommitOperation::Delete {
@@ -217,6 +227,10 @@ impl CommitOperation {
 /// the path is stored, but file contents are read when the commit runs and are
 /// streamed where possible. Use [`Bytes`](Self::Bytes) for small in-memory content;
 /// the buffer is owned by the operation and may be cloned for LFS/xet uploads.
+/// Use [`Lfs`](Self::Lfs) when the content has already been uploaded to xet
+/// content-addressable storage out-of-band (via
+/// [`HFRepository::open_xet_upload_session`](super::HFRepository::open_xet_upload_session))
+/// and only the resulting hash needs to be referenced in the commit.
 ///
 /// `AddSource::File` is not a snapshot: the file must still exist, unchanged,
 /// when [`HFRepository::create_commit`] runs.
@@ -227,6 +241,25 @@ pub enum AddSource {
 
     /// In-memory contents used as the file body.
     Bytes(Vec<u8>),
+
+    /// Already-uploaded LFS blob — reference by SHA-256 OID without re-uploading.
+    ///
+    /// The bytes must already live in xet content-addressable storage for this
+    /// repository (typically because the caller used
+    /// [`HFRepository::open_xet_upload_session`](super::HFRepository::open_xet_upload_session)
+    /// to upload them incrementally). The commit emits an `lfsFile` entry
+    /// referencing `sha256_oid` and `size`; no preupload classification, no
+    /// SHA-256 recomputation, and no further xet transfer happens.
+    ///
+    /// Useful for producing a single commit that references content larger than
+    /// local RAM or disk: render/produce one chunk at a time, push it to xet,
+    /// keep only `(path, sha256_oid, size)` triples, then commit them all.
+    Lfs {
+        /// Lowercase hex SHA-256 of the file content as it sits in xet CAS.
+        sha256_oid: String,
+        /// Total file size in bytes.
+        size: u64,
+    },
 }
 
 impl AddSource {
@@ -238,6 +271,14 @@ impl AddSource {
     /// Construct an [`AddSource::Bytes`] from in-memory contents.
     pub fn bytes(bytes: impl Into<Vec<u8>>) -> Self {
         AddSource::Bytes(bytes.into())
+    }
+
+    /// Construct an [`AddSource::Lfs`] from a pre-uploaded blob descriptor.
+    pub fn lfs(sha256_oid: impl Into<String>, size: u64) -> Self {
+        AddSource::Lfs {
+            sha256_oid: sha256_oid.into(),
+            size,
+        }
     }
 }
 
@@ -417,5 +458,35 @@ mod tests {
         let json = r#"{"filename":"f","etag":"e","commit_hash":"c","xet_hash":null,"file_size":0}"#;
         let info: FileMetadataInfo = serde_json::from_str(json).unwrap();
         assert!(info.location.is_none());
+    }
+
+    #[test]
+    fn test_add_source_lfs_constructor() {
+        let s = super::AddSource::lfs("deadbeef", 42);
+        match s {
+            super::AddSource::Lfs { sha256_oid, size } => {
+                assert_eq!(sha256_oid, "deadbeef");
+                assert_eq!(size, 42);
+            },
+            _ => panic!("expected Lfs variant"),
+        }
+    }
+
+    #[test]
+    fn test_commit_operation_add_lfs() {
+        let op = super::CommitOperation::add_lfs("path/to/blob.bin", "cafebabe", 1024);
+        match op {
+            super::CommitOperation::Add { path_in_repo, source } => {
+                assert_eq!(path_in_repo, "path/to/blob.bin");
+                match source {
+                    super::AddSource::Lfs { sha256_oid, size } => {
+                        assert_eq!(sha256_oid, "cafebabe");
+                        assert_eq!(size, 1024);
+                    },
+                    _ => panic!("expected Lfs source"),
+                }
+            },
+            _ => panic!("expected Add"),
+        }
     }
 }
