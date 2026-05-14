@@ -72,6 +72,59 @@ async fn raw_diff_works() {
     );
 }
 
+/// Small xet-backed file in a stable public test repo
+/// (`hf-internal-testing/tiny-random-bert/pytorch_model.bin`, ~528 KiB).
+/// Exercising this drives the wasm download dispatch through the
+/// `paths-info`-detected xet path in `repository/download.rs`, which
+/// goes through `hf-xet`'s threaded-wasm runtime.
+const XET_REPO_OWNER: &str = "hf-internal-testing";
+const XET_REPO_NAME: &str = "tiny-random-bert";
+const XET_FILE_NAME: &str = "pytorch_model.bin";
+const XET_FILE_SIZE: usize = 540_217;
+
+#[wasm_bindgen_test]
+async fn download_xet_file_works() {
+    let bytes = client()
+        .model(XET_REPO_OWNER, XET_REPO_NAME)
+        .download_file_to_bytes()
+        .filename(XET_FILE_NAME)
+        .send()
+        .await
+        .expect("download xet-backed pytorch_model.bin");
+
+    assert_eq!(
+        bytes.len(),
+        XET_FILE_SIZE,
+        "xet-backed file size mismatch: got {} bytes, want {XET_FILE_SIZE}",
+        bytes.len(),
+    );
+    // PyTorch pickle archives are zip files, so the first two bytes are the
+    // ZIP local file header magic. A sanity check that we got the actual
+    // file content, not an LFS pointer or an error body.
+    assert_eq!(&bytes[..2], b"PK", "pytorch_model.bin did not start with the ZIP magic");
+}
+
+#[wasm_bindgen_test]
+async fn list_models_pagination_works() {
+    // Passing `limit >= 1000` short-circuits the `?limit=` query
+    // parameter (see `HFClient::list_models`), so the server returns its
+    // default page size (1000) and the pagination loop has to follow the
+    // `Link: rel="next"` header to satisfy the requested count.
+    const REQUESTED: usize = 1100;
+
+    let client = client();
+    let stream = client.list_models().limit(REQUESTED).send().expect("list_models builder");
+    futures_util::pin_mut!(stream);
+
+    let mut count = 0usize;
+    while let Some(item) = stream.next().await {
+        let _model = item.expect("model item");
+        count += 1;
+    }
+
+    assert_eq!(count, REQUESTED, "pagination short-changed us: got {count} of {REQUESTED} requested models");
+}
+
 #[wasm_bindgen_test]
 async fn list_spaces_search_works() {
     let client = client();

@@ -104,11 +104,14 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
-      - name: Install Rust Stable + wasm32 target
+      # The xet download test exercises `hf-xet`'s threaded wasm at runtime,
+      # which requires `-Z build-std` (and therefore nightly + `rust-src`).
+      - name: Install Rust Nightly + wasm32 target + rust-src
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
         with:
-          toolchain: stable
+          toolchain: nightly
           targets: wasm32-unknown-unknown
+          components: rust-src
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
