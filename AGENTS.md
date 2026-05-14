@@ -96,6 +96,60 @@ When adding or modifying code:
 - Verify with `./scripts/verify_wasm.sh` before pushing. CI runs the same check
   in the `wasm` job of `.github/workflows/rust.yml`.
 
+#### Build flags for wasm32-unknown-unknown
+
+There are two build modes, depending on whether you need `hf-xet` at runtime.
+
+**1. Compile-check / plain-HTTP runtime (no `hf-xet`).** Stable Rust, no
+special rustflags. `cargo check --target wasm32-unknown-unknown` is enough —
+this is what `scripts/verify_wasm.sh` runs and what the `wasm` CI job checks.
+The `[target.'cfg(target_family = "wasm")'.dependencies]` block in
+`hf-hub/Cargo.toml` already enables `getrandom`'s `js` feature so the wasm
+side of `tokio-retry → rand 0.8 → rand_core 0.6 → getrandom 0.2` compiles
+without further configuration on the consumer side.
+
+If you don't need the xet runtime, you can drop the threaded flags below and
+build/run plain `wasm32-unknown-unknown` on stable. The hf-hub paths that go
+through `hf-xet` (xet-backed `download_file_to_bytes` /
+`download_file_stream`, `xet_download_stream`) will still compile but will
+panic or hang if invoked — so this mode is only viable for callers that
+stick to plain-HTTP endpoints (`info`, `get_raw_diff`, `list_*`, non-LFS
+`download_file_to_bytes`).
+
+**2. Threaded wasm with `hf-xet` at runtime.** Required by
+`wasm/smoke/build_wasm.sh` and `wasm/tests/run_tests.sh`. `hf-xet` uses
+`tokio_with_wasm` Web Workers, which compile to wasm atomics and need shared
+memory at runtime. The required rustflags (passed via
+`CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS`) are:
+
+| Flag | Why |
+|------|-----|
+| `-C target-feature=+atomics,+bulk-memory,+mutable-globals` | Enables wasm threading features used by `hf-xet`'s `tokio_with_wasm` runtime. `+atomics` is unstable — hence nightly. |
+| `-C link-arg=--shared-memory` | Marks the module's memory as shared (needed for atomics). |
+| `-C link-arg=--max-memory=1073741824` | 1 GiB cap; required to declare a `--shared-memory` import. |
+| `-C link-arg=--import-memory` | Lets the host pass in a `SharedArrayBuffer` instead of allocating inside the module. |
+| `-C link-arg=--export=__wasm_init_tls` <br> `-C link-arg=--export=__tls_size` <br> `-C link-arg=--export=__tls_align` <br> `-C link-arg=--export=__tls_base` <br> `-C link-arg=--export=__heap_base` | Symbols the worker bootstrap calls into to initialise per-thread storage. |
+| `--cfg getrandom_backend="wasm_js"` | Routes `getrandom` 0.3 (transitive via `hf-xet`) through `wasm-bindgen`. The 0.2 dependency reaches the same backend via the `js` feature in `hf-hub/Cargo.toml`. |
+
+You also need nightly + `-Z build-std=std,panic_abort` so `std` itself is
+rebuilt with `+atomics`. Browsers must serve the page with
+`Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp` so `SharedArrayBuffer` is
+available; `wasm-bindgen-test-runner` (≥ 0.2.121, used by
+`wasm/tests/run_tests.sh`) sets those headers automatically.
+
+#### Cargo features
+
+`hf-hub` exposes three optional cargo features. None of them are
+wasm-specific, but `blocking` is **not** wasm-compatible because it spins up
+a multi-threaded tokio runtime.
+
+| Feature | Default? | Notes |
+|---------|----------|-------|
+| `blocking` | off | Synchronous `*Sync` wrappers in `blocking.rs`. Pulls in `tokio/rt`. Native only. |
+| `rustls-tls` | off | Force the rustls TLS backend on reqwest's native build. Has no effect on wasm — the browser owns TLS via `fetch`. |
+| `default` | (empty) | No features by default. |
+
 ### Method builders (bon)
 
 All public methods on `HFClient`, `HFRepository`, `HFSpace`, and `HFBucket` use `bon`'s
