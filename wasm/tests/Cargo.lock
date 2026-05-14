@@ -968,7 +968,7 @@ dependencies = [
 [[package]]
 name = "hf-xet"
 version = "1.5.2"
-source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#ee38456f4c570b4b40962e2a69ef927bca61adb2"
+source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#1f24d296c036c549cb0d65ffd28d7f958aa76a0f"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3442,7 +3442,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 [[package]]
 name = "xet-client"
 version = "1.5.2"
-source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#ee38456f4c570b4b40962e2a69ef927bca61adb2"
+source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#1f24d296c036c549cb0d65ffd28d7f958aa76a0f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3480,7 +3480,7 @@ dependencies = [
 [[package]]
 name = "xet-core-structures"
 version = "1.5.2"
-source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#ee38456f4c570b4b40962e2a69ef927bca61adb2"
+source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#1f24d296c036c549cb0d65ffd28d7f958aa76a0f"
 dependencies = [
  "async-trait",
  "base64",
@@ -3516,7 +3516,7 @@ dependencies = [
 [[package]]
 name = "xet-data"
 version = "1.5.2"
-source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#ee38456f4c570b4b40962e2a69ef927bca61adb2"
+source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#1f24d296c036c549cb0d65ffd28d7f958aa76a0f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3550,7 +3550,7 @@ dependencies = [
 [[package]]
 name = "xet-runtime"
 version = "1.5.2"
-source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#ee38456f4c570b4b40962e2a69ef927bca61adb2"
+source = "git+https://github.com/huggingface/xet-core?branch=feat%2Fwasm-xet-pkg-compile#1f24d296c036c549cb0d65ffd28d7f958aa76a0f"
 dependencies = [
  "anyhow",
  "async-trait",
