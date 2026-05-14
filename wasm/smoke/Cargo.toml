@@ -3,13 +3,14 @@ name = "hf-hub-wasm-smoke"
 version = "0.0.0"
 edition = "2024"
 publish = false
-description = "Compile-time verification that hf-hub's wasm-safe subset works on wasm32-unknown-unknown."
+description = "wasm32-unknown-unknown example and compile-time check for hf-hub: exposes HFRepository::download_file_stream to JS via wasm-bindgen."
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
+bytes = "1"
 hf-hub = { path = "../../hf-hub" }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

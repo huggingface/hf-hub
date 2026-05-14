@@ -952,6 +952,7 @@ dependencies = [
 name = "hf-hub-wasm-smoke"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "hf-hub",
  "js-sys",
