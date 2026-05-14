@@ -25,9 +25,11 @@ use reqwest::header::IF_NONE_MATCH;
 #[cfg(not(target_family = "wasm"))]
 use serde::Deserialize;
 
+use super::files::extract_file_size;
+#[cfg(not(target_family = "wasm"))]
+use super::files::extract_xet_hash;
 #[cfg(not(target_family = "wasm"))]
 use super::files::{extract_commit_hash, extract_etag, matches_any_glob};
-use super::files::{extract_file_size, extract_xet_hash};
 #[cfg(not(target_family = "wasm"))]
 use super::{FileMetadataInfo, RepoTreeEntry};
 use super::{HFRepository, RepoType};
@@ -121,26 +123,70 @@ impl<T: RepoType> HFRepository<T> {
             .download_url(T::default().url_prefix(), &repo_path, revision, &params.filename);
 
         let headers = self.hf_client.auth_headers();
-        let head_response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
-        })
-        .await?;
-        let head_response = self
-            .hf_client
-            .check_response(
-                head_response,
-                Some(&repo_path),
-                crate::error::NotFoundContext::Entry {
-                    path: params.filename.clone(),
-                },
-            )
-            .await?;
 
-        if let Some(xet_hash) = extract_xet_hash(&head_response) {
-            let file_size: u64 = extract_file_size(&head_response).unwrap_or_else(|| {
-                    tracing::warn!(url = %url, "missing or invalid Content-Length/X-Linked-Size header for xet file, defaulting file size to 0");
-                    0
-                });
+        // Determine whether the file is xet-backed and learn its size.
+        //
+        // Native: HEAD the resolve URL and read `X-Xet-Hash` /
+        // `Content-Length` / `X-Linked-Size` from the response headers.
+        //
+        // Wasm: the resolve URL 302-redirects to a CAS blob URL, and
+        // browsers do not surface intermediate-response headers when
+        // following redirects (this is the Fetch spec, not server-side
+        // CORS — the headers ARE in `Access-Control-Expose-Headers` on the
+        // 302, but JS only ever sees the final response's headers). Using
+        // `redirect: 'manual'` doesn't help either: that produces an
+        // opaque-redirect response with no readable headers. So on wasm we
+        // dispatch via `paths-info`, a non-redirecting JSON endpoint that
+        // returns the same metadata in a body that isn't header-filtered.
+        let (xet_hash, file_size_hint): (Option<String>, Option<u64>) = {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                let head_response = retry::retry(self.hf_client.retry_config(), || {
+                    self.hf_client.http_client().head(&url).headers(headers.clone()).send()
+                })
+                .await?;
+                let head_response = self
+                    .hf_client
+                    .check_response(
+                        head_response,
+                        Some(&repo_path),
+                        crate::error::NotFoundContext::Entry {
+                            path: params.filename.clone(),
+                        },
+                    )
+                    .await?;
+                (extract_xet_hash(&head_response), extract_file_size(&head_response))
+            }
+            #[cfg(target_family = "wasm")]
+            {
+                use super::RepoTreeEntry;
+                let entries = self
+                    .get_paths_info()
+                    .paths(vec![params.filename.clone()])
+                    .revision(revision.to_string())
+                    .send()
+                    .await?;
+                let entry = entries
+                    .into_iter()
+                    .find(|e| matches!(e, RepoTreeEntry::File { path, .. } if path == &params.filename));
+                match entry {
+                    Some(RepoTreeEntry::File { xet_hash, size, .. }) => (xet_hash, Some(size)),
+                    _ => {
+                        return Err(HFError::EntryNotFound {
+                            path: params.filename.clone(),
+                            repo_id: repo_path.clone(),
+                            context: None,
+                        });
+                    },
+                }
+            }
+        };
+
+        if let Some(xet_hash) = xet_hash {
+            let file_size: u64 = file_size_hint.unwrap_or_else(|| {
+                tracing::warn!(url = %url, "missing file size for xet file, defaulting to 0");
+                0
+            });
 
             let content_length = params.range.as_ref().map(|r| r.end.saturating_sub(r.start)).or(Some(file_size));
 
