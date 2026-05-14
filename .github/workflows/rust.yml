@@ -98,6 +98,39 @@ jobs:
       - name: Check hf-hub builds for wasm32-unknown-unknown
         run: ./scripts/verify_wasm.sh
 
+  wasm-test:
+    name: WASM integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Rust Stable + wasm32 target
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+
+      - name: Install wasm-bindgen-cli 0.2.121
+        run: cargo install -f wasm-bindgen-cli --version 0.2.121
+
+      # ubuntu-latest runners ship Chrome + chromedriver preinstalled; expose
+      # chromedriver via the CHROMEDRIVER env var so wasm-bindgen-test-runner
+      # picks it up instead of auto-downloading a copy.
+      - name: Locate chromedriver
+        run: |
+          set -e
+          if command -v chromedriver >/dev/null 2>&1; then
+            echo "CHROMEDRIVER=$(command -v chromedriver)" >> "$GITHUB_ENV"
+          else
+            echo "chromedriver not found on PATH" >&2
+            exit 1
+          fi
+
+      - name: Run wasm integration tests
+        run: ./wasm/tests/run_tests.sh
+
   docs:
     name: Docs
     runs-on: ubuntu-latest

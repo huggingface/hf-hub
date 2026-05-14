@@ -29,4 +29,8 @@ echo "==> cargo check (wasm/smoke) — exercises HFRepository::download_file_str
 (cd wasm/smoke && cargo check --target wasm32-unknown-unknown)
 
 echo
+echo "==> cargo check --tests (wasm/tests) — wasm-bindgen-test integration tests"
+(cd wasm/tests && cargo check --target wasm32-unknown-unknown --tests)
+
+echo
 echo "wasm32-unknown-unknown build is green."
