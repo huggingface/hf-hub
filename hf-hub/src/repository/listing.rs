@@ -29,6 +29,8 @@ impl<T: RepoType> HFRepository<T> {
     /// # Parameters
     ///
     /// - `revision`: Git revision to list. Defaults to the main branch.
+    /// - `path_in_repo`: repository-relative subdirectory to list. Defaults to the repo root. Must NOT start or end
+    ///   with `/`. Path segments are URL-encoded automatically.
     /// - `recursive` (default `false`): traverse subdirectories.
     /// - `expand` (default `false`): include per-file metadata such as size, LFS info, and last-commit summaries.
     /// - `limit`: cap the total number of entries yielded.
@@ -38,6 +40,10 @@ impl<T: RepoType> HFRepository<T> {
         /// Git revision to list. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
+        /// Repository-relative subdirectory to list. Defaults to the repo root.
+        /// Must NOT start or end with `/`. Path segments are URL-encoded automatically.
+        #[builder(into)]
+        path_in_repo: Option<String>,
         /// Traverse subdirectories.
         #[builder(default)]
         recursive: bool,
@@ -49,7 +55,13 @@ impl<T: RepoType> HFRepository<T> {
     ) -> HFResult<impl Stream<Item = HFResult<RepoTreeEntry>> + '_> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url_str = format!("{}/tree/{}", self.hf_client.api_url(T::default().plural(), &self.repo_path()), revision);
-        let url = Url::parse(&url_str)?;
+        let mut url = Url::parse(&url_str)?;
+        if let Some(path) = path_in_repo.as_deref() {
+            let mut segments = url.path_segments_mut().expect("base URL is not cannot-be-a-base");
+            for seg in path.split('/').filter(|s| !s.is_empty()) {
+                segments.push(seg);
+            }
+        }
 
         let mut query: Vec<(String, String)> = Vec::new();
         if recursive {
@@ -184,6 +196,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     pub fn list_tree(
         &self,
         #[builder(into)] revision: Option<String>,
+        #[builder(into)] path_in_repo: Option<String>,
         #[builder(default)] recursive: bool,
         #[builder(default)] expand: bool,
         limit: Option<usize>,
@@ -193,6 +206,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .inner
                 .list_tree()
                 .maybe_revision(revision)
+                .maybe_path_in_repo(path_in_repo)
                 .recursive(recursive)
                 .expand(expand)
                 .maybe_limit(limit)
