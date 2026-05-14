@@ -17,7 +17,7 @@ set -ex
 
 cd "$(dirname "$0")"
 
-WASM_BINDGEN_VERSION="0.2.100"
+WASM_BINDGEN_VERSION="0.2.121"
 
 if command -v wasm-bindgen >/dev/null 2>&1; then
     INSTALLED_WASM_BINDGEN_VERSION="$(wasm-bindgen --version | awk '{print $2}')"

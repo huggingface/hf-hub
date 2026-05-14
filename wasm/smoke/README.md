@@ -48,7 +48,7 @@ export function download_file_bytes(
 Outputs `pkg/{hf_hub_wasm_smoke.js, hf_hub_wasm_smoke.d.ts,
 hf_hub_wasm_smoke_bg.wasm}`.
 
-Requires a nightly Rust toolchain plus `wasm-bindgen-cli` 0.2.100 — the
+Requires a nightly Rust toolchain plus `wasm-bindgen-cli` 0.2.121 — the
 script installs the pinned `wasm-bindgen-cli` version if it's missing. The
 same threaded-wasm flags (`+atomics,+bulk-memory,+mutable-globals`,
 shared memory, `getrandom_backend=wasm_js`) used by
