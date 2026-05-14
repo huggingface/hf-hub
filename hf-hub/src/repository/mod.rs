@@ -25,6 +25,10 @@ pub mod download;
 pub mod files;
 pub mod listing;
 pub mod repo_type;
+// `upload` is filesystem-heavy across the board: every code path reads bytes
+// from local files via `std::fs` / `std::io` / `tokio::task::spawn_blocking`,
+// so the whole module is wasm-incompatible.
+#[cfg(not(target_family = "wasm"))]
 pub mod upload;
 
 use std::collections::HashMap;
@@ -38,6 +42,7 @@ pub use files::{
     AddSource, BlobLfsInfo, BlobSecurityInfo, CommitInfo, CommitOperation, FileMetadataInfo, LastCommitInfo,
     RepoTreeEntry,
 };
+#[cfg(not(target_family = "wasm"))]
 pub(crate) use files::{extract_file_size, extract_xet_hash};
 use futures::Stream;
 pub use repo_type::{RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};

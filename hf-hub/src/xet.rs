@@ -2,20 +2,29 @@
 //! (session management, upload/download groups, progress pollers) used by
 //! repositories and buckets for high-performance Xet transfers.
 
+#[cfg(not(target_family = "wasm"))]
 use std::collections::HashMap;
+#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Deserialize;
 #[cfg(test)]
 use xet::error::XetError;
-use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileInfo, XetFileMetadata, XetFileUpload};
+use xet::xet_session::XetFileInfo;
+#[cfg(not(target_family = "wasm"))]
+use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileMetadata, XetFileUpload};
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, XetOperation};
+#[cfg(not(target_family = "wasm"))]
 use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent};
-use crate::repository::{AddSource, HFRepository, RepoType};
+#[cfg(not(target_family = "wasm"))]
+use crate::repository::AddSource;
+use crate::repository::{HFRepository, RepoType};
 use crate::retry;
 
 #[derive(Debug, Deserialize)]
@@ -26,6 +35,7 @@ struct XetTokenResponse {
     cas_url: String,
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[derive(Default)]
 pub(crate) struct XetState {
     pub(crate) session: Option<xet::xet_session::XetSession>,
@@ -80,6 +90,7 @@ fn is_session_poisoned(err: &XetError) -> bool {
     )
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) struct TrackedDownload {
     pub handle: XetFileDownload,
     pub filename: String,
@@ -87,6 +98,7 @@ pub(crate) struct TrackedDownload {
     pub complete_emitted: AtomicBool,
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn emit_remaining_completes(progress: &Option<Progress>, tracked: &[TrackedDownload]) {
     let files: Vec<FileProgress> = tracked
         .iter()
@@ -103,6 +115,7 @@ fn emit_remaining_completes(progress: &Option<Progress>, tracked: &[TrackedDownl
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn spawn_download_progress_poller(
     progress: &Option<Progress>,
     group: &xet::xet_session::XetFileDownloadGroup,
@@ -172,6 +185,7 @@ fn spawn_download_progress_poller(
     }))
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) struct XetBatchFile {
     pub hash: String,
     pub file_size: u64,
@@ -185,6 +199,7 @@ pub(crate) struct XetBatchFile {
 /// (repo + revision, or bucket id) and pass the corresponding `owner_id`
 /// and `NotFoundContext`. `owner_kind` is used as a structured tracing
 /// field value (`"repo"` or `"bucket"`).
+#[cfg(not(target_family = "wasm"))]
 async fn xet_upload_inner(
     hf_client: &HFClient,
     files: &[(String, AddSource)],
@@ -343,6 +358,7 @@ async fn xet_upload_inner(
     Ok(xet_file_infos)
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl<T: RepoType> HFRepository<T> {
     pub(crate) async fn xet_download_to_local_dir(
         &self,
@@ -653,6 +669,7 @@ impl<T: RepoType> HFRepository<T> {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl crate::buckets::HFBucket {
     pub(crate) async fn xet_upload(
         &self,
@@ -749,6 +766,67 @@ impl crate::buckets::HFBucket {
         }
 
         Ok(())
+    }
+}
+
+/// Wasm xet streaming download.
+///
+/// Native code reuses a cached `XetSession` stored on `HFClient` (set up by
+/// `HFClientBuilder` and refreshed on poison). That cache, the refresh
+/// logic, and the `tokio::sync::Mutex` backing it aren't available on wasm,
+/// so this variant builds a fresh `XetSession` per call. The shape mirrors
+/// the native `xet_download_stream` so `download_file_stream_impl` can call
+/// it identically on both targets.
+#[cfg(target_family = "wasm")]
+impl<T: RepoType> HFRepository<T> {
+    pub(crate) async fn xet_download_stream(
+        &self,
+        revision: &str,
+        file_hash: &str,
+        file_size: u64,
+        range: Option<std::ops::Range<u64>>,
+    ) -> HFResult<impl futures::Stream<Item = HFResult<bytes::Bytes>> + use<T>> {
+        let repo_path = self.repo_path();
+        let api_segment = T::default().plural();
+        let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
+        let conn = fetch_xet_connection_info(
+            &self.hf_client,
+            &token_url,
+            Some(&repo_path),
+            crate::error::NotFoundContext::Repo,
+        )
+        .await?;
+
+        let session = xet::xet_session::XetSessionBuilder::new()
+            .build()
+            .map_err(|e| HFError::xet(XetOperation::Session, e))?;
+
+        let group = session
+            .new_download_stream_group()
+            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?
+            .with_endpoint(conn.endpoint.clone())
+            .with_token_info(conn.access_token.clone(), conn.expiration_unix_epoch)
+            .with_token_refresh_url(token_url, self.hf_client.auth_headers())
+            .build()
+            .await
+            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?;
+
+        let file_info = XetFileInfo::new(file_hash.to_string(), file_size);
+
+        let mut stream = group
+            .download_stream(file_info, range)
+            .await
+            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?;
+
+        stream.start();
+
+        Ok(futures::stream::unfold(stream, |mut stream| async move {
+            match stream.next().await {
+                Ok(Some(bytes)) => Some((Ok(bytes), stream)),
+                Ok(None) => None,
+                Err(e) => Some((Err(HFError::xet(XetOperation::StreamDownload, e)), stream)),
+            }
+        }))
     }
 }
 

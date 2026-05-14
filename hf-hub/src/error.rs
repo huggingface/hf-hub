@@ -207,9 +207,6 @@ pub enum HFError {
     InvalidParameter(String),
 
     /// Raw diff parsing error.
-    // Gated off on wasm because the `repository` module — and therefore
-    // `HFDiffParseError` — is non-wasm.
-    #[cfg(not(target_family = "wasm"))]
     #[error(transparent)]
     DiffParse(#[from] crate::repository::HFDiffParseError),
 

@@ -203,26 +203,20 @@ mod retry;
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 mod blocking;
 
-// Filesystem-heavy modules (cache, bucket sync, snapshot downloads, blocking wrappers)
-// can't compile for `wasm32-unknown-unknown`. On wasm we expose only the API surface
-// that does pure HTTP / xet-streaming: `HFClient`, error types, and the
-// `wasm_streaming` helper. See `verify_wasm.sh` and `wasm_streaming.rs`.
+// On `wasm32-unknown-unknown` the only modules that don't compile are the ones
+// that touch the filesystem, spawn OS processes, or rely on the multi-threaded
+// tokio runtime (`cache`, `buckets`, `blocking`). Pure-HTTP modules — `repository`,
+// `spaces`, `users` — are exposed on wasm too, with individual fs-using methods
+// inside them gated. See `verify_wasm.sh`.
 #[cfg(not(target_family = "wasm"))]
 pub mod buckets;
 #[cfg(not(target_family = "wasm"))]
 pub mod cache;
 pub mod progress;
-#[cfg(not(target_family = "wasm"))]
 pub mod repository;
-#[cfg(not(target_family = "wasm"))]
 pub mod spaces;
-#[cfg(not(target_family = "wasm"))]
 pub mod users;
-#[cfg(not(target_family = "wasm"))]
 pub(crate) mod xet;
-
-#[cfg(target_family = "wasm")]
-pub mod wasm_streaming;
 
 #[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
@@ -234,6 +228,5 @@ pub use client::{HFClient, HFClientBuilder};
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult, XetOperation};
-#[cfg(not(target_family = "wasm"))]
 #[doc(inline)]
 pub use repository::{HFRepository, RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};

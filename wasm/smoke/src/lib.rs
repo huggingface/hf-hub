@@ -1,7 +1,7 @@
 //! `hf-hub` wasm32 smoke verification.
 //!
 //! This crate exists solely to prove that the wasm-safe subset of `hf-hub`
-//! (HFClient + the `wasm_streaming::xet_stream_file` helper) compiles and is
+//! (HFClient + `HFRepository::download_file_stream`) compiles and is
 //! callable in a wasm-bindgen environment.
 //!
 //! Build with: `wasm-pack build wasm/smoke --target web`
@@ -14,15 +14,14 @@
 #![cfg(target_family = "wasm")]
 
 use futures_util::StreamExt;
-use hf_hub::HFClientBuilder;
-use hf_hub::wasm_streaming::xet_stream_file;
+use hf_hub::{HFClientBuilder, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
 use wasm_bindgen::prelude::*;
 
-/// Stream the bytes of a xet-backed file from a public Hugging Face Hub repo
-/// and return the total number of bytes seen.
+/// Stream the bytes of a file from a public Hugging Face Hub repo and return
+/// the total number of bytes seen.
 ///
-/// `repo_type_plural` should be `"models"`, `"datasets"`, or `"spaces"`.
-/// `repo_id` is `"namespace/name"`.
+/// `repo_type_plural` should be `"models"`, `"datasets"`, `"spaces"`, or
+/// `"kernels"`. `owner` and `name` make up the `"owner/name"` repo id.
 ///
 /// In a browser the caller is responsible for the COOP/COEP headers needed by
 /// the threaded wasm in `hf-xet` (see the xet-core
@@ -32,7 +31,8 @@ pub async fn smoke_stream_total_bytes(
     endpoint: String,
     token: Option<String>,
     repo_type_plural: String,
-    repo_id: String,
+    owner: String,
+    name: String,
     revision: String,
     filename: String,
 ) -> Result<f64, JsValue> {
@@ -42,9 +42,41 @@ pub async fn smoke_stream_total_bytes(
     }
     let client = builder.build().map_err(|e| JsValue::from_str(&format!("{e}")))?;
 
-    let stream = xet_stream_file(&client, &repo_type_plural, &repo_id, &revision, &filename, None)
-        .await
-        .map_err(|e| JsValue::from_str(&format!("{e}")))?;
+    let (_len, stream) = match repo_type_plural.as_str() {
+        "models" => client
+            .repository::<RepoTypeModel>(owner, name)
+            .download_file_stream()
+            .filename(filename)
+            .revision(revision)
+            .send()
+            .await
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?,
+        "datasets" => client
+            .repository::<RepoTypeDataset>(owner, name)
+            .download_file_stream()
+            .filename(filename)
+            .revision(revision)
+            .send()
+            .await
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?,
+        "spaces" => client
+            .repository::<RepoTypeSpace>(owner, name)
+            .download_file_stream()
+            .filename(filename)
+            .revision(revision)
+            .send()
+            .await
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?,
+        "kernels" => client
+            .repository::<RepoTypeKernel>(owner, name)
+            .download_file_stream()
+            .filename(filename)
+            .revision(revision)
+            .send()
+            .await
+            .map_err(|e| JsValue::from_str(&format!("{e}")))?,
+        other => return Err(JsValue::from_str(&format!("unknown repo_type_plural: {other}"))),
+    };
     futures_util::pin_mut!(stream);
 
     let mut total: u64 = 0;
