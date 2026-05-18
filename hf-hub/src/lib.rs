@@ -216,4 +216,6 @@ pub use client::{HFClient, HFClientBuilder};
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult, XetOperation};
 #[doc(inline)]
-pub use repository::{HFRepository, RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
+pub use repository::{
+    HFRepository, RepoType, RepoTypeAny, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace,
+};

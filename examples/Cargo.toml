@@ -24,6 +24,10 @@ name = "repository_handles"
 path = "repository_handles.rs"
 
 [[example]]
+name = "repo_type_any"
+path = "repo_type_any.rs"
+
+[[example]]
 name = "files"
 path = "files.rs"
 

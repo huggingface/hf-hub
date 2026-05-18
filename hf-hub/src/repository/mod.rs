@@ -40,7 +40,7 @@ pub use files::{
 };
 pub(crate) use files::{extract_file_size, extract_xet_hash};
 use futures::Stream;
-pub use repo_type::{RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
+pub use repo_type::{RepoType, RepoTypeAny, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
 use url::Url;
