@@ -65,13 +65,21 @@ pub enum OutputFormat {
     Json,
 }
 
-/// User-facing CLI flag selecting the repo kind. Dispatched to the typed
-/// `HFClient::{model, dataset, space}` / `client.create_repository().repo_type(...)`
-/// paths at the call site via a `match` (see [`crate::with_typed_repo`] /
-/// [`crate::dispatch_repo_type`]).
+/// User-facing CLI flag selecting the repo kind. Converts to
+/// [`hf_hub::RepoTypeAny`] for use with the SDK's repo factories and builders.
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum RepoTypeArg {
     Model,
     Dataset,
     Space,
+}
+
+impl From<RepoTypeArg> for hf_hub::RepoTypeAny {
+    fn from(arg: RepoTypeArg) -> Self {
+        match arg {
+            RepoTypeArg::Model => hf_hub::RepoTypeAny::Model,
+            RepoTypeArg::Dataset => hf_hub::RepoTypeAny::Dataset,
+            RepoTypeArg::Space => hf_hub::RepoTypeAny::Space,
+        }
+    }
 }

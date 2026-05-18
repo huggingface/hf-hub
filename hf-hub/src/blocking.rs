@@ -1,4 +1,3 @@
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use crate::client::HFClient;
@@ -42,7 +41,6 @@ pub struct HFClientSync {
 pub struct HFRepositorySync<T: RepoType> {
     pub(crate) inner: Arc<HFRepository<T>>,
     pub(crate) runtime: Arc<tokio::runtime::Runtime>,
-    _ty: PhantomData<fn() -> T>,
 }
 
 impl<T: RepoType> Clone for HFRepositorySync<T> {
@@ -50,7 +48,6 @@ impl<T: RepoType> Clone for HFRepositorySync<T> {
         Self {
             inner: Arc::clone(&self.inner),
             runtime: Arc::clone(&self.runtime),
-            _ty: PhantomData,
         }
     }
 }
@@ -116,36 +113,41 @@ impl HFClientSync {
     /// Creates a blocking handle for any repo kind via a turbofished generic.
     ///
     /// See [`HFClient::repository`].
-    pub fn repository<T: RepoType>(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync<T> {
-        HFRepositorySync::new(self.clone(), owner, name)
+    pub fn repository<T: RepoType>(
+        &self,
+        repo_type: T,
+        owner: impl Into<String>,
+        name: impl Into<String>,
+    ) -> HFRepositorySync<T> {
+        HFRepositorySync::new(self.clone(), repo_type, owner, name)
     }
 
     /// Creates a blocking handle for a model repository.
     ///
     /// See [`HFClient::model`].
     pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync<RepoTypeModel> {
-        self.repository::<RepoTypeModel>(owner, name)
+        self.repository(RepoTypeModel, owner, name)
     }
 
     /// Creates a blocking handle for a dataset repository.
     ///
     /// See [`HFClient::dataset`].
     pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync<RepoTypeDataset> {
-        self.repository::<RepoTypeDataset>(owner, name)
+        self.repository(RepoTypeDataset, owner, name)
     }
 
     /// Creates a blocking handle for a Space repository.
     ///
     /// See [`HFClient::space`].
     pub fn space(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync<RepoTypeSpace> {
-        self.repository::<RepoTypeSpace>(owner, name)
+        self.repository(RepoTypeSpace, owner, name)
     }
 
     /// Creates a blocking handle for a kernel repository.
     ///
     /// See [`HFClient::kernel`].
     pub fn kernel(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepositorySync<RepoTypeKernel> {
-        self.repository::<RepoTypeKernel>(owner, name)
+        self.repository(RepoTypeKernel, owner, name)
     }
 
     /// Creates a blocking handle for a bucket.
@@ -160,11 +162,10 @@ impl<T: RepoType> HFRepositorySync<T> {
     /// Creates a blocking repository handle.
     ///
     /// See [`HFRepository::new`].
-    pub fn new(client: HFClientSync, owner: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn new(client: HFClientSync, repo_type: T, owner: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
-            inner: Arc::new(HFRepository::new(client.inner.clone(), owner, name)),
+            inner: Arc::new(HFRepository::new(client.inner.clone(), repo_type, owner, name)),
             runtime: client.runtime.clone(),
-            _ty: PhantomData,
         }
     }
 
@@ -185,11 +186,11 @@ impl<T: RepoType> HFRepositorySync<T> {
         self.inner.repo_path()
     }
 
-    /// The marker for this handle's repo kind, equivalent to `T::default()`. Call
+    /// The marker for this handle's repo kind. Call
     /// [`RepoType::singular`] / [`RepoType::plural`] / [`RepoType::url_prefix`] on it
     /// to get the corresponding string.
-    pub fn repo_type(&self) -> impl RepoType {
-        T::default()
+    pub fn repo_type(&self) -> &T {
+        self.inner.repo_type()
     }
 }
 

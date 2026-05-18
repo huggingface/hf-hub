@@ -26,9 +26,14 @@ async fn main() -> hf_hub::HFResult<()> {
 
     for (kind_str, owner, name) in inputs {
         let kind: RepoTypeAny = kind_str.parse()?;
-        let repo = client.repository::<RepoTypeAny>(owner, name);
+        let repo = client.repository(kind, owner, name);
 
-        println!("{}: {} (url_prefix={:?})", kind.singular(), repo.repo_path(), kind.url_prefix());
+        println!(
+            "{}: {} (api segment={:?})",
+            repo.repo_type().singular(),
+            repo.repo_path(),
+            repo.repo_type().plural()
+        );
 
         let exists = repo.exists().send().await?;
         println!("  exists: {exists}");

@@ -39,7 +39,7 @@ mod sealed {
 /// let repo = client.dataset("rajpurkar", "squad");
 ///
 /// // Explicit marker — useful when the kind comes from a generic context:
-/// let repo = client.repository::<RepoTypeDataset>("rajpurkar", "squad");
+/// let repo = client.repository(RepoTypeDataset, "rajpurkar", "squad");
 /// # let _ = repo; Ok(()) }
 /// ```
 ///
@@ -328,18 +328,38 @@ mod repo_type_any_tests {
         let client = HFClient::builder().build().unwrap();
 
         let kind: RepoTypeAny = "datasets".parse().unwrap();
-        let repo: HFRepository<RepoTypeAny> = client.repository::<RepoTypeAny>("rajpurkar", "squad");
+        let repo: HFRepository<RepoTypeAny> = client.repository(kind, "rajpurkar", "squad");
 
         assert_eq!(repo.owner(), "rajpurkar");
         assert_eq!(repo.name(), "squad");
         assert_eq!(repo.repo_path(), "rajpurkar/squad");
-        assert_eq!(kind.singular(), "dataset");
-        assert_eq!(kind.plural(), "datasets");
+        assert_eq!(repo.repo_type().singular(), "dataset");
+        assert_eq!(repo.repo_type().plural(), "datasets");
+        assert_eq!(repo.repo_type().url_prefix(), "datasets/");
     }
 
     #[test]
     fn default_is_model() {
         assert_eq!(RepoTypeAny::default(), RepoTypeAny::Model);
         assert_eq!(RepoTypeAny::default().singular(), "model");
+    }
+
+    #[test]
+    fn handle_repo_type_reflects_runtime_kind() {
+        let client = HFClient::builder().build().unwrap();
+        for (kind_str, expected_singular, expected_plural, expected_prefix) in [
+            ("model", "model", "models", ""),
+            ("models", "model", "models", ""),
+            ("dataset", "dataset", "datasets", "datasets/"),
+            ("datasets", "dataset", "datasets", "datasets/"),
+            ("space", "space", "spaces", "spaces/"),
+            ("kernels", "kernel", "kernels", "kernels/"),
+        ] {
+            let kind: RepoTypeAny = kind_str.parse().unwrap();
+            let repo = client.repository(kind, "owner", "name");
+            assert_eq!(repo.repo_type().singular(), expected_singular, "input {kind_str:?}");
+            assert_eq!(repo.repo_type().plural(), expected_plural, "input {kind_str:?}");
+            assert_eq!(repo.repo_type().url_prefix(), expected_prefix, "input {kind_str:?}");
+        }
     }
 }
