@@ -73,7 +73,11 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
         multi.map(|multi| CliProgressHandler::new(multi).into())
     };
 
-    let repo = crate::util::typed_repo(client, &args.repo_id, args.r#type);
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     let url = do_upload(client, repo, args, local_path, handler).await?;
     Ok(CommandResult::Raw(url))
 }

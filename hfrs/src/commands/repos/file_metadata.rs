@@ -29,7 +29,11 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
-    let repo = crate::util::typed_repo(client, &args.repo_id, args.r#type);
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     let metadata = repo
         .get_file_metadata()
         .filepath(args.filepath)

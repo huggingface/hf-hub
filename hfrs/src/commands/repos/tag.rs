@@ -84,7 +84,11 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
 }
 
 async fn create(client: &HFClient, args: TagCreateArgs) -> Result<CommandResult> {
-    let repo = crate::util::typed_repo(client, &args.repo_id, args.r#type);
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     repo.create_tag()
         .tag(args.tag)
         .maybe_revision(args.revision)
@@ -95,13 +99,21 @@ async fn create(client: &HFClient, args: TagCreateArgs) -> Result<CommandResult>
 }
 
 async fn delete(client: &HFClient, args: TagDeleteArgs) -> Result<CommandResult> {
-    let repo = crate::util::typed_repo(client, &args.repo_id, args.r#type);
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     repo.delete_tag().tag(args.tag).send().await?;
     Ok(CommandResult::Silent)
 }
 
 async fn list(client: &HFClient, args: TagListArgs) -> Result<CommandResult> {
-    let repo = crate::util::typed_repo(client, &args.repo_id, args.r#type);
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     let refs = repo.list_refs().include_pull_requests(false).send().await?;
 
     if refs.tags.is_empty() && matches!(args.format, OutputFormat::Table) {

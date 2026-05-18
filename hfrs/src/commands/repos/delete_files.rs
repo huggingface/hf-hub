@@ -46,7 +46,11 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         .filter_map(|p| Glob::new(p).ok().map(|g| g.compile_matcher()))
         .collect();
 
-    let repo = crate::util::typed_repo(client, &args.repo_id, args.r#type);
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     let stream = repo.list_tree().maybe_revision(args.revision.clone()).recursive(true).send()?;
     futures::pin_mut!(stream);
 

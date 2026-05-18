@@ -61,7 +61,11 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
 }
 
 async fn create(client: &HFClient, args: BranchCreateArgs) -> Result<CommandResult> {
-    let repo = crate::util::typed_repo(client, &args.repo_id, args.r#type);
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     repo.create_branch()
         .branch(args.branch)
         .maybe_revision(args.revision)
@@ -71,7 +75,11 @@ async fn create(client: &HFClient, args: BranchCreateArgs) -> Result<CommandResu
 }
 
 async fn delete(client: &HFClient, args: BranchDeleteArgs) -> Result<CommandResult> {
-    let repo = crate::util::typed_repo(client, &args.repo_id, args.r#type);
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     repo.delete_branch().branch(args.branch).send().await?;
     Ok(CommandResult::Silent)
 }

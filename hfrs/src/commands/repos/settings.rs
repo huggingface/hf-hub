@@ -52,7 +52,11 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         (None, None) => None,
     };
 
-    let repo = crate::util::typed_repo(client, &args.repo_id, args.r#type);
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     repo.update_settings()
         .maybe_private(args.private)
         .maybe_gated(gated)
