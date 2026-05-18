@@ -132,8 +132,9 @@ pub struct RepoTypeKernel;
 /// upstream enum) and you don't want to thread a type parameter through downstream code.
 ///
 /// Implements [`RepoType`] so it can be used as the type parameter on
-/// [`HFRepository<RepoTypeAny>`](super::HFRepository), and implements [`FromStr`] for both
-/// singular and plural string forms (e.g. `"model"`, `"models"`, `"dataset"`, `"datasets"`).
+/// [`HFRepository<RepoTypeAny>`](super::HFRepository), and implements
+/// [`FromStr`](std::str::FromStr) for both singular and plural string forms
+/// (e.g. `"model"`, `"models"`, `"dataset"`, `"datasets"`).
 /// The trait methods ([`singular`](RepoType::singular), [`plural`](RepoType::plural),
 /// [`url_prefix`](RepoType::url_prefix)) dispatch on the held variant at runtime.
 ///
