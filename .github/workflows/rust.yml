@@ -12,8 +12,7 @@ env:
 jobs:
   fmt:
     name: Format
-    runs-on:
-      group: infra-ci
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -31,8 +30,7 @@ jobs:
 
   lint:
     name: Lint
-    runs-on:
-      group: infra-ci
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -55,21 +53,11 @@ jobs:
 
   build-and-test:
     name: Build & Test
-    runs-on: ${{ matrix.runs-on }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: linux
-            runs-on:
-              group: infra-ci
-            use_hf_registries: true
-          - os: windows
-            runs-on: windows-latest
-            use_hf_registries: false
-          - os: macos
-            runs-on: macOS-latest
-            use_hf_registries: false
+        os: [ubuntu-latest, windows-latest, macOS-latest]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -79,7 +67,7 @@ jobs:
           toolchain: stable
 
       - name: Set up HF registry proxies
-        if: matrix.use_hf_registries
+        if: runner.os == 'Linux'
         run: curl -sSL https://registries.huggingface.tech/setup.sh | bash
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
@@ -105,8 +93,7 @@ jobs:
 
   docs:
     name: Docs
-    runs-on:
-      group: infra-ci
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -125,8 +112,7 @@ jobs:
 
   audit:
     name: Audit
-    runs-on:
-      group: infra-ci
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
