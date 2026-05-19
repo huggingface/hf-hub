@@ -12,7 +12,8 @@ env:
 jobs:
   fmt:
     name: Format
-    runs-on: ubuntu-latest
+    runs-on:
+      group: infra-ci
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -22,12 +23,16 @@ jobs:
           toolchain: nightly
           components: rustfmt
 
+      - name: Set up HF registry proxies
+        uses: ./.github/actions/setup-hf-registries
+
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
 
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on:
+      group: infra-ci
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -36,6 +41,9 @@ jobs:
         with:
           toolchain: stable
           components: clippy
+
+      - name: Set up HF registry proxies
+        uses: ./.github/actions/setup-hf-registries
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
@@ -47,11 +55,21 @@ jobs:
 
   build-and-test:
     name: Build & Test
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macOS-latest]
+        include:
+          - os: linux
+            runs-on:
+              group: infra-ci
+            use_hf_registries: true
+          - os: windows
+            runs-on: windows-latest
+            use_hf_registries: false
+          - os: macos
+            runs-on: macOS-latest
+            use_hf_registries: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -59,6 +77,10 @@ jobs:
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
         with:
           toolchain: stable
+
+      - name: Set up HF registry proxies
+        if: matrix.use_hf_registries
+        uses: ./.github/actions/setup-hf-registries
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
@@ -83,7 +105,8 @@ jobs:
 
   docs:
     name: Docs
-    runs-on: ubuntu-latest
+    runs-on:
+      group: infra-ci
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -92,6 +115,9 @@ jobs:
         with:
           toolchain: nightly
 
+      - name: Set up HF registry proxies
+        uses: ./.github/actions/setup-hf-registries
+
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
       - name: Build docs
@@ -99,7 +125,8 @@ jobs:
 
   audit:
     name: Audit
-    runs-on: ubuntu-latest
+    runs-on:
+      group: infra-ci
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
@@ -107,6 +134,9 @@ jobs:
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
         with:
           toolchain: stable
+
+      - name: Set up HF registry proxies
+        uses: ./.github/actions/setup-hf-registries
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
