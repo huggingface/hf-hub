@@ -138,11 +138,14 @@ pub struct RepoTypeKernel;
 /// The trait methods ([`singular`](RepoType::singular), [`plural`](RepoType::plural),
 /// [`url_prefix`](RepoType::url_prefix)) dispatch on the held variant at runtime.
 ///
-/// Kind-specific methods like
-/// [`HFRepository::<RepoTypeModel>::info`](super::HFRepository::info) and the Space-only
-/// runtime helpers are not available on `HFRepository<RepoTypeAny>` — they live on the
-/// per-kind typed handles. For everything else (file uploads/downloads, listings, commits,
-/// branches, tags, settings), the runtime-tagged handle works identically to a typed one.
+/// All the standard file, commit, and repo-management APIs are available on
+/// `HFRepository<RepoTypeAny>` — uploads/downloads, tree listings, commit history and diffs,
+/// branches, tags, settings, and existence checks all work identically to a typed handle and
+/// hit the right Hub endpoint for the runtime variant. The kind-specific
+/// [`HFRepository::<RepoTypeModel>::info`](super::HFRepository::info) (and its per-kind
+/// siblings) and the Space-only runtime helpers (`runtime`, `pause`, `restart`, secrets,
+/// variables, hardware, duplicate) are *not* available — they live on the per-kind typed
+/// handles.
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RepoTypeAny {
     #[default]
