@@ -67,7 +67,7 @@ jobs:
           toolchain: stable
 
       - name: Set up HF registry proxies
-        if: runner.os == 'Linux'
+        shell: bash
         run: curl -sSL https://registries.huggingface.tech/setup.sh | bash
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
