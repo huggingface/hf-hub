@@ -45,7 +45,7 @@ jobs:
           toolchain: stable
 
       - name: Set up HF registry proxies
-        run: curl -sSL https://registries.huggingface.tech/setup.sh | bash
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
 

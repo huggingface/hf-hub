@@ -24,7 +24,7 @@ jobs:
           components: rustfmt
 
       - name: Set up HF registry proxies
-        run: curl -sSL https://registries.huggingface.tech/setup.sh | bash
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
 
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
@@ -43,7 +43,7 @@ jobs:
           components: clippy
 
       - name: Set up HF registry proxies
-        run: curl -sSL https://registries.huggingface.tech/setup.sh | bash
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
@@ -80,7 +80,7 @@ jobs:
 
       - name: Set up HF registry proxies
         if: matrix.use_hf_registries
-        run: curl -sSL https://registries.huggingface.tech/setup.sh | bash
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
@@ -116,7 +116,7 @@ jobs:
           toolchain: nightly
 
       - name: Set up HF registry proxies
-        run: curl -sSL https://registries.huggingface.tech/setup.sh | bash
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
@@ -136,7 +136,7 @@ jobs:
           toolchain: stable
 
       - name: Set up HF registry proxies
-        run: curl -sSL https://registries.huggingface.tech/setup.sh | bash
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
