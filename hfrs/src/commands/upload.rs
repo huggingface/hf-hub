@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use clap::Args as ClapArgs;
 use hf_hub::progress::Progress;
 use hf_hub::repository::AddSource;
-use hf_hub::{HFClient, HFRepository, RepoType};
+use hf_hub::{HFClient, HFRepository, RepoTypeAny};
 use tracing::info;
 
 use crate::cli::RepoTypeArg;
@@ -73,16 +73,18 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
         multi.map(|multi| CliProgressHandler::new(multi).into())
     };
 
-    let url = crate::with_typed_repo!(client, &args.repo_id, args.r#type, |repo| {
-        do_upload(client, repo, args, local_path, handler).await?
-    });
-
+    let (owner, name) = match args.repo_id.split_once('/') {
+        Some(parts) => parts,
+        None => ("", args.repo_id.as_str()),
+    };
+    let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
+    let url = do_upload(client, repo, args, local_path, handler).await?;
     Ok(CommandResult::Raw(url))
 }
 
-async fn do_upload<T: RepoType>(
+async fn do_upload(
     client: &HFClient,
-    repo: HFRepository<T>,
+    repo: HFRepository<RepoTypeAny>,
     args: Args,
     local_path: PathBuf,
     handler: Option<Progress>,
@@ -91,7 +93,7 @@ async fn do_upload<T: RepoType>(
         info!(repo_id = args.repo_id.as_str(), private = args.private, "creating repository");
         client
             .create_repository()
-            .repo_type(T::default())
+            .repo_type(*repo.repo_type())
             .repo_id(args.repo_id.clone())
             .maybe_private(if args.private { Some(true) } else { None })
             .exist_ok(true)

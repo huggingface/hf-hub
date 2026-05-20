@@ -39,7 +39,7 @@ mod sealed {
 /// let repo = client.dataset("rajpurkar", "squad");
 ///
 /// // Explicit marker — useful when the kind comes from a generic context:
-/// let repo = client.repository::<RepoTypeDataset>("rajpurkar", "squad");
+/// let repo = client.repository(RepoTypeDataset, "rajpurkar", "squad");
 /// # let _ = repo; Ok(()) }
 /// ```
 ///
@@ -127,10 +127,39 @@ pub struct RepoTypeSpace;
 #[derive(Default, Copy, Clone, Debug)]
 pub struct RepoTypeKernel;
 
+/// Runtime-tagged repository kind. Holds an enum value rather than encoding the kind in
+/// the type system — useful when the kind is decided at runtime (CLI flag, config string,
+/// upstream enum) and you don't want to thread a type parameter through downstream code.
+///
+/// Implements [`RepoType`] so it can be used as the type parameter on
+/// [`HFRepository<RepoTypeAny>`](super::HFRepository), and implements
+/// [`FromStr`](std::str::FromStr) for both singular and plural string forms
+/// (e.g. `"model"`, `"models"`, `"dataset"`, `"datasets"`).
+/// The trait methods ([`singular`](RepoType::singular), [`plural`](RepoType::plural),
+/// [`url_prefix`](RepoType::url_prefix)) dispatch on the held variant at runtime.
+///
+/// All the standard file, commit, and repo-management APIs are available on
+/// `HFRepository<RepoTypeAny>` — uploads/downloads, tree listings, commit history and diffs,
+/// branches, tags, settings, and existence checks all work identically to a typed handle and
+/// hit the right Hub endpoint for the runtime variant. The kind-specific
+/// [`HFRepository::<RepoTypeModel>::info`](super::HFRepository::info) (and its per-kind
+/// siblings) and the Space-only runtime helpers (`runtime`, `pause`, `restart`, secrets,
+/// variables, hardware, duplicate) are *not* available — they live on the per-kind typed
+/// handles.
+#[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum RepoTypeAny {
+    #[default]
+    Model,
+    Dataset,
+    Space,
+    Kernel,
+}
+
 impl sealed::Sealed for RepoTypeModel {}
 impl sealed::Sealed for RepoTypeDataset {}
 impl sealed::Sealed for RepoTypeSpace {}
 impl sealed::Sealed for RepoTypeKernel {}
+impl sealed::Sealed for RepoTypeAny {}
 
 impl RepoType for RepoTypeModel {
     fn singular(&self) -> &'static str {
@@ -201,5 +230,140 @@ impl std::fmt::Display for RepoTypeSpace {
 impl std::fmt::Display for RepoTypeKernel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.singular())
+    }
+}
+
+impl RepoType for RepoTypeAny {
+    fn singular(&self) -> &'static str {
+        match self {
+            Self::Model => RepoTypeModel.singular(),
+            Self::Dataset => RepoTypeDataset.singular(),
+            Self::Space => RepoTypeSpace.singular(),
+            Self::Kernel => RepoTypeKernel.singular(),
+        }
+    }
+    fn plural(&self) -> &'static str {
+        match self {
+            Self::Model => RepoTypeModel.plural(),
+            Self::Dataset => RepoTypeDataset.plural(),
+            Self::Space => RepoTypeSpace.plural(),
+            Self::Kernel => RepoTypeKernel.plural(),
+        }
+    }
+    fn url_prefix(&self) -> &'static str {
+        match self {
+            Self::Model => RepoTypeModel.url_prefix(),
+            Self::Dataset => RepoTypeDataset.url_prefix(),
+            Self::Space => RepoTypeSpace.url_prefix(),
+            Self::Kernel => RepoTypeKernel.url_prefix(),
+        }
+    }
+}
+
+impl std::fmt::Display for RepoTypeAny {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.singular())
+    }
+}
+
+impl std::str::FromStr for RepoTypeAny {
+    type Err = crate::error::HFError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "model" | "models" => Ok(Self::Model),
+            "dataset" | "datasets" => Ok(Self::Dataset),
+            "space" | "spaces" => Ok(Self::Space),
+            "kernel" | "kernels" => Ok(Self::Kernel),
+            _ => Err(crate::error::HFError::InvalidParameter(format!(
+                "unknown repo type: {s:?}. Expected one of: model(s), dataset(s), space(s), kernel(s)"
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod repo_type_any_tests {
+    use std::str::FromStr;
+
+    use super::*;
+    use crate::HFRepository;
+    use crate::client::HFClient;
+
+    #[test]
+    fn from_str_accepts_singular_and_plural() {
+        assert_eq!(RepoTypeAny::from_str("model").unwrap(), RepoTypeAny::Model);
+        assert_eq!(RepoTypeAny::from_str("models").unwrap(), RepoTypeAny::Model);
+        assert_eq!(RepoTypeAny::from_str("dataset").unwrap(), RepoTypeAny::Dataset);
+        assert_eq!(RepoTypeAny::from_str("datasets").unwrap(), RepoTypeAny::Dataset);
+        assert_eq!(RepoTypeAny::from_str("space").unwrap(), RepoTypeAny::Space);
+        assert_eq!(RepoTypeAny::from_str("spaces").unwrap(), RepoTypeAny::Space);
+        assert_eq!(RepoTypeAny::from_str("kernel").unwrap(), RepoTypeAny::Kernel);
+        assert_eq!(RepoTypeAny::from_str("kernels").unwrap(), RepoTypeAny::Kernel);
+    }
+
+    #[test]
+    fn from_str_rejects_unknown() {
+        let err = RepoTypeAny::from_str("Model").unwrap_err();
+        assert!(matches!(err, crate::error::HFError::InvalidParameter(_)));
+        assert!(RepoTypeAny::from_str("Datasets").is_err());
+        assert!(RepoTypeAny::from_str("").is_err());
+        assert!(RepoTypeAny::from_str("collection").is_err());
+    }
+
+    #[test]
+    fn trait_methods_dispatch_at_runtime() {
+        let cases = [
+            (RepoTypeAny::Model, "model", "models", ""),
+            (RepoTypeAny::Dataset, "dataset", "datasets", "datasets/"),
+            (RepoTypeAny::Space, "space", "spaces", "spaces/"),
+            (RepoTypeAny::Kernel, "kernel", "kernels", "kernels/"),
+        ];
+        for (kind, sing, plur, prefix) in cases {
+            assert_eq!(kind.singular(), sing);
+            assert_eq!(kind.plural(), plur);
+            assert_eq!(kind.url_prefix(), prefix);
+            assert_eq!(format!("{kind}"), sing);
+        }
+    }
+
+    #[test]
+    fn handle_from_str_via_repo_type_any() {
+        let client = HFClient::builder().build().unwrap();
+
+        let kind: RepoTypeAny = "datasets".parse().unwrap();
+        let repo: HFRepository<RepoTypeAny> = client.repository(kind, "rajpurkar", "squad");
+
+        assert_eq!(repo.owner(), "rajpurkar");
+        assert_eq!(repo.name(), "squad");
+        assert_eq!(repo.repo_path(), "rajpurkar/squad");
+        assert_eq!(repo.repo_type().singular(), "dataset");
+        assert_eq!(repo.repo_type().plural(), "datasets");
+        assert_eq!(repo.repo_type().url_prefix(), "datasets/");
+    }
+
+    #[test]
+    fn default_is_model() {
+        assert_eq!(RepoTypeAny::default(), RepoTypeAny::Model);
+        assert_eq!(RepoTypeAny::default().singular(), "model");
+    }
+
+    #[test]
+    fn handle_repo_type_reflects_runtime_kind() {
+        let client = HFClient::builder().build().unwrap();
+        for (kind_str, expected_singular, expected_plural, expected_prefix) in [
+            ("model", "model", "models", ""),
+            ("models", "model", "models", ""),
+            ("dataset", "dataset", "datasets", "datasets/"),
+            ("datasets", "dataset", "datasets", "datasets/"),
+            ("space", "space", "spaces", "spaces/"),
+            ("kernels", "kernel", "kernels", "kernels/"),
+        ] {
+            let kind: RepoTypeAny = kind_str.parse().unwrap();
+            let repo = client.repository(kind, "owner", "name");
+            assert_eq!(repo.repo_type().singular(), expected_singular, "input {kind_str:?}");
+            assert_eq!(repo.repo_type().plural(), expected_plural, "input {kind_str:?}");
+            assert_eq!(repo.repo_type().url_prefix(), expected_prefix, "input {kind_str:?}");
+        }
     }
 }
