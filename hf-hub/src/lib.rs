@@ -205,10 +205,9 @@ mod blocking;
 
 // On `wasm32-unknown-unknown` the only modules that don't compile are the ones
 // that touch the filesystem, spawn OS processes, or rely on the multi-threaded
-// tokio runtime (`cache`, `buckets`, `blocking`). Pure-HTTP modules — `repository`,
-// `spaces`, `users` — are exposed on wasm too, with individual fs-using methods
-// inside them gated. See `verify_wasm.sh`.
-#[cfg(not(target_family = "wasm"))]
+// tokio runtime (`cache`, `blocking`). Pure-HTTP modules — `repository`,
+// `spaces`, `users`, and `buckets` (with individual fs-using methods inside
+// them gated) — are exposed on wasm too. See `verify_wasm.sh`.
 pub mod buckets;
 #[cfg(not(target_family = "wasm"))]
 pub mod cache;
@@ -221,7 +220,6 @@ pub(crate) mod xet;
 #[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync};
-#[cfg(not(target_family = "wasm"))]
 #[doc(inline)]
 pub use buckets::HFBucket;
 pub use client::{HFClient, HFClientBuilder};

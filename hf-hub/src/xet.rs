@@ -687,12 +687,11 @@ impl<T: RepoType> HFRepository<T> {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl crate::buckets::HFBucket {
     pub(crate) async fn xet_upload(
         &self,
-        files: &[(String, AddSource)],
-        progress: &Option<Progress>,
+        files: &[(String, crate::repository::AddSource)],
+        progress: &Option<crate::progress::Progress>,
     ) -> HFResult<Vec<XetFileInfo>> {
         let bucket_id = self.bucket_id();
         let token_url = bucket_xet_token_url(&self.hf_client, "write", &bucket_id);
@@ -707,7 +706,10 @@ impl crate::buckets::HFBucket {
         )
         .await
     }
+}
 
+#[cfg(not(target_family = "wasm"))]
+impl crate::buckets::HFBucket {
     pub(crate) async fn xet_download_batch(&self, files: &[XetBatchFile], progress: &Option<Progress>) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
