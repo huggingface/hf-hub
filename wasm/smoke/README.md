@@ -37,6 +37,27 @@ export function download_file_bytes(
   revision: string,
   filename: string,
 ): Promise<Uint8Array>;
+
+// Streams the file and invokes `onProgress` for every ProgressEvent the
+// underlying hf-hub ProgressHandler receives. Resolves with the total
+// number of bytes streamed. The callback is fed plain objects shaped like
+// `{ kind: "download.start", total_files, total_bytes }`,
+// `{ kind: "download.progress", files: [...] }`,
+// `{ kind: "download.aggregate_progress", bytes_completed, total_bytes, bytes_per_sec }`,
+// `{ kind: "download.complete" }`, etc. Upload variants
+// (`upload.start` / `upload.progress` / `upload.committing` /
+// `upload.complete`) are part of the JS shape for parity but never fire on
+// wasm — upload paths are gated off on `wasm32-unknown-unknown`.
+export function download_with_progress(
+  endpoint: string,
+  token: string | undefined,
+  repoTypePlural: string,
+  owner: string,
+  name: string,
+  revision: string,
+  filename: string,
+  onProgress: (event: object) => void,
+): Promise<number>;
 ```
 
 ## Build
@@ -74,6 +95,11 @@ file works without a token), and click either:
   total byte count + throughput.
 - **Download to memory** — collects the stream into a Blob; **Save file**
   appears once the download completes.
+
+Open `examples/progress.html` to exercise the progress callback path: it
+drives `download_with_progress` and renders a live progress bar plus a
+per-event-kind counter and event log as the
+`hf_hub::progress::ProgressEvent` stream is forwarded from Rust to JS.
 
 Under the hood the wasm code makes the same two Hub calls
 (`paths-info` + `xet-read-token`) and then drives
