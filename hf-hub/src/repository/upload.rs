@@ -12,18 +12,25 @@
 //! See each builder's docs for the exact path / glob format rules.
 
 use std::collections::HashMap;
+#[cfg(not(target_family = "wasm"))]
 use std::fmt::Write as _;
+#[cfg(not(target_family = "wasm"))]
 use std::io::Read;
+#[cfg(not(target_family = "wasm"))]
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use bon::bon;
 use futures::stream::StreamExt;
+#[cfg(not(target_family = "wasm"))]
 use sha2::{Digest, Sha256};
 
+#[cfg(not(target_family = "wasm"))]
 use super::files::matches_any_glob;
 use super::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoTreeEntry, RepoType};
-use crate::error::{HFError, HFResult};
+#[cfg(not(target_family = "wasm"))]
+use crate::error::HFError;
+use crate::error::HFResult;
 use crate::progress::{EmitEvent, Progress, UploadEvent};
 use crate::{constants, retry};
 
@@ -52,6 +59,7 @@ struct UploadFileParams {
 }
 
 /// Internal options struct for [`HFRepository::upload_folder`].
+#[cfg(not(target_family = "wasm"))]
 struct UploadFolderParams {
     folder_path: PathBuf,
     path_in_repo: Option<String>,
@@ -97,6 +105,7 @@ impl<T: RepoType> HFRepository<T> {
                 if let CommitOperation::Add { source, .. } = op {
                     total += match source {
                         AddSource::Bytes(b) => b.len() as u64,
+                        #[cfg(not(target_family = "wasm"))]
                         AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
                     };
                 }
@@ -111,9 +120,13 @@ impl<T: RepoType> HFRepository<T> {
 
         // Determine which files should be uploaded via xet (LFS) vs. inline
         // (regular). Files uploaded via xet are referenced by their SHA256 OID
-        // in the commit NDJSON.
+        // in the commit NDJSON. On wasm there is no xet transport, so all files
+        // go inline.
+        #[cfg(not(target_family = "wasm"))]
         let lfs_uploaded: HashMap<String, (String, u64)> =
             self.preupload_and_upload_lfs_files(&params, revision).await?;
+        #[cfg(target_family = "wasm")]
+        let lfs_uploaded: HashMap<String, (String, u64)> = HashMap::new();
 
         let mut ndjson_lines: Vec<Vec<u8>> = Vec::new();
 
@@ -200,6 +213,7 @@ impl<T: RepoType> HFRepository<T> {
 
     async fn inline_base64_entry(path_in_repo: &str, source: &AddSource) -> HFResult<serde_json::Value> {
         let content = match source {
+            #[cfg(not(target_family = "wasm"))]
             AddSource::File(path) => std::fs::read(path)?,
             AddSource::Bytes(bytes) => bytes.clone(),
         };
@@ -235,6 +249,7 @@ impl<T: RepoType> HFRepository<T> {
         .await
     }
 
+    #[cfg(not(target_family = "wasm"))]
     async fn upload_folder_impl(&self, params: UploadFolderParams) -> HFResult<CommitInfo> {
         let mut operations = Vec::new();
 
@@ -341,6 +356,7 @@ impl<T: RepoType> HFRepository<T> {
     ///
     /// Returns a map of path_in_repo -> (sha256_oid, size) for files that were
     /// uploaded via xet and should be referenced as lfsFile in the commit.
+    #[cfg(not(target_family = "wasm"))]
     async fn preupload_and_upload_lfs_files(
         &self,
         params: &CreateCommitParams,
@@ -404,6 +420,7 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Call the Hub preupload endpoint to determine the upload mode per file.
     /// Returns a map of path -> upload mode ("lfs" or "regular").
+    #[cfg(not(target_family = "wasm"))]
     async fn fetch_upload_modes(
         &self,
         repo_id: &str,
@@ -448,6 +465,7 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     /// Compute SHA256, negotiate LFS batch transfer, and upload via xet.
+    #[cfg(not(target_family = "wasm"))]
     async fn upload_lfs_files_via_xet(
         &self,
         params: &CreateCommitParams,
@@ -499,6 +517,7 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Call the LFS batch endpoint to negotiate the transfer method.
     /// Returns the chosen transfer (e.g., "xet", "basic", "multipart").
+    #[cfg(not(target_family = "wasm"))]
     async fn post_lfs_batch_info(
         &self,
         repo_id: &str,
@@ -552,6 +571,7 @@ impl<T: RepoType> HFRepository<T> {
 
 // --- Preupload and LFS upload integration ---
 
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PreuploadFileInfo {
@@ -559,16 +579,19 @@ struct PreuploadFileInfo {
     upload_mode: String,
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, serde::Deserialize)]
 struct PreuploadResponse {
     files: Vec<PreuploadFileInfo>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, serde::Deserialize)]
 struct LfsBatchResponse {
     transfer: Option<String>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -577,12 +600,14 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
     match source {
         AddSource::Bytes(bytes) => {
             let hash = Sha256::digest(bytes);
             Ok(hex_encode(&hash))
         },
+        #[cfg(not(target_family = "wasm"))]
         AddSource::File(path) => {
             let path = path.clone();
             tokio::task::spawn_blocking(move || -> HFResult<String> {
@@ -604,6 +629,7 @@ async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
     match source {
         AddSource::Bytes(bytes) => {
@@ -611,6 +637,7 @@ fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
             let sample = bytes[..std::cmp::min(bytes.len(), 512)].to_vec();
             Ok((size, sample))
         },
+        #[cfg(not(target_family = "wasm"))]
         AddSource::File(path) => {
             let mut file = std::fs::File::open(path)?;
             let metadata = file.metadata()?;
@@ -625,6 +652,7 @@ fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
 
 /// Recursively collect files from a directory into CommitOperation::Add entries.
 /// Respects allow_patterns and ignore_patterns (glob-style).
+#[cfg(not(target_family = "wasm"))]
 fn collect_files_recursive(
     root: &Path,
     current: &Path,
@@ -793,6 +821,8 @@ impl<T: RepoType> HFRepository<T> {
     /// All pattern arguments use [`globset`](https://docs.rs/globset) syntax (`*`, `?`, `**`,
     /// character classes, etc.). Path strings are forward-slash-joined regardless of platform.
     ///
+    /// Not available on `wasm32-unknown-unknown`; folder walking requires filesystem access.
+    ///
     /// # Parameters
     ///
     /// - `folder_path` (required): local folder path to upload.
@@ -809,6 +839,7 @@ impl<T: RepoType> HFRepository<T> {
     ///   full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g., `old/*.bin` to remove
     ///   every `.bin` directly under `old/` at the repo root.
     /// - `progress`: optional progress handler.
+    #[cfg(not(target_family = "wasm"))]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_folder(
         &self,
@@ -994,6 +1025,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
 
     /// Blocking counterpart of [`HFRepository::upload_folder`]. See the async method for
     /// parameters and behavior.
+    #[cfg(not(target_family = "wasm"))]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn upload_folder(
         &self,

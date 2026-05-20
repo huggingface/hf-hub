@@ -13,6 +13,7 @@
 //! The public types in this module are shared across the listing, download, and
 //! upload helpers implemented on [`HFRepository`].
 
+#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -185,6 +186,9 @@ impl CommitOperation {
     /// `Add { path_in_repo, source: AddSource::file(source) }`. Prefer this
     /// for any non-trivial file size — see [`AddSource::File`] for the streaming
     /// behavior and memory cost.
+    ///
+    /// Not available on `wasm32-unknown-unknown`; use [`CommitOperation::add_bytes`] instead.
+    #[cfg(not(target_family = "wasm"))]
     pub fn add_file(path_in_repo: impl Into<String>, source: impl Into<PathBuf>) -> Self {
         CommitOperation::Add {
             path_in_repo: path_in_repo.into(),
@@ -220,9 +224,13 @@ impl CommitOperation {
 ///
 /// `AddSource::File` is not a snapshot: the file must still exist, unchanged,
 /// when [`HFRepository::create_commit`] runs.
+///
+/// `AddSource::File` is not available on `wasm32-unknown-unknown`; use
+/// [`AddSource::Bytes`] instead.
 #[derive(Debug, Clone)]
 pub enum AddSource {
     /// Read file contents from this local path at commit time.
+    #[cfg(not(target_family = "wasm"))]
     File(PathBuf),
 
     /// In-memory contents used as the file body.
@@ -231,6 +239,7 @@ pub enum AddSource {
 
 impl AddSource {
     /// Construct an [`AddSource::File`] from a local file path.
+    #[cfg(not(target_family = "wasm"))]
     pub fn file(path: impl Into<PathBuf>) -> Self {
         AddSource::File(path.into())
     }
