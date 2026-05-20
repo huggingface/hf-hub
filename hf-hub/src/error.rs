@@ -328,10 +328,16 @@ impl HFError {
             // `reqwest::Error::is_connect` is not available on the wasm32 backend.
             HFError::Request { source, .. } => {
                 let timeout = source.is_timeout();
-                #[cfg(not(target_family = "wasm"))]
-                let connect = source.is_connect();
-                #[cfg(target_family = "wasm")]
-                let connect = false;
+                let connect = {
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        source.is_connect()
+                    }
+                    #[cfg(target_family = "wasm")]
+                    {
+                        false
+                    }
+                };
                 timeout || connect
             },
             HFError::Http { context } => {

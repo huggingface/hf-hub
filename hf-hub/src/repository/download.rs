@@ -12,9 +12,10 @@
 //! See each builder's docs for the exact path / range / glob format rules.
 
 #[cfg(not(target_family = "wasm"))]
-use std::io::Write;
-#[cfg(not(target_family = "wasm"))]
-use std::path::{Path, PathBuf};
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use bon::bon;
 #[cfg(not(target_family = "wasm"))]
@@ -27,12 +28,11 @@ use serde::Deserialize;
 
 use super::files::extract_file_size;
 #[cfg(not(target_family = "wasm"))]
-use super::files::extract_xet_hash;
-#[cfg(not(target_family = "wasm"))]
-use super::files::{extract_commit_hash, extract_etag, matches_any_glob};
-#[cfg(not(target_family = "wasm"))]
-use super::{FileMetadataInfo, RepoTreeEntry};
-use super::{HFRepository, RepoType};
+use super::{
+    FileMetadataInfo,
+    files::{extract_commit_hash, extract_etag, extract_xet_hash, matches_any_glob},
+};
+use super::{HFRepository, RepoTreeEntry, RepoType};
 #[cfg(not(target_family = "wasm"))]
 use crate::cache::storage as cache;
 use crate::error::{HFError, HFResult};
@@ -103,6 +103,73 @@ impl<T: RepoType> HFRepository<T> {
         }
     }
 
+    // Determine whether the file is xet-backed and learn its size.
+    //
+    // Native: HEAD the resolve URL and read `X-Xet-Hash` /
+    // `Content-Length` / `X-Linked-Size` from the response headers.
+    //
+    // Wasm: the resolve URL 302-redirects to a CAS blob URL, and
+    // browsers do not surface intermediate-response headers when
+    // following redirects (this is the Fetch spec, not server-side
+    // CORS — the headers ARE in `Access-Control-Expose-Headers` on the
+    // 302, but JS only ever sees the final response's headers). Using
+    // `redirect: 'manual'` doesn't help either: that produces an
+    // opaque-redirect response with no readable headers. So on wasm we
+    // dispatch via `paths-info`, a non-redirecting JSON endpoint that
+    // returns the same metadata in a body that isn't header-filtered.
+    #[cfg(not(target_family = "wasm"))]
+    async fn resolve_xet_hash_and_size(
+        &self,
+        revision: &str,
+        filename: &str,
+    ) -> HFResult<(Option<String>, Option<u64>)> {
+        let repo_path = self.repo_path();
+        let url = self
+            .hf_client
+            .download_url(T::default().url_prefix(), &repo_path, revision, filename);
+        let headers = self.hf_client.auth_headers();
+        let head_response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
+        })
+        .await?;
+        let head_response = self
+            .hf_client
+            .check_response(
+                head_response,
+                Some(&repo_path),
+                crate::error::NotFoundContext::Entry {
+                    path: filename.to_string(),
+                },
+            )
+            .await?;
+        Ok((extract_xet_hash(&head_response), extract_file_size(&head_response)))
+    }
+
+    #[cfg(target_family = "wasm")]
+    async fn resolve_xet_hash_and_size(
+        &self,
+        revision: &str,
+        filename: &str,
+    ) -> HFResult<(Option<String>, Option<u64>)> {
+        let entries = self
+            .get_paths_info()
+            .paths(vec![filename.to_string()])
+            .revision(revision.to_string())
+            .send()
+            .await?;
+        let entry = entries
+            .into_iter()
+            .find(|e| matches!(e, RepoTreeEntry::File { path, .. } if path == filename));
+        match entry {
+            Some(RepoTreeEntry::File { xet_hash, size, .. }) => Ok((xet_hash, Some(size))),
+            _ => Err(HFError::EntryNotFound {
+                path: filename.to_string(),
+                repo_id: self.repo_path(),
+                context: None,
+            }),
+        }
+    }
+
     async fn download_file_stream_impl(
         &self,
         params: DownloadFileStreamParams,
@@ -124,63 +191,7 @@ impl<T: RepoType> HFRepository<T> {
 
         let headers = self.hf_client.auth_headers();
 
-        // Determine whether the file is xet-backed and learn its size.
-        //
-        // Native: HEAD the resolve URL and read `X-Xet-Hash` /
-        // `Content-Length` / `X-Linked-Size` from the response headers.
-        //
-        // Wasm: the resolve URL 302-redirects to a CAS blob URL, and
-        // browsers do not surface intermediate-response headers when
-        // following redirects (this is the Fetch spec, not server-side
-        // CORS — the headers ARE in `Access-Control-Expose-Headers` on the
-        // 302, but JS only ever sees the final response's headers). Using
-        // `redirect: 'manual'` doesn't help either: that produces an
-        // opaque-redirect response with no readable headers. So on wasm we
-        // dispatch via `paths-info`, a non-redirecting JSON endpoint that
-        // returns the same metadata in a body that isn't header-filtered.
-        let (xet_hash, file_size_hint): (Option<String>, Option<u64>) = {
-            #[cfg(not(target_family = "wasm"))]
-            {
-                let head_response = retry::retry(self.hf_client.retry_config(), || {
-                    self.hf_client.http_client().head(&url).headers(headers.clone()).send()
-                })
-                .await?;
-                let head_response = self
-                    .hf_client
-                    .check_response(
-                        head_response,
-                        Some(&repo_path),
-                        crate::error::NotFoundContext::Entry {
-                            path: params.filename.clone(),
-                        },
-                    )
-                    .await?;
-                (extract_xet_hash(&head_response), extract_file_size(&head_response))
-            }
-            #[cfg(target_family = "wasm")]
-            {
-                use super::RepoTreeEntry;
-                let entries = self
-                    .get_paths_info()
-                    .paths(vec![params.filename.clone()])
-                    .revision(revision.to_string())
-                    .send()
-                    .await?;
-                let entry = entries
-                    .into_iter()
-                    .find(|e| matches!(e, RepoTreeEntry::File { path, .. } if path == &params.filename));
-                match entry {
-                    Some(RepoTreeEntry::File { xet_hash, size, .. }) => (xet_hash, Some(size)),
-                    _ => {
-                        return Err(HFError::EntryNotFound {
-                            path: params.filename.clone(),
-                            repo_id: repo_path.clone(),
-                            context: None,
-                        });
-                    },
-                }
-            }
-        };
+        let (xet_hash, file_size_hint) = self.resolve_xet_hash_and_size(revision, &params.filename).await?;
 
         if let Some(xet_hash) = xet_hash {
             let file_size: u64 = file_size_hint.unwrap_or_else(|| {
@@ -201,6 +212,8 @@ impl<T: RepoType> HFRepository<T> {
             });
             let wrapped =
                 wrap_stream_with_progress(Box::new(Box::pin(stream)), params.progress, params.filename, total_bytes);
+            #[cfg(target_family = "wasm")]
+            let wrapped = buffer_wasm_stream(wrapped);
             return Ok((content_length, wrapped));
         }
 
@@ -236,6 +249,8 @@ impl<T: RepoType> HFRepository<T> {
         });
         let wrapped =
             wrap_stream_with_progress(Box::new(Box::pin(stream)), params.progress, params.filename, total_bytes);
+        #[cfg(target_family = "wasm")]
+        let wrapped = buffer_wasm_stream(wrapped);
         Ok((content_length, wrapped))
     }
 
@@ -1005,6 +1020,42 @@ async fn stream_response_to_file_with_progress(
     }
     file.flush()?;
     Ok(())
+}
+
+/// Decouple the inner byte stream from the JS-side `ReadableStream` reader cadence on wasm.
+///
+/// `wasm_streams::ReadableStream::from_stream` builds the JS stream with `QueuingStrategy(0.0)`
+/// (HWM=0) — the underlying Rust stream is only polled when JS calls `reader.read()`. For the xet
+/// download path, slow JS-side consumption then propagates through hf-xet's term-permit semaphore
+/// (`AdjustableSemaphore` in `file_reconstructor.rs`) and stalls xorb fetching. Browsers differ in
+/// how aggressively they schedule the `pull` callback, so the effect is intermittent.
+///
+/// This pump task drains the inner stream into a small bounded channel under `spawn_local`. JS
+/// `reader.read()` now pulls from the local channel (cheap) instead of gating the live xet
+/// pipeline; xet keeps making progress as long as the channel has room. The channel depth bounds
+/// the extra in-flight bytes — at most `depth * max_chunk_size` beyond what xet already buffers.
+#[cfg(target_family = "wasm")]
+fn buffer_wasm_stream(inner: HFByteStream) -> HFByteStream {
+    use futures::SinkExt;
+    use futures::channel::mpsc;
+
+    const BUFFER_DEPTH: usize = 2;
+    let (mut tx, rx) = mpsc::channel::<HFResult<bytes::Bytes>>(BUFFER_DEPTH);
+
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut inner = inner;
+        while let Some(item) = inner.next().await {
+            let is_err = item.is_err();
+            if tx.send(item).await.is_err() {
+                return;
+            }
+            if is_err {
+                return;
+            }
+        }
+    });
+
+    Box::new(Box::pin(rx))
 }
 
 fn wrap_stream_with_progress(

@@ -3,13 +3,14 @@
 //! repositories and buckets for high-performance Xet transfers.
 
 #[cfg(not(target_family = "wasm"))]
-use std::collections::HashMap;
-#[cfg(not(target_family = "wasm"))]
-use std::path::PathBuf;
-#[cfg(not(target_family = "wasm"))]
-use std::sync::Arc;
-#[cfg(not(target_family = "wasm"))]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use serde::Deserialize;
 #[cfg(test)]
@@ -20,12 +21,13 @@ use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileMetadata, XetFileUp
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, XetOperation};
-#[cfg(not(target_family = "wasm"))]
-use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent};
-#[cfg(not(target_family = "wasm"))]
-use crate::repository::AddSource;
 use crate::repository::{HFRepository, RepoType};
 use crate::retry;
+#[cfg(not(target_family = "wasm"))]
+use crate::{
+    progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent},
+    repository::AddSource,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -587,64 +589,6 @@ impl<T: RepoType> HFRepository<T> {
         Ok(())
     }
 
-    /// Download a file (or byte range) via xet and return a byte stream.
-    ///
-    /// Uses `XetDownloadStreamGroup` which supports `Option<Range<u64>>` for partial downloads.
-    pub(crate) async fn xet_download_stream(
-        &self,
-        revision: &str,
-        file_hash: &str,
-        file_size: u64,
-        range: Option<std::ops::Range<u64>>,
-    ) -> HFResult<impl futures::Stream<Item = HFResult<bytes::Bytes>> + use<T>> {
-        let repo_path = self.repo_path();
-        let api_segment = T::default().plural();
-        let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
-        let conn = fetch_xet_connection_info(
-            &self.hf_client,
-            &token_url,
-            Some(&repo_path),
-            crate::error::NotFoundContext::Repo,
-        )
-        .await?;
-
-        let (session, generation) = self.hf_client.xet_session()?;
-        let group = match session.new_download_stream_group() {
-            Ok(b) => b,
-            Err(e) => {
-                self.hf_client.replace_xet_session(generation, &e);
-                self.hf_client
-                    .xet_session()?
-                    .0
-                    .new_download_stream_group()
-                    .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?
-            },
-        }
-        .with_endpoint(conn.endpoint.clone())
-        .with_token_info(conn.access_token.clone(), conn.expiration_unix_epoch)
-        .with_token_refresh_url(token_url, self.hf_client.auth_headers())
-        .build()
-        .await
-        .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?;
-
-        let file_info = XetFileInfo::new(file_hash.to_string(), file_size);
-
-        let mut stream = group
-            .download_stream(file_info, range)
-            .await
-            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?;
-
-        stream.start();
-
-        Ok(futures::stream::unfold(stream, |mut stream| async move {
-            match stream.next().await {
-                Ok(Some(bytes)) => Some((Ok(bytes), stream)),
-                Ok(None) => None,
-                Err(e) => Some((Err(HFError::xet(XetOperation::StreamDownload, e)), stream)),
-            }
-        }))
-    }
-
     /// Upload files using the xet protocol.
     /// Fetches a write token and uses xet-session's UploadCommit.
     /// Returns the XetFileInfo (hash + size) for each uploaded file.
@@ -769,16 +713,10 @@ impl crate::buckets::HFBucket {
     }
 }
 
-/// Wasm xet streaming download.
-///
-/// Native code reuses a cached `XetSession` stored on `HFClient` (set up by
-/// `HFClientBuilder` and refreshed on poison). That cache, the refresh
-/// logic, and the `tokio::sync::Mutex` backing it aren't available on wasm,
-/// so this variant builds a fresh `XetSession` per call. The shape mirrors
-/// the native `xet_download_stream` so `download_file_stream_impl` can call
-/// it identically on both targets.
-#[cfg(target_family = "wasm")]
 impl<T: RepoType> HFRepository<T> {
+    /// Download a file (or byte range) via xet and return a byte stream.
+    ///
+    /// Uses `XetDownloadStreamGroup` which supports `Option<Range<u64>>` for partial downloads.
     pub(crate) async fn xet_download_stream(
         &self,
         revision: &str,
@@ -797,13 +735,8 @@ impl<T: RepoType> HFRepository<T> {
         )
         .await?;
 
-        let session = xet::xet_session::XetSessionBuilder::new()
-            .build()
-            .map_err(|e| HFError::xet(XetOperation::Session, e))?;
-
-        let group = session
-            .new_download_stream_group()
-            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?
+        let group = self
+            .new_download_stream_group_builder()?
             .with_endpoint(conn.endpoint.clone())
             .with_token_info(conn.access_token.clone(), conn.expiration_unix_epoch)
             .with_token_refresh_url(token_url, self.hf_client.auth_headers())
@@ -827,6 +760,37 @@ impl<T: RepoType> HFRepository<T> {
                 Err(e) => Some((Err(HFError::xet(XetOperation::StreamDownload, e)), stream)),
             }
         }))
+    }
+
+    /// Obtain a stream-download group builder.
+    ///
+    /// Native reuses a cached `XetSession` on `HFClient` and replaces it on
+    /// poison. Wasm has no `tokio::sync::Mutex` available, so it builds a
+    /// fresh `XetSession` per call.
+    #[cfg(not(target_family = "wasm"))]
+    fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
+        let (session, generation) = self.hf_client.xet_session()?;
+        match session.new_download_stream_group() {
+            Ok(b) => Ok(b),
+            Err(e) => {
+                self.hf_client.replace_xet_session(generation, &e);
+                self.hf_client
+                    .xet_session()?
+                    .0
+                    .new_download_stream_group()
+                    .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))
+            },
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
+        let session = xet::xet_session::XetSessionBuilder::new()
+            .build()
+            .map_err(|e| HFError::xet(XetOperation::Session, e))?;
+        session
+            .new_download_stream_group()
+            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))
     }
 }
 
