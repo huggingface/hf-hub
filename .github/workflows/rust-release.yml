@@ -9,17 +9,22 @@ on:
 
 jobs:
   rust_publish:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: aws-general-8-plus
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+
+      - name: Set up HF registry proxies
+        run: curl -sSL https://registries.huggingface.tech/setup.sh | bash
+
       - name: Cache Cargo Registry
         uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7  # v5
         with:
           path: ~/.cargo/registry
-          key: ubuntu-latest-cargo-registry-${{ hashFiles('**/Cargo.toml') }}
+          key: aws-general-8-plus-cargo-registry-${{ hashFiles('**/Cargo.toml') }}
 
       - name: Publish package rust
         working-directory: ./hf-hub
