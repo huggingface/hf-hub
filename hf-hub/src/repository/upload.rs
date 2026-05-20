@@ -760,7 +760,8 @@ impl<T: RepoType> HFRepository<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_file(
         &self,
-        /// File content source (bytes or local file path).
+        /// File content source. Bytes on any target; local file path on native only
+        /// (`AddSource::File` is not available on `wasm32-unknown-unknown`).
         source: AddSource,
         /// Destination path within the repository.
         #[builder(into)]

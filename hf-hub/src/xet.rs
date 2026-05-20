@@ -1,6 +1,10 @@
 //! Xet component: crate-internal token fetching and all transfer plumbing
 //! (session management, upload/download groups, progress pollers) used by
 //! repositories and buckets for high-performance Xet transfers.
+//!
+//! On `wasm32-unknown-unknown`, session caching and progress polling are
+//! omitted — fresh `XetSession` per call, no in-flight progress events.
+//! See per-item `#[cfg]` attributes.
 
 #[cfg(not(target_family = "wasm"))]
 use std::{
@@ -363,11 +367,10 @@ async fn xet_upload_inner(
     Ok(xet_file_infos)
 }
 
-/// Wasm-only upload path: no progress tracking, `AddSource::Bytes` only.
-///
-/// `AddSource::File` is not available on wasm; callers on wasm only ever
-/// pass `Bytes` variants. The `progress` argument is accepted for signature
-/// compatibility but is ignored — wasm has no upload progress poller.
+/// Wasm counterpart of `xet_upload_inner` (above). Builds a fresh
+/// `XetSession` per call since the cached-session-on-`HFClient` pattern
+/// isn't available on wasm; no session-poison retry is needed because
+/// each call gets a clean session.
 #[cfg(target_family = "wasm")]
 async fn xet_upload_inner(
     hf_client: &HFClient,
