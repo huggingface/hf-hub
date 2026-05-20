@@ -264,7 +264,7 @@ pub struct EvalResultSource {
 /// Returned by [`HFClient::list_models`] and by
 /// [`HFRepository::info`] when the repo is a model.
 /// Most fields are optional because they depend on the `expand` parameter and the repo's state.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     /// Repo ID, in the form `owner/name`.
@@ -359,7 +359,7 @@ pub struct ModelInfo {
 /// Returned by [`HFClient::list_datasets`] and by
 /// [`HFRepository::info`] when the repo is a dataset.
 /// Most fields are optional because they depend on the `expand` parameter and the repo's state.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatasetInfo {
     /// Repo ID, in the form `owner/name`.
@@ -416,7 +416,7 @@ pub struct DatasetInfo {
 /// Returned by [`HFClient::list_spaces`] and by
 /// [`HFRepository::info`] when the repo is a Space.
 /// Most fields are optional because they depend on the `expand` parameter and the Space's state.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceInfo {
     /// Repo ID, in the form `owner/name`.
@@ -483,7 +483,7 @@ pub struct SpaceInfo {
 /// Kernels are also retrievable via `/api/models/{repo_id}` (kernels carry
 /// `library_name: "kernels"`) if you need the full model-style metadata; in
 /// that case go through [`HFClient::model`] and the [`ModelInfo`] response.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KernelInfo {
     /// Repo ID, in the form `owner/name`.

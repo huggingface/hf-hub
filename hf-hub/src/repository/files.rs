@@ -85,7 +85,7 @@ pub struct FileMetadataInfo {
 }
 
 /// File or directory entry returned by repository tree/listing APIs.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum RepoTreeEntry {
     /// A file entry in the repository tree.
