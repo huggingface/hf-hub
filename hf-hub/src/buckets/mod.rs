@@ -424,7 +424,7 @@ impl HFBucket {
     ) -> HFResult<()> {
         let uploads: Vec<(String, crate::repository::AddSource)> = files
             .into_iter()
-            .map(|(remote, b)| (remote, crate::repository::AddSource::bytes(b.to_vec())))
+            .map(|(remote, b)| (remote, crate::repository::AddSource::bytes(b)))
             .collect();
         self.upload_sources_impl(uploads, progress).await
     }
@@ -578,8 +578,8 @@ impl HFBucket {
 
 impl HFBucket {
     /// Shared implementation: upload pre-built `(remote_path, AddSource)` pairs through xet
-    /// and register them in the bucket. Used by both [`HFBucket::upload_files`] (path-based,
-    /// non-wasm) and [`HFBucket::upload_bytes_files`] (bytes-based, all targets).
+    /// and register them in the bucket. Used by [`HFBucket::upload_bytes_files`]
+    /// (bytes-based, all targets).
     async fn upload_sources_impl(
         &self,
         uploads: Vec<(String, crate::repository::AddSource)>,
@@ -588,6 +588,19 @@ impl HFBucket {
         if uploads.is_empty() {
             return Ok(());
         }
+
+        let total_bytes: u64 = uploads
+            .iter()
+            .map(|(_, source)| match source {
+                crate::repository::AddSource::Bytes(b) => b.len() as u64,
+                #[cfg(not(target_family = "wasm"))]
+                crate::repository::AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+            })
+            .sum();
+        progress.emit(UploadEvent::Start {
+            total_files: uploads.len(),
+            total_bytes,
+        });
 
         let xet_infos = self.xet_upload(&uploads, &progress).await?;
 
