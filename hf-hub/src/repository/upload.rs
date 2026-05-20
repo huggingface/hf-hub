@@ -12,7 +12,6 @@
 //! See each builder's docs for the exact path / glob format rules.
 
 use std::collections::HashMap;
-#[cfg(not(target_family = "wasm"))]
 use std::fmt::Write as _;
 #[cfg(not(target_family = "wasm"))]
 use std::io::Read;
@@ -22,7 +21,6 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use bon::bon;
 use futures::stream::StreamExt;
-#[cfg(not(target_family = "wasm"))]
 use sha2::{Digest, Sha256};
 
 #[cfg(not(target_family = "wasm"))]
@@ -120,13 +118,9 @@ impl<T: RepoType> HFRepository<T> {
 
         // Determine which files should be uploaded via xet (LFS) vs. inline
         // (regular). Files uploaded via xet are referenced by their SHA256 OID
-        // in the commit NDJSON. On wasm there is no xet transport, so all files
-        // go inline.
-        #[cfg(not(target_family = "wasm"))]
+        // in the commit NDJSON.
         let lfs_uploaded: HashMap<String, (String, u64)> =
             self.preupload_and_upload_lfs_files(&params, revision).await?;
-        #[cfg(target_family = "wasm")]
-        let lfs_uploaded: HashMap<String, (String, u64)> = HashMap::new();
 
         let mut ndjson_lines: Vec<Vec<u8>> = Vec::new();
 
@@ -356,7 +350,6 @@ impl<T: RepoType> HFRepository<T> {
     ///
     /// Returns a map of path_in_repo -> (sha256_oid, size) for files that were
     /// uploaded via xet and should be referenced as lfsFile in the commit.
-    #[cfg(not(target_family = "wasm"))]
     async fn preupload_and_upload_lfs_files(
         &self,
         params: &CreateCommitParams,
@@ -420,7 +413,6 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Call the Hub preupload endpoint to determine the upload mode per file.
     /// Returns a map of path -> upload mode ("lfs" or "regular").
-    #[cfg(not(target_family = "wasm"))]
     async fn fetch_upload_modes(
         &self,
         repo_id: &str,
@@ -465,7 +457,6 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     /// Compute SHA256, negotiate LFS batch transfer, and upload via xet.
-    #[cfg(not(target_family = "wasm"))]
     async fn upload_lfs_files_via_xet(
         &self,
         params: &CreateCommitParams,
@@ -517,7 +508,6 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Call the LFS batch endpoint to negotiate the transfer method.
     /// Returns the chosen transfer (e.g., "xet", "basic", "multipart").
-    #[cfg(not(target_family = "wasm"))]
     async fn post_lfs_batch_info(
         &self,
         repo_id: &str,
@@ -571,7 +561,6 @@ impl<T: RepoType> HFRepository<T> {
 
 // --- Preupload and LFS upload integration ---
 
-#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PreuploadFileInfo {
@@ -579,19 +568,16 @@ struct PreuploadFileInfo {
     upload_mode: String,
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, serde::Deserialize)]
 struct PreuploadResponse {
     files: Vec<PreuploadFileInfo>,
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, serde::Deserialize)]
 struct LfsBatchResponse {
     transfer: Option<String>,
 }
 
-#[cfg(not(target_family = "wasm"))]
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -600,7 +586,6 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-#[cfg(not(target_family = "wasm"))]
 async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
     match source {
         AddSource::Bytes(bytes) => {
@@ -629,7 +614,6 @@ async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
     match source {
         AddSource::Bytes(bytes) => {
