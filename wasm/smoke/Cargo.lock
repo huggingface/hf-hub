@@ -946,6 +946,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

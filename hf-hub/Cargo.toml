@@ -41,6 +41,7 @@ rustls-tls = ["reqwest/rustls"]
 # `tokio-retry` -> `rand` 0.8 -> `rand_core` 0.6 -> `getrandom` 0.2 transitively
 # needs the `js` feature on wasm32 to compile.
 getrandom = { version = "0.2", features = ["js"] }
+wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
