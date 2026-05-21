@@ -17,3 +17,10 @@ futures-util = "0.3"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[features]
+# When enabled, the test crate omits `wasm_bindgen_test_configure!(run_in_browser)`,
+# letting `wasm-bindgen-test`'s default Node.js runner pick up the tests. Used by
+# the `wasm-test-node` CI job (and `RUN_IN_NODE=1 ./run_tests.sh` locally) to avoid
+# needing a webdriver + headless browser on the runner.
+node-tests = []

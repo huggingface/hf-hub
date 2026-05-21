@@ -6,10 +6,21 @@
 
 #![cfg(target_family = "wasm")]
 
+use std::sync::{Arc, Mutex};
+
 use futures_util::StreamExt;
 use hf_hub::HFClientBuilder;
-use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+use hf_hub::progress::{DownloadEvent, ProgressEvent, ProgressHandler};
+use wasm_bindgen_test::wasm_bindgen_test;
+#[cfg(not(feature = "node-tests"))]
+use wasm_bindgen_test::wasm_bindgen_test_configure;
 
+// The default (no features) compiles for the browser job — `hf-xet` needs
+// COOP/COEP-backed `SharedArrayBuffer`, and the `wasm-bindgen-test-runner`
+// browser harness sets those headers automatically. Enabling the
+// `node-tests` feature drops this configure and lets the test crate fall
+// back to the default Node.js runner — fast feedback loop, no webdriver.
+#[cfg(not(feature = "node-tests"))]
 wasm_bindgen_test_configure!(run_in_browser);
 
 const ENDPOINT: &str = "https://huggingface.co";
@@ -144,4 +155,100 @@ async fn list_spaces_search_works() {
     }
 
     assert!(count >= 1, "expected at least one space result, got {count}");
+}
+
+/// `ProgressHandler` that records every event it sees. Behind an `Arc<Mutex<_>>`
+/// so it's `Send + Sync` (required by the handler trait) and the test can read
+/// the recording back after the download.
+#[derive(Default)]
+struct EventRecorder {
+    events: Mutex<Vec<ProgressEvent>>,
+}
+
+impl ProgressHandler for EventRecorder {
+    fn on_progress(&self, event: &ProgressEvent) {
+        self.events.lock().expect("recorder lock").push(event.clone());
+    }
+}
+
+impl EventRecorder {
+    fn snapshot(&self) -> Vec<ProgressEvent> {
+        self.events.lock().expect("recorder lock").clone()
+    }
+}
+
+#[wasm_bindgen_test]
+async fn download_with_progress_handler_emits_lifecycle() {
+    // Plain HTTP path (config.json is a small non-LFS file).
+    let recorder = Arc::new(EventRecorder::default());
+    let bytes = client()
+        .model(TEST_MODEL_OWNER, TEST_MODEL_NAME)
+        .download_file_to_bytes()
+        .filename("config.json")
+        .progress(recorder.clone())
+        .send()
+        .await
+        .expect("download config.json with progress");
+
+    let events = recorder.snapshot();
+    assert!(!events.is_empty(), "no progress events recorded");
+
+    let start_total = events.iter().find_map(|e| match e {
+        ProgressEvent::Download(DownloadEvent::Start { total_bytes, .. }) => Some(*total_bytes),
+        _ => None,
+    });
+    assert!(start_total.is_some(), "expected Download::Start event, got {events:#?}");
+    assert_eq!(start_total.unwrap() as usize, bytes.len(), "Start.total_bytes did not match downloaded length",);
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, ProgressEvent::Download(DownloadEvent::Complete))),
+        "expected Download::Complete event, got {events:#?}",
+    );
+
+    assert!(
+        events.iter().all(|e| matches!(e, ProgressEvent::Download(_))),
+        "every progress event from a download must be ProgressEvent::Download, got {events:#?}",
+    );
+}
+
+#[wasm_bindgen_test]
+async fn download_xet_with_progress_handler_reports_bytes() {
+    // Xet path — drives `hf-xet`'s threaded wasm runtime. `download_file_to_bytes`
+    // streams the file and the progress handler must see at least Start, some
+    // byte-level progress (Progress or AggregateProgress), and Complete.
+    let recorder = Arc::new(EventRecorder::default());
+    let bytes = client()
+        .model(XET_REPO_OWNER, XET_REPO_NAME)
+        .download_file_to_bytes()
+        .filename(XET_FILE_NAME)
+        .progress(recorder.clone())
+        .send()
+        .await
+        .expect("download xet pytorch_model.bin with progress");
+    assert_eq!(bytes.len(), XET_FILE_SIZE);
+
+    let events = recorder.snapshot();
+    let start_total = events.iter().find_map(|e| match e {
+        ProgressEvent::Download(DownloadEvent::Start { total_bytes, .. }) => Some(*total_bytes),
+        _ => None,
+    });
+    assert_eq!(start_total.unwrap_or(0) as usize, XET_FILE_SIZE, "xet Start.total_bytes mismatch in {events:#?}",);
+
+    let has_byte_progress = events.iter().any(|e| {
+        matches!(
+            e,
+            ProgressEvent::Download(DownloadEvent::Progress { .. })
+                | ProgressEvent::Download(DownloadEvent::AggregateProgress { .. })
+        )
+    });
+    assert!(has_byte_progress, "expected at least one Progress or AggregateProgress event, got {events:#?}",);
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, ProgressEvent::Download(DownloadEvent::Complete))),
+        "expected Download::Complete event, got {events:#?}",
+    );
 }
