@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 hf-hub = { path = "../../hf-hub" }
+js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 futures-util = "0.3"
@@ -20,7 +21,8 @@ wasm-bindgen-test = "0.3"
 
 [features]
 # When enabled, the test crate omits `wasm_bindgen_test_configure!(run_in_browser)`,
-# letting `wasm-bindgen-test`'s default Node.js runner pick up the tests. Used by
-# the `wasm-test-node` CI job (and `RUN_IN_NODE=1 ./run_tests.sh` locally) to avoid
-# needing a webdriver + headless browser on the runner.
+# letting `wasm-bindgen-test`'s default Node.js runner pick up the tests. This is
+# the default mode `./run_tests.sh` runs in (Node, no webdriver); pass
+# `RUN_IN_BROWSER=1 ./run_tests.sh` to drop the feature and use the headless
+# browser runner instead, which is what the `wasm-test` CI job exercises.
 node-tests = []

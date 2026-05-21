@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use futures_util::StreamExt;
 use hf_hub::HFClientBuilder;
 use hf_hub::progress::{DownloadEvent, ProgressEvent, ProgressHandler};
+use hf_hub::repository::AddSource;
+use hf_hub::{HFClient, RepoTypeModel};
 use wasm_bindgen_test::wasm_bindgen_test;
 #[cfg(not(feature = "node-tests"))]
 use wasm_bindgen_test::wasm_bindgen_test_configure;
@@ -251,4 +253,78 @@ async fn download_xet_with_progress_handler_reports_bytes() {
             .any(|e| matches!(e, ProgressEvent::Download(DownloadEvent::Complete))),
         "expected Download::Complete event, got {events:#?}",
     );
+}
+
+// `option_env!` reads at compile time, so the token + write-flag must be set
+// when `run_tests.sh` invokes cargo (e.g.
+// `HF_TOKEN=hf_xxx HF_TEST_WRITE=1 ./wasm/tests/run_tests.sh`). Missing
+// either short-circuits the test to an early return — wasm-bindgen-test has
+// no built-in skip, so this is the convention used here.
+fn write_token() -> Option<&'static str> {
+    if option_env!("HF_TEST_WRITE") != Some("1") {
+        return None;
+    }
+    let token = option_env!("HF_TOKEN")?;
+    if token.is_empty() { None } else { Some(token) }
+}
+
+fn authed_client(token: &str) -> HFClient {
+    HFClientBuilder::new()
+        .endpoint(ENDPOINT.to_string())
+        .token(token.to_string())
+        .build()
+        .expect("build authed HFClient")
+}
+
+#[wasm_bindgen_test]
+async fn upload_file_bytes_roundtrip() {
+    let Some(token) = write_token() else {
+        // HF_TOKEN / HF_TEST_WRITE not baked in at compile time — skip.
+        return;
+    };
+
+    let client = authed_client(token);
+    let username = client.whoami().send().await.expect("whoami").username;
+    let name = format!("hf-hub-wasm-upload-{}", js_sys::Date::now() as u64);
+    let repo_id = format!("{username}/{name}");
+
+    client
+        .create_repository()
+        .repo_id(&repo_id)
+        .repo_type(RepoTypeModel)
+        .private(true)
+        .exist_ok(true)
+        .send()
+        .await
+        .expect("create test repo");
+
+    let repo = client.model(&username, &name);
+    let payload: &[u8] = b"hello from the wasm upload test\n";
+
+    let commit = repo
+        .upload_file()
+        .source(AddSource::bytes(payload.to_vec()))
+        .path_in_repo("wasm-upload-test.txt")
+        .commit_message("wasm upload roundtrip")
+        .send()
+        .await
+        .expect("upload_file");
+    assert!(commit.commit_oid.is_some(), "expected commit_oid, got {commit:#?}");
+
+    let downloaded = repo
+        .download_file_to_bytes()
+        .filename("wasm-upload-test.txt")
+        .send()
+        .await
+        .expect("roundtrip download");
+    assert_eq!(downloaded.as_ref(), payload, "uploaded and downloaded bytes differ");
+
+    client
+        .delete_repository()
+        .repo_id(&repo_id)
+        .repo_type(RepoTypeModel)
+        .missing_ok(true)
+        .send()
+        .await
+        .expect("delete test repo");
 }

@@ -961,6 +961,7 @@ version = "0.0.0"
 dependencies = [
  "futures-util",
  "hf-hub",
+ "js-sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",

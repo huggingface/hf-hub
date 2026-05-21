@@ -9,7 +9,13 @@
 #
 # Two run modes:
 #
-#   * Browser (default): drives a headless browser through
+#   * Node (default): builds with `--features node-tests`, which drops
+#     the `wasm_bindgen_test_configure!(run_in_browser)` directive and
+#     lets `wasm-bindgen-test-runner` fall back to its default Node.js
+#     runner. No webdriver / headless browser required. Validated against
+#     Node 20+; older versions may not support the shared-memory +
+#     atomics combination `hf-xet` needs.
+#   * Browser (`RUN_IN_BROWSER=1`): drives a headless browser through
 #     `wasm-bindgen-test-runner`. v0.2.121 serves
 #     `Cross-Origin-Opener-Policy: same-origin` and
 #     `Cross-Origin-Embedder-Policy: require-corp` by default, so
@@ -17,22 +23,16 @@
 #     extra configuration. (Disable via
 #     `WASM_BINDGEN_TEST_NO_ORIGIN_ISOLATION` if you ever need to compare
 #     behaviour.)
-#   * Node (`RUN_IN_NODE=1`): builds with `--features node-tests`, which
-#     drops the `wasm_bindgen_test_configure!(run_in_browser)` directive
-#     and lets `wasm-bindgen-test-runner` fall back to its default Node.js
-#     runner. No webdriver / headless browser required. Validated against
-#     Node 20+; older versions may not support the shared-memory + atomics
-#     combination `hf-xet` needs.
 #
 # Requirements:
 #   - Nightly Rust toolchain with `rust-src` (`rustup component add
 #     rust-src --toolchain nightly`)
 #   - `wasm-bindgen-cli` 0.2.121 (installed automatically if missing)
+#   - Node mode only: `node` on PATH (Node 20+).
 #   - Browser mode only: one of Chrome + chromedriver, Firefox +
 #     geckodriver, or Safari + safaridriver in PATH (selected via the
 #     relevant `*DRIVER` env var — see
 #     https://rustwasm.github.io/wasm-bindgen/wasm-bindgen-test/browsers.html).
-#   - Node mode only: `node` on PATH (Node 20+).
 
 set -ex
 
@@ -67,8 +67,9 @@ TARGET_RUSTFLAGS="-C target-feature=+atomics,+bulk-memory,+mutable-globals \
 : "${WASM_BINDGEN_TEST_TIMEOUT:=180}"
 export WASM_BINDGEN_TEST_TIMEOUT
 
-FEATURE_FLAGS=""
-if [ "${RUN_IN_NODE:-0}" = "1" ]; then
+if [ "${RUN_IN_BROWSER:-0}" = "1" ]; then
+    FEATURE_FLAGS=""
+else
     FEATURE_FLAGS="--features node-tests"
 fi
 

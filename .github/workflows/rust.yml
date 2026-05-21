@@ -154,15 +154,15 @@ jobs:
           fi
 
       - name: Run wasm integration tests
-        run: ./wasm/tests/run_tests.sh
+        run: RUN_IN_BROWSER=1 ./wasm/tests/run_tests.sh
 
   wasm-test-node:
-    # Same suite as `wasm-test`, but with `RUN_IN_NODE=1` so
-    # wasm-bindgen-test uses its Node.js runner instead of a headless
-    # browser. Faster feedback (no browser startup, no webdriver) and
-    # independent verification that the wasm build works under
-    # `worker_threads` + Node's SharedArrayBuffer, in addition to the
-    # browser harness exercised by `wasm-test`.
+    # Same suite as `wasm-test`, but uses `run_tests.sh`'s default Node
+    # runner (no `RUN_IN_BROWSER`) so wasm-bindgen-test goes through
+    # Node.js instead of a headless browser. Faster feedback (no browser
+    # startup, no webdriver) and independent verification that the wasm
+    # build works under `worker_threads` + Node's SharedArrayBuffer, in
+    # addition to the browser harness exercised by `wasm-test`.
     name: WASM integration tests (Node)
     runs-on: ubuntu-latest
     steps:
@@ -189,7 +189,7 @@ jobs:
         run: cargo install -f wasm-bindgen-cli --version 0.2.121
 
       - name: Run wasm integration tests (Node)
-        run: RUN_IN_NODE=1 ./wasm/tests/run_tests.sh
+        run: ./wasm/tests/run_tests.sh
 
   docs:
     name: Docs
