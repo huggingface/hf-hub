@@ -165,7 +165,7 @@ pub struct CommitInfo {
 ///
 /// let ops = vec![
 ///     CommitOperation::add_file("model.safetensors", "/local/path/model.safetensors"),
-///     CommitOperation::add_bytes("config.json", br#"{"vocab_size":50257}"#.to_vec()),
+///     CommitOperation::add_bytes("config.json", br#"{"vocab_size":50257}"#.as_slice()),
 ///     CommitOperation::delete("old/checkpoint.bin"),
 /// ];
 /// # let _ = ops;

@@ -29,8 +29,8 @@ impl<T: RepoType> HFRepository<T> {
     /// # Parameters
     ///
     /// - `revision`: Git revision to list. Defaults to the main branch.
-    /// - `path_in_repo`: repository-relative subdirectory to list. Defaults to the repo root. Must NOT start or end
-    ///   with `/`. Path segments are URL-encoded automatically.
+    /// - `path_in_repo`: repository-relative subdirectory to list. Defaults to the repo root. Leading, trailing, and
+    ///   consecutive `/` separators are ignored; path segments are URL-encoded automatically.
     /// - `recursive` (default `false`): traverse subdirectories.
     /// - `expand` (default `false`): include per-file metadata such as size, LFS info, and last-commit summaries.
     /// - `limit`: cap the total number of entries yielded.
@@ -41,7 +41,8 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         revision: Option<String>,
         /// Repository-relative subdirectory to list. Defaults to the repo root.
-        /// Must NOT start or end with `/`. Path segments are URL-encoded automatically.
+        /// Leading, trailing, and consecutive `/` separators are ignored;
+        /// path segments are URL-encoded automatically.
         #[builder(into)]
         path_in_repo: Option<String>,
         /// Traverse subdirectories.
@@ -58,7 +59,12 @@ impl<T: RepoType> HFRepository<T> {
             format!("{}/tree/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
         let mut url = Url::parse(&url_str)?;
         if let Some(path) = path_in_repo.as_deref() {
-            let mut segments = url.path_segments_mut().expect("base URL is not cannot-be-a-base");
+            // `path_segments_mut` only errors on cannot-be-a-base URLs (e.g. `mailto:`,
+            // `data:`); `api_url()` always returns an http(s) URL with a host, so this
+            // branch is unreachable in practice.
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|_| HFError::InvalidParameter(format!("unexpected non-base API URL: {url_str}")))?;
             for seg in path.split('/').filter(|s| !s.is_empty()) {
                 segments.push(seg);
             }

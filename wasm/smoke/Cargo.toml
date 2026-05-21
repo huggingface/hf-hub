@@ -16,3 +16,8 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 futures-util = "0.3"
+# `send_wrapper` lets us implement `Send + Sync` for the `js_sys::Function`
+# callback by panicking — rather than triggering UB — if the wrapper is ever
+# accessed from a different thread than the one that constructed it. See
+# `JsProgressHandler` in `src/lib.rs`.
+send_wrapper = "0.6"

@@ -14,15 +14,19 @@ use hf_hub::progress::{DownloadEvent, ProgressEvent, ProgressHandler};
 use hf_hub::repository::AddSource;
 use hf_hub::{HFClient, RepoTypeModel};
 use wasm_bindgen_test::wasm_bindgen_test;
-#[cfg(not(feature = "node-tests"))]
+#[cfg(feature = "browser-tests")]
 use wasm_bindgen_test::wasm_bindgen_test_configure;
 
-// The default (no features) compiles for the browser job — `hf-xet` needs
-// COOP/COEP-backed `SharedArrayBuffer`, and the `wasm-bindgen-test-runner`
-// browser harness sets those headers automatically. Enabling the
-// `node-tests` feature drops this configure and lets the test crate fall
-// back to the default Node.js runner — fast feedback loop, no webdriver.
-#[cfg(not(feature = "node-tests"))]
+// `wasm-bindgen-test`'s default runner is Node.js; compiling in
+// `wasm_bindgen_test_configure!(run_in_browser)` switches it to the headless
+// browser runner. We want both, so the directive is feature-gated: the
+// `browser-tests` feature flips it on (the `wasm-test` CI job + local
+// `RUN_IN_BROWSER=1 ./run_tests.sh`), absent it the tests run under Node
+// (default `./run_tests.sh` and the `wasm-test-node` CI job). `hf-xet`'s
+// threaded wasm needs `SharedArrayBuffer`, which Node 20+ provides natively
+// and the `wasm-bindgen-test-runner` browser harness exposes via the
+// COOP/COEP headers it sets automatically.
+#[cfg(feature = "browser-tests")]
 wasm_bindgen_test_configure!(run_in_browser);
 
 const ENDPOINT: &str = "https://huggingface.co";

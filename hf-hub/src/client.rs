@@ -192,10 +192,7 @@ impl HFClientBuilder {
 
         let client = match self.client {
             Some(c) => c,
-            None => {
-                let builder = reqwest::Client::builder().default_headers(default_headers.clone());
-                builder.build()?
-            },
+            None => reqwest::Client::builder().default_headers(default_headers.clone()).build()?,
         };
 
         #[cfg(not(target_family = "wasm"))]

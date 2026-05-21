@@ -403,41 +403,23 @@ impl HFBucket {
         self.batch_operations().delete(paths).send().await
     }
 
-    /// Upload in-memory bytes to the bucket. Wasm-safe analog of
-    /// [`HFBucket::upload_files`]: callers pass `bytes::Bytes` instead of local paths.
-    ///
-    /// Goes through the same preupload + xet pipeline; the only difference is
-    /// the source. Available on all targets.
-    ///
-    /// # Parameters
-    ///
-    /// - `files` (required): list of `(remote_path, bytes)` pairs.
-    /// - `progress`: optional progress handler.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn upload_bytes_files(
-        &self,
-        /// List of `(remote_path, bytes)` pairs.
-        files: Vec<(String, bytes::Bytes)>,
-        /// Progress handler.
-        #[builder(into)]
-        progress: Option<Progress>,
-    ) -> HFResult<()> {
-        let uploads: Vec<(String, crate::repository::AddSource)> = files
-            .into_iter()
-            .map(|(remote, b)| (remote, crate::repository::AddSource::bytes(b)))
-            .collect();
-        self.upload_sources_impl(uploads, progress).await
-    }
-
     /// Upload an arbitrary set of [`AddSource`]-backed files to the bucket.
     ///
-    /// More general than [`HFBucket::upload_bytes_files`] (in-memory only) and
-    /// [`HFBucket::upload_files`] (local-path only, native-only): each pair
-    /// can use any [`AddSource`] variant — `Bytes`, `File` (native), or
-    /// `Stream` for sources too large to materialize at once (typical wasm
-    /// case for `Blob`-backed uploads).
+    /// Wasm-safe analog of [`HFBucket::upload_files`] (which is native-only because it
+    /// reads from local paths): each pair can use any [`AddSource`] variant — `Bytes`
+    /// for in-memory content, `File` for a local path (native only), or `Stream` for
+    /// sources too large to materialize at once (typical wasm case for `Blob`-backed
+    /// uploads). For the common in-memory case, build entries with
+    /// [`AddSource::bytes`]:
     ///
-    /// Goes through the same preupload + xet pipeline.
+    /// ```rust,no_run
+    /// # use hf_hub::repository::AddSource;
+    /// # let _: Vec<(String, AddSource)> =
+    /// vec![("logs/run-1.txt".into(), AddSource::bytes(b"hello".as_slice()))]
+    /// # ;
+    /// ```
+    ///
+    /// Goes through the same preupload + xet pipeline as [`HFBucket::upload_files`].
     ///
     /// # Parameters
     ///
@@ -604,8 +586,7 @@ impl HFBucket {
 
 impl HFBucket {
     /// Shared implementation: upload pre-built `(remote_path, AddSource)` pairs through xet
-    /// and register them in the bucket. Used by [`HFBucket::upload_bytes_files`]
-    /// (bytes-based, all targets).
+    /// and register them in the bucket. Used by [`HFBucket::upload_source_files`].
     async fn upload_sources_impl(
         &self,
         uploads: Vec<(String, crate::repository::AddSource)>,
@@ -1141,18 +1122,6 @@ impl crate::blocking::HFBucketSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_files(&self, paths: Vec<String>) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_files().paths(paths).send())
-    }
-
-    /// Blocking counterpart of [`HFBucket::upload_bytes_files`]. See the async method for
-    /// parameters and behavior.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn upload_bytes_files(
-        &self,
-        files: Vec<(String, bytes::Bytes)>,
-        #[builder(into)] progress: Option<Progress>,
-    ) -> HFResult<()> {
-        self.runtime
-            .block_on(self.inner.upload_bytes_files().files(files).maybe_progress(progress).send())
     }
 
     /// Blocking counterpart of [`HFBucket::upload_source_files`]. See the async method for

@@ -187,10 +187,17 @@
 //! - `blocking` — enables the synchronous `*Sync` handles.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-// Many helpers in `client`, `error`, `pagination`, `progress`, and `retry` are
-// only reachable from `repository`/`buckets`/`cache`/etc., which are gated off
-// on wasm. Without this allow each one would surface a dead-code warning when
-// the crate is checked for `wasm32-unknown-unknown`.
+// On `wasm32-unknown-unknown` several modules drop most of their public surface
+// behind `#[cfg(not(target_family = "wasm"))]`: `cache` is gated out wholesale,
+// and `buckets`, `repository::{download, upload}`, `blocking`, and the
+// `xet_state`/`no_redirect_client`/`xet_session` paths in `client.rs` are
+// partially gated. That leaves shared helpers downstream of them — most of
+// `pagination`, the `NotFoundContext::*` variants in `error.rs`, several
+// `progress` constructors, and the no-redirect / cached-XetSession plumbing in
+// `client.rs` — reachable only from native call sites. Without this blanket
+// allow, each becomes a `dead_code` warning under wasm. Anything intentionally
+// dead lives in those modules; a wasm-only warning under this allow likely
+// indicates a real unused item.
 #![cfg_attr(target_family = "wasm", allow(dead_code))]
 
 mod client;

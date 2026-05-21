@@ -297,7 +297,7 @@ fn create_test_repo(client: &HFClientSync) -> String {
     let test_repo = client.model(parts[0], parts[1]);
     test_repo
         .upload_file()
-        .source(AddSource::bytes(b"initial content"))
+        .source(AddSource::bytes(b"initial content".as_slice()))
         .path_in_repo("README.md")
         .commit_message("initial commit")
         .send()
@@ -335,7 +335,7 @@ fn test_sync_create_and_delete_repo() {
 
     let commit = test_repo
         .upload_file()
-        .source(AddSource::bytes(b"hello world"))
+        .source(AddSource::bytes(b"hello world".as_slice()))
         .path_in_repo("test.txt")
         .commit_message("test upload")
         .send()

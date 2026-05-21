@@ -176,28 +176,28 @@ pub async fn download_with_progress(
 /// `js_sys::Function`.
 ///
 /// `js_sys::Function` is `!Send + !Sync` because each JS value is bound to its
-/// host thread. The `Send + Sync` impls below are sound on
-/// `wasm32-unknown-unknown` here for two reasons:
+/// host thread. The hf-hub progress pipeline for `download_file_stream` invokes
+/// the handler on the stream-poll path (`wrap_stream_with_progress`), which on
+/// wasm runs on the same JS thread that called `download_with_progress`, so in
+/// practice the callback is only ever fired on its original thread.
 ///
-/// 1. The hf-xet runtime spawns Web Workers, but each worker has its own isolated JS heap — the callback would not be
-///    reachable from there even if we tried to move it.
-/// 2. Progress events for `download_file_stream` are emitted on the stream-poll path (`wrap_stream_with_progress`),
-///    which runs on the same JS thread that calls `download_with_progress`. The callback is invoked on its original
-///    thread.
+/// We wrap the `js_sys::Function` in a [`send_wrapper::SendWrapper`] to satisfy
+/// the trait's `Send + Sync` bound without manual `unsafe impl`s: `SendWrapper`
+/// is `Send + Sync` unconditionally, but `Deref` / `Drop` panic if the wrapper
+/// is accessed from a different thread than the one that constructed it.
+/// That converts what would otherwise be undefined behaviour (if hf-hub ever
+/// dispatched progress events across worker threads) into a clean panic.
 struct JsProgressHandler {
-    callback: js_sys::Function,
+    callback: send_wrapper::SendWrapper<js_sys::Function>,
 }
 
 impl JsProgressHandler {
     fn new(callback: js_sys::Function) -> Self {
-        Self { callback }
+        Self {
+            callback: send_wrapper::SendWrapper::new(callback),
+        }
     }
 }
-
-// SAFETY: see the type-level doc comment.
-unsafe impl Send for JsProgressHandler {}
-// SAFETY: see the type-level doc comment.
-unsafe impl Sync for JsProgressHandler {}
 
 impl ProgressHandler for JsProgressHandler {
     fn on_progress(&self, event: &ProgressEvent) {

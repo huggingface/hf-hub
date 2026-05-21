@@ -101,7 +101,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let handler = LoggingProgressHandler::new();
     let commit = repo
         .upload_file()
-        .source(AddSource::bytes(b"hello from progress_logger"))
+        .source(AddSource::bytes(b"hello from progress_logger".as_slice()))
         .path_in_repo("hello.txt")
         .commit_message("example: progress_logger")
         .progress(handler)
