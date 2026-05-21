@@ -168,10 +168,14 @@ pub async fn download_file_bytes(
 /// per-file lists (`files`) are arrays of `{ filename, bytes_completed,
 /// total_bytes, status }` objects.
 ///
-/// Upload variants are exposed in the JS shape for parity with native, but
-/// the wasm build only emits the `download.*` variants — upload paths are
-/// gated off on `wasm32-unknown-unknown` (see `AGENTS.md#WebAssembly
-/// compatibility`).
+/// This function only drives `download_file_stream`, so the callback only
+/// observes `download.*` variants in this demo. Upload variants are exposed
+/// in the JS shape for parity with native — the wasm-compatible upload
+/// surface (`create_commit`, `upload_file`, `delete_file`, `delete_folder`
+/// with `AddSource::Bytes`) does emit `upload.start` / `upload.committing` /
+/// `upload.complete`, but per-byte `upload.progress` events are not wired
+/// through the wasm xet upload path today (see `hf-hub/src/xet.rs`'s
+/// `#[cfg(target_family = "wasm")] async fn xet_upload_inner`).
 ///
 /// Returns the total number of bytes streamed.
 #[wasm_bindgen]

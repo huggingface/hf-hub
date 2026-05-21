@@ -44,10 +44,15 @@ export function download_file_bytes(
 // `{ kind: "download.start", total_files, total_bytes }`,
 // `{ kind: "download.progress", files: [...] }`,
 // `{ kind: "download.aggregate_progress", bytes_completed, total_bytes, bytes_per_sec }`,
-// `{ kind: "download.complete" }`, etc. Upload variants
+// `{ kind: "download.complete" }`, etc. This entry point only drives
+// downloads, so only `download.*` variants fire here. Upload variants
 // (`upload.start` / `upload.progress` / `upload.committing` /
-// `upload.complete`) are part of the JS shape for parity but never fire on
-// wasm — upload paths are gated off on `wasm32-unknown-unknown`.
+// `upload.complete`) are part of the JS shape for parity with native —
+// wasm-compatible upload calls (`create_commit`, `upload_file`,
+// `delete_file`, `delete_folder` with `AddSource::Bytes`) do emit
+// `upload.start` / `upload.committing` / `upload.complete`, but per-byte
+// `upload.progress` events aren't wired through the wasm xet upload path
+// today.
 export function download_with_progress(
   endpoint: string,
   token: string | undefined,
