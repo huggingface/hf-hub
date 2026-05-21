@@ -126,7 +126,7 @@ memory at runtime. The required rustflags (passed via
 |------|-----|
 | `-C target-feature=+atomics,+bulk-memory,+mutable-globals` | Enables wasm threading features used by `hf-xet`'s `tokio_with_wasm` runtime. `+atomics` is unstable — hence nightly. |
 | `-C link-arg=--shared-memory` | Marks the module's memory as shared (needed for atomics). |
-| `-C link-arg=--max-memory=1073741824` | 1 GiB cap; required to declare a `--shared-memory` import. |
+| `-C link-arg=--max-memory=4294967296` | 4 GiB cap (wasm32's maximum); required to declare a `--shared-memory` import. Picked over 1 GiB so the runtime can absorb large in-memory file buffers without OOMing the linear memory — e.g., `hf-hub-wasm-upload`'s 500 MB upload path needs >1 GiB once xet working buffers are accounted for. |
 | `-C link-arg=--import-memory` | Lets the host pass in a `SharedArrayBuffer` instead of allocating inside the module. |
 | `-C link-arg=--export=__wasm_init_tls` <br> `-C link-arg=--export=__tls_size` <br> `-C link-arg=--export=__tls_align` <br> `-C link-arg=--export=__tls_base` <br> `-C link-arg=--export=__heap_base` | Symbols the worker bootstrap calls into to initialise per-thread storage. |
 | `--cfg getrandom_backend="wasm_js"` | Routes `getrandom` 0.3 (transitive via `hf-xet`) through `wasm-bindgen`. The 0.2 dependency reaches the same backend via the `js` feature in `hf-hub/Cargo.toml`. |
