@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
-use hf_hub::{HFClient, RepoTypeDataset, RepoTypeModel, RepoTypeSpace};
+use hf_hub::{HFClient, RepoTypeAny};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
@@ -21,34 +21,12 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
-    match args.r#type {
-        RepoTypeArg::Model => {
-            client
-                .delete_repository()
-                .repo_type(RepoTypeModel)
-                .repo_id(args.repo_id)
-                .missing_ok(args.missing_ok)
-                .send()
-                .await?;
-        },
-        RepoTypeArg::Dataset => {
-            client
-                .delete_repository()
-                .repo_type(RepoTypeDataset)
-                .repo_id(args.repo_id)
-                .missing_ok(args.missing_ok)
-                .send()
-                .await?;
-        },
-        RepoTypeArg::Space => {
-            client
-                .delete_repository()
-                .repo_type(RepoTypeSpace)
-                .repo_id(args.repo_id)
-                .missing_ok(args.missing_ok)
-                .send()
-                .await?;
-        },
-    }
+    client
+        .delete_repository()
+        .repo_type(RepoTypeAny::from(args.r#type))
+        .repo_id(args.repo_id)
+        .missing_ok(args.missing_ok)
+        .send()
+        .await?;
     Ok(CommandResult::Silent)
 }

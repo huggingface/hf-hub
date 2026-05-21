@@ -28,7 +28,6 @@ pub mod repo_type;
 pub mod upload;
 
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::str::FromStr;
 
 use bon::bon;
@@ -41,7 +40,7 @@ pub use files::{
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use files::{extract_file_size, extract_xet_hash};
 use futures::Stream;
-pub use repo_type::{RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
+pub use repo_type::{RepoType, RepoTypeAny, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
 use url::Url;
@@ -547,7 +546,7 @@ pub struct HFRepository<T: RepoType> {
     pub(crate) hf_client: HFClient,
     pub(super) owner: String,
     pub(super) name: String,
-    _ty: PhantomData<fn() -> T>,
+    pub(super) repo_type: T,
 }
 
 impl<T: RepoType> Clone for HFRepository<T> {
@@ -556,7 +555,7 @@ impl<T: RepoType> Clone for HFRepository<T> {
             hf_client: self.hf_client.clone(),
             owner: self.owner.clone(),
             name: self.name.clone(),
-            _ty: PhantomData,
+            repo_type: self.repo_type,
         }
     }
 }
@@ -608,7 +607,7 @@ impl<T: RepoType> std::fmt::Debug for HFRepository<T> {
         f.debug_struct("HFRepository")
             .field("owner", &self.owner)
             .field("name", &self.name)
-            .field("repo_type", &T::default().singular())
+            .field("repo_type", &self.repo_type.singular())
             .finish()
     }
 }
@@ -624,31 +623,36 @@ impl HFClient {
     /// ```rust,no_run
     /// # use hf_hub::{HFClient, RepoTypeDataset};
     /// # let client = HFClient::builder().build().unwrap();
-    /// let repo = client.repository::<RepoTypeDataset>("rajpurkar", "squad");
+    /// let repo = client.repository(RepoTypeDataset, "rajpurkar", "squad");
     /// # let _ = repo;
     /// ```
-    pub fn repository<T: RepoType>(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<T> {
-        HFRepository::new(self.clone(), owner, name)
+    pub fn repository<T: RepoType>(
+        &self,
+        repo_type: T,
+        owner: impl Into<String>,
+        name: impl Into<String>,
+    ) -> HFRepository<T> {
+        HFRepository::new(self.clone(), repo_type, owner, name)
     }
 
     /// Create an [`HFRepository`] handle for a model repository.
     pub fn model(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<RepoTypeModel> {
-        self.repository::<RepoTypeModel>(owner, name)
+        self.repository(RepoTypeModel, owner, name)
     }
 
     /// Create an [`HFRepository`] handle for a dataset repository.
     pub fn dataset(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<RepoTypeDataset> {
-        self.repository::<RepoTypeDataset>(owner, name)
+        self.repository(RepoTypeDataset, owner, name)
     }
 
     /// Create an [`HFRepository`] handle for a Space repository.
     pub fn space(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<RepoTypeSpace> {
-        self.repository::<RepoTypeSpace>(owner, name)
+        self.repository(RepoTypeSpace, owner, name)
     }
 
     /// Create an [`HFRepository`] handle for a kernel repository.
     pub fn kernel(&self, owner: impl Into<String>, name: impl Into<String>) -> HFRepository<RepoTypeKernel> {
-        self.repository::<RepoTypeKernel>(owner, name)
+        self.repository(RepoTypeKernel, owner, name)
     }
 }
 
@@ -1059,12 +1063,12 @@ impl HFClient {
 
 impl<T: RepoType> HFRepository<T> {
     /// Construct a new repository handle. Prefer the factory methods on [`HFClient`] instead.
-    pub fn new(client: HFClient, owner: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn new(client: HFClient, repo_type: T, owner: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             hf_client: client,
             owner: owner.into(),
             name: name.into(),
-            _ty: PhantomData,
+            repo_type,
         }
     }
 
@@ -1096,13 +1100,13 @@ impl<T: RepoType> HFRepository<T> {
 
     /// The marker for this handle's repo kind.
     ///
-    /// Equivalent to `T::default()` — useful when you want to read the kind from a
-    /// repository handle (e.g., for logging) without naming `T` explicitly. Call
+    /// Returns a reference to the stored marker value. Call
     /// [`singular`](RepoType::singular), [`plural`](RepoType::plural), or
-    /// [`url_prefix`](RepoType::url_prefix) on the returned value to get the
-    /// corresponding string.
-    pub fn repo_type(&self) -> impl RepoType {
-        T::default()
+    /// [`url_prefix`](RepoType::url_prefix) on it to get the corresponding string.
+    /// For `T = RepoTypeAny`, the returned value reflects the runtime variant the
+    /// handle was constructed with.
+    pub fn repo_type(&self) -> &T {
+        &self.repo_type
     }
 
     /// Fetch repo info for this repository's kind, deserializing into `I`.
@@ -1112,7 +1116,7 @@ impl<T: RepoType> HFRepository<T> {
         revision: Option<String>,
         expand: Option<Vec<String>>,
     ) -> HFResult<I> {
-        let mut url = self.hf_client.api_url(T::default().plural(), &self.repo_path());
+        let mut url = self.hf_client.api_url(self.repo_type.plural(), &self.repo_path());
         if let Some(ref revision) = revision {
             url = format!("{url}/revision/{revision}");
         }
@@ -1146,7 +1150,7 @@ impl<T: RepoType> HFRepository<T> {
     /// ([`HFError::AuthRequired`] or [`HFError::Forbidden`]), not `Ok(false)`.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn exists(&self) -> HFResult<bool> {
-        let url = self.hf_client.api_url(T::default().plural(), &self.repo_path());
+        let url = self.hf_client.api_url(self.repo_type.plural(), &self.repo_path());
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()
@@ -1177,7 +1181,8 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         revision: String,
     ) -> HFResult<bool> {
-        let url = format!("{}/revision/{}", self.hf_client.api_url(T::default().plural(), &self.repo_path()), revision);
+        let url =
+            format!("{}/revision/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()
@@ -1211,7 +1216,7 @@ impl<T: RepoType> HFRepository<T> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = self
             .hf_client
-            .download_url(T::default().url_prefix(), &self.repo_path(), revision, &filename);
+            .download_url(self.repo_type.url_prefix(), &self.repo_path(), revision, &filename);
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().head(&url).headers(headers.clone()).send()
@@ -1287,7 +1292,7 @@ impl<T: RepoType> HFRepository<T> {
             gated_notifications_mode: gated_notifications.as_ref().map(|g| &g.mode),
         };
 
-        let url = format!("{}/settings", self.hf_client.api_url(T::default().plural(), &self.repo_path()));
+        let url = format!("{}/settings", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()));
         let headers = self.hf_client.auth_headers();
 
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -1730,7 +1735,7 @@ mod tests {
     #[test]
     fn test_repo_path_and_accessors() {
         let client = HFClient::builder().build().unwrap();
-        let repo: HFRepository<RepoTypeModel> = HFRepository::new(client, "openai-community", "gpt2");
+        let repo: HFRepository<RepoTypeModel> = HFRepository::new(client, RepoTypeModel, "openai-community", "gpt2");
 
         assert_eq!(repo.owner(), "openai-community");
         assert_eq!(repo.name(), "gpt2");

@@ -23,7 +23,7 @@ use hf_hub::progress::{
     DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, ProgressHandler, UploadEvent,
 };
 use hf_hub::repository::download::HFByteStream;
-use hf_hub::{HFClient, HFClientBuilder, HFResult, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
+use hf_hub::{HFClient, HFClientBuilder, HFResult, RepoTypeAny};
 use js_sys::{Array, Object, Reflect};
 use wasm_bindgen::prelude::*;
 
@@ -36,49 +36,15 @@ async fn open_stream(
     filename: String,
     progress: Option<Progress>,
 ) -> HFResult<(Option<u64>, HFByteStream)> {
-    match repo_type_plural {
-        "models" => {
-            client
-                .repository::<RepoTypeModel>(owner, name)
-                .download_file_stream()
-                .filename(filename)
-                .revision(revision)
-                .maybe_progress(progress)
-                .send()
-                .await
-        },
-        "datasets" => {
-            client
-                .repository::<RepoTypeDataset>(owner, name)
-                .download_file_stream()
-                .filename(filename)
-                .revision(revision)
-                .maybe_progress(progress)
-                .send()
-                .await
-        },
-        "spaces" => {
-            client
-                .repository::<RepoTypeSpace>(owner, name)
-                .download_file_stream()
-                .filename(filename)
-                .revision(revision)
-                .maybe_progress(progress)
-                .send()
-                .await
-        },
-        "kernels" => {
-            client
-                .repository::<RepoTypeKernel>(owner, name)
-                .download_file_stream()
-                .filename(filename)
-                .revision(revision)
-                .maybe_progress(progress)
-                .send()
-                .await
-        },
-        other => Err(hf_hub::HFError::InvalidParameter(format!("unknown repo_type_plural: {other}"))),
-    }
+    let kind: RepoTypeAny = repo_type_plural.parse()?;
+    client
+        .repository(kind, owner, name)
+        .download_file_stream()
+        .filename(filename)
+        .revision(revision)
+        .maybe_progress(progress)
+        .send()
+        .await
 }
 
 fn build_client(endpoint: String, token: Option<String>) -> Result<HFClient, JsValue> {
