@@ -429,6 +429,32 @@ impl HFBucket {
         self.upload_sources_impl(uploads, progress).await
     }
 
+    /// Upload an arbitrary set of [`AddSource`]-backed files to the bucket.
+    ///
+    /// More general than [`HFBucket::upload_bytes_files`] (in-memory only) and
+    /// [`HFBucket::upload_files`] (local-path only, native-only): each pair
+    /// can use any [`AddSource`] variant — `Bytes`, `File` (native), or
+    /// `Stream` for sources too large to materialize at once (typical wasm
+    /// case for `Blob`-backed uploads).
+    ///
+    /// Goes through the same preupload + xet pipeline.
+    ///
+    /// # Parameters
+    ///
+    /// - `files` (required): list of `(remote_path, source)` pairs.
+    /// - `progress`: optional progress handler.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn upload_source_files(
+        &self,
+        /// List of `(remote_path, source)` pairs.
+        files: Vec<(String, crate::repository::AddSource)>,
+        /// Progress handler.
+        #[builder(into)]
+        progress: Option<Progress>,
+    ) -> HFResult<()> {
+        self.upload_sources_impl(files, progress).await
+    }
+
     /// Upload local files to the bucket.
     ///
     /// File contents are uploaded to xet first, then registered in the bucket via the batch
@@ -1127,6 +1153,18 @@ impl crate::blocking::HFBucketSync {
     ) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.upload_bytes_files().files(files).maybe_progress(progress).send())
+    }
+
+    /// Blocking counterpart of [`HFBucket::upload_source_files`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn upload_source_files(
+        &self,
+        files: Vec<(String, crate::repository::AddSource)>,
+        #[builder(into)] progress: Option<Progress>,
+    ) -> HFResult<()> {
+        self.runtime
+            .block_on(self.inner.upload_source_files().files(files).maybe_progress(progress).send())
     }
 
     /// Blocking counterpart of [`HFBucket::upload_files`]. See the async method for parameters

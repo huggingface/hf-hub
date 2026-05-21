@@ -21,7 +21,7 @@ use serde::Deserialize;
 use xet::error::XetError;
 use xet::xet_session::XetFileInfo;
 #[cfg(not(target_family = "wasm"))]
-use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileMetadata, XetFileUpload};
+use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileMetadata, XetFileUpload, XetStreamUpload};
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, XetOperation};
@@ -199,6 +199,28 @@ pub(crate) struct XetBatchFile {
     pub filename: String,
 }
 
+/// Per-file handle for the native xet upload loop. `File` and `Bytes`
+/// dispatch into xet's queued upload pipeline and yield an
+/// [`XetFileUpload`]; `Stream` dispatches into `upload_stream` and yields
+/// an [`XetStreamUpload`], which the loop drives chunk-by-chunk from a
+/// spawned task. Wrapping both in one enum lets the progress-polling
+/// closure iterate a single homogeneous collection.
+#[cfg(not(target_family = "wasm"))]
+enum NativeAnyHandle {
+    File(XetFileUpload),
+    Stream(XetStreamUpload),
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl NativeAnyHandle {
+    fn progress(&self) -> Option<xet::xet_session::ItemProgressReport> {
+        match self {
+            Self::File(h) => h.progress(),
+            Self::Stream(h) => h.progress(),
+        }
+    }
+}
+
 /// Shared xet upload flow for both repositories and buckets.
 ///
 /// Callers build the xet write-token URL with the appropriate variant
@@ -243,13 +265,25 @@ async fn xet_upload_inner(
     .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
     tracing::info!("xet upload commit built, queuing file uploads");
 
-    let mut task_ids_in_order = Vec::with_capacity(files.len());
-    let mut handles: Vec<XetFileUpload> = Vec::with_capacity(files.len());
+    // Each file gets a handle; `task_id_or_stream` records, *in input order*,
+    // whether the final XetFileInfo comes from `results.uploads.get(task_id)`
+    // (File/Bytes — queued through xet's task pipeline) or from a stream
+    // task's `finish()` metadata (Stream — written incrementally by a spawned
+    // task here). `stream_tasks` collects those write+finish join handles so
+    // we can await them before the final `commit.commit()` (which would
+    // otherwise hang waiting on the stream cleaners).
+    enum TaskKey {
+        Id(xet::xet_session::UniqueId),
+        Stream,
+    }
+    let mut task_id_or_stream: Vec<TaskKey> = Vec::with_capacity(files.len());
+    let mut handles: Vec<NativeAnyHandle> = Vec::with_capacity(files.len());
     let mut item_name_to_target_path: HashMap<String, String> = HashMap::with_capacity(files.len());
+    let mut stream_tasks: Vec<(usize, tokio::task::JoinHandle<HFResult<XetFileInfo>>)> = Vec::new();
 
-    for (target_path, source) in files {
+    for (i, (target_path, source)) in files.iter().enumerate() {
         tracing::info!(path = target_path.as_str(), "queuing xet upload");
-        let handle = match source {
+        match source {
             AddSource::File(path) => {
                 // Mimic xet-core's `std::path::absolute()` logic to derive the
                 // item_name that will appear in ItemProgressReport.
@@ -261,10 +295,12 @@ async fn xet_upload_inner(
                         tracing::warn!(path = ?abs, "non-UTF-8 path; per-file progress unavailable");
                     }
                 }
-                commit
+                let h = commit
                     .upload_from_path(path.clone(), Sha256Policy::Compute)
                     .await
-                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?
+                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+                task_id_or_stream.push(TaskKey::Id(h.task_id()));
+                handles.push(NativeAnyHandle::File(h));
             },
             AddSource::Bytes(bytes) => {
                 item_name_to_target_path.insert(target_path.clone(), target_path.clone());
@@ -273,37 +309,50 @@ async fn xet_upload_inner(
                 // upload_bytes signature wants `Vec<u8>` so we materialize one
                 // here — a one-shot copy that's fine on native, where memory
                 // isn't a 4 GiB-capped resource the way it is on wasm.
-                commit
+                let h = commit
                     .upload_bytes(bytes.to_vec(), Sha256Policy::Compute, Some(target_path.clone()))
                     .await
-                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?
+                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+                task_id_or_stream.push(TaskKey::Id(h.task_id()));
+                handles.push(NativeAnyHandle::File(h));
             },
             AddSource::Stream(s) => {
                 item_name_to_target_path.insert(target_path.clone(), target_path.clone());
-                // Native fast path: collect the stream into a Vec for the
-                // upload_bytes API so we keep the XetFileUpload handle (and
-                // therefore per-file progress polling below). Streams exist
-                // primarily for the wasm path's memory constraints; on native
-                // the materialization cost is acceptable, and callers wanting
-                // a true streaming upload from disk should use
-                // `AddSource::File` which goes through `upload_from_path`.
-                let mut buf: Vec<u8> = Vec::with_capacity(s.size() as usize);
-                let mut stream = s.open();
-                while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
-                    buf.extend_from_slice(&chunk?);
-                }
-                commit
-                    .upload_bytes(buf, Sha256Policy::Compute, Some(target_path.clone()))
+                // True streaming on native: drive `upload_stream` chunk by
+                // chunk from a spawned task. Polling sees the file via the
+                // cloned XetStreamUpload handle in `handles`; we await each
+                // task's finish() before commit.commit() to avoid hanging.
+                let stream_handle = commit
+                    .upload_stream(Some(target_path.clone()), Sha256Policy::Compute)
                     .await
-                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?
+                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+                let stream_handle_for_task = stream_handle.clone();
+                let source_for_task = s.clone();
+                stream_tasks.push((
+                    i,
+                    tokio::spawn(async move {
+                        let mut byte_stream = source_for_task.open();
+                        while let Some(chunk) = futures::StreamExt::next(&mut byte_stream).await {
+                            stream_handle_for_task
+                                .write(chunk?)
+                                .await
+                                .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+                        }
+                        let meta = stream_handle_for_task
+                            .finish()
+                            .await
+                            .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+                        Ok::<_, HFError>(meta.xet_info)
+                    }),
+                ));
+                task_id_or_stream.push(TaskKey::Stream);
+                handles.push(NativeAnyHandle::Stream(stream_handle));
             },
-        };
-        task_ids_in_order.push(handle.task_id());
-        handles.push(handle);
+        }
     }
 
     tracing::info!(file_count = files.len(), "committing xet uploads");
-    let shared_handles: Arc<Vec<XetFileUpload>> = Arc::new(handles);
+    let shared_handles: Arc<Vec<NativeAnyHandle>> = Arc::new(handles);
     let shared_name_map: Arc<HashMap<String, String>> = Arc::new(item_name_to_target_path);
 
     let poll_handle = progress.as_ref().map(|handler| {
@@ -347,6 +396,18 @@ async fn xet_upload_inner(
             }
         })
     });
+    // For streams, we need each `finish()` to land before `commit.commit()`
+    // — otherwise the commit waits indefinitely on the in-flight cleaners.
+    // For File/Bytes, the tasks are already queued in xet's runtime and run
+    // concurrently with these awaits and with the polling closure above.
+    let mut stream_xet_infos: HashMap<usize, XetFileInfo> = HashMap::with_capacity(stream_tasks.len());
+    for (i, jh) in stream_tasks {
+        let info = jh
+            .await
+            .map_err(|e| HFError::Other(format!("xet stream upload task panicked: {e}")))??;
+        stream_xet_infos.insert(i, info);
+    }
+
     let results = commit.commit().await.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
     if let Some(h) = poll_handle {
         h.abort();
@@ -381,12 +442,20 @@ async fn xet_upload_inner(
     });
 
     let mut xet_file_infos = Vec::with_capacity(files.len());
-    for task_id in &task_ids_in_order {
-        let metadata: &XetFileMetadata = results
-            .uploads
-            .get(task_id)
-            .ok_or_else(|| HFError::Other("Missing xet upload result for task".to_string()))?;
-        xet_file_infos.push(metadata.xet_info.clone());
+    for (i, key) in task_id_or_stream.iter().enumerate() {
+        let info = match key {
+            TaskKey::Id(task_id) => {
+                let metadata: &XetFileMetadata = results
+                    .uploads
+                    .get(task_id)
+                    .ok_or_else(|| HFError::Other("Missing xet upload result for task".to_string()))?;
+                metadata.xet_info.clone()
+            },
+            TaskKey::Stream => stream_xet_infos
+                .remove(&i)
+                .ok_or_else(|| HFError::Other(format!("missing xet stream upload result for index {i}")))?,
+        };
+        xet_file_infos.push(info);
     }
 
     Ok(xet_file_infos)

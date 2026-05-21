@@ -381,11 +381,12 @@ impl<T: RepoType> HFRepository<T> {
             return Ok(HashMap::new());
         }
 
-        // Step 1: Gather file info (path, size, sample) for preupload check
-        let mut file_infos: Vec<(String, u64, Vec<u8>, &AddSource)> = Vec::new();
+        // Step 1: Gather file info (path, size, sample, sha) for preupload check.
+        // Sample + SHA are computed in a single source-read pass — see prepare_source.
+        let mut file_infos: Vec<(String, u64, Vec<u8>, String, &AddSource)> = Vec::new();
         for (path_in_repo, source) in &add_ops {
-            let (size, sample) = read_size_and_sample(source).await?;
-            file_infos.push(((*path_in_repo).clone(), size, sample, source));
+            let (size, sample, sha256_oid) = prepare_source(source).await?;
+            file_infos.push(((*path_in_repo).clone(), size, sample, sha256_oid, source));
         }
 
         // Step 2: Call preupload endpoint to classify files as "lfs" or "regular"
@@ -397,16 +398,16 @@ impl<T: RepoType> HFRepository<T> {
                 revision,
                 &file_infos
                     .iter()
-                    .map(|(path, size, sample, _)| (path.as_str(), *size, sample.as_slice()))
+                    .map(|(path, size, sample, _, _)| (path.as_str(), *size, sample.as_slice()))
                     .collect::<Vec<_>>(),
             )
             .await?;
         tracing::info!(?upload_modes, "preupload classification complete");
 
         // Step 3: Identify LFS files (empty files are always regular)
-        let lfs_files: Vec<&(String, u64, Vec<u8>, &AddSource)> = file_infos
+        let lfs_files: Vec<&(String, u64, Vec<u8>, String, &AddSource)> = file_infos
             .iter()
-            .filter(|(path, size, _, _)| {
+            .filter(|(path, size, _, _, _)| {
                 *size > 0 && upload_modes.get(path.as_str()).map(|m| m == "lfs").unwrap_or(false)
             })
             .collect();
@@ -417,7 +418,7 @@ impl<T: RepoType> HFRepository<T> {
 
         tracing::info!(
             lfs_file_count = lfs_files.len(),
-            lfs_files = ?lfs_files.iter().map(|(p, s, _, _)| (p.as_str(), *s)).collect::<Vec<_>>(),
+            lfs_files = ?lfs_files.iter().map(|(p, s, _, _, _)| (p.as_str(), *s)).collect::<Vec<_>>(),
             "files requiring LFS upload"
         );
 
@@ -474,16 +475,19 @@ impl<T: RepoType> HFRepository<T> {
         &self,
         params: &CreateCommitParams,
         revision: &str,
-        lfs_files: &[&(String, u64, Vec<u8>, &AddSource)],
+        lfs_files: &[&(String, u64, Vec<u8>, String, &AddSource)],
     ) -> HFResult<HashMap<String, (String, u64)>> {
-        // Step 4: Compute SHA256 for LFS files
-        tracing::info!("computing SHA256 for {} LFS files", lfs_files.len());
-        let mut lfs_with_sha: Vec<(String, u64, String, &AddSource)> = Vec::new();
-        for (path, size, _, source) in lfs_files {
-            let sha256_oid = sha256_of_source(source).await?;
-            tracing::info!(path = path.as_str(), size, oid = sha256_oid.as_str(), "SHA256 computed");
-            lfs_with_sha.push(((*path).clone(), *size, sha256_oid, source));
-        }
+        // Step 4: SHA-256 was already computed alongside the preupload sample in
+        // `prepare_source` — see the per-file `file_infos` tuple. We just
+        // unpack it here instead of re-reading each source.
+        tracing::info!("collecting pre-computed SHA256 for {} LFS files", lfs_files.len());
+        let lfs_with_sha: Vec<(String, u64, String, &AddSource)> = lfs_files
+            .iter()
+            .map(|(path, size, _, sha256_oid, source)| {
+                tracing::info!(path = path.as_str(), size = *size, oid = sha256_oid.as_str(), "SHA256 reused");
+                ((*path).clone(), *size, sha256_oid.clone(), *source)
+            })
+            .collect();
 
         // Step 5: Call LFS batch endpoint to negotiate transfer method
         let objects: Vec<(&str, u64)> = lfs_with_sha.iter().map(|(_, size, oid, _)| (oid.as_str(), *size)).collect();
@@ -599,26 +603,52 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
+const PREUPLOAD_SAMPLE_SIZE: usize = 512;
+
+/// Compute size, preupload sample, and SHA-256 from a single pass over the source.
+///
+/// hf-hub previously walked each source three times: once for the preupload
+/// sample, once for the LFS-batch SHA, and once for the xet upload. For
+/// [`AddSource::Stream`] backed by a JS `Blob` (or any other re-readable
+/// source), that meant three full reads of the underlying bytes. This
+/// function fuses the sample and SHA passes into one stream traversal so we
+/// only ever pay two reads — the metadata pass here and the final upload
+/// pass via xet.
+///
+/// SHA is computed eagerly for every variant, including files the Hub will
+/// later classify as "regular" (non-LFS). The wasted work is bounded:
+/// regular files are small (Hub threshold is ~10 MB), so the extra SHA
+/// hashing is negligible compared to skipping a full re-read for LFS-sized
+/// streams.
+async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>, String)> {
     match source {
         AddSource::Bytes(bytes) => {
+            let sample = bytes[..std::cmp::min(bytes.len(), PREUPLOAD_SAMPLE_SIZE)].to_vec();
             let hash = Sha256::digest(bytes);
-            Ok(hex_encode(&hash))
+            Ok((bytes.len() as u64, sample, hex_encode(&hash)))
         },
         AddSource::Stream(s) => {
             let mut stream = s.open();
+            let mut sample: Vec<u8> = Vec::with_capacity(PREUPLOAD_SAMPLE_SIZE);
             let mut hasher = Sha256::new();
             while let Some(chunk) = stream.next().await {
-                hasher.update(&chunk?);
+                let chunk = chunk?;
+                hasher.update(&chunk);
+                if sample.len() < PREUPLOAD_SAMPLE_SIZE {
+                    let take = std::cmp::min(PREUPLOAD_SAMPLE_SIZE - sample.len(), chunk.len());
+                    sample.extend_from_slice(&chunk[..take]);
+                }
             }
-            Ok(hex_encode(&hasher.finalize()))
+            Ok((s.size(), sample, hex_encode(&hasher.finalize())))
         },
         #[cfg(not(target_family = "wasm"))]
         AddSource::File(path) => {
             let path = path.clone();
-            tokio::task::spawn_blocking(move || -> HFResult<String> {
+            tokio::task::spawn_blocking(move || -> HFResult<(u64, Vec<u8>, String)> {
                 let mut file = std::fs::File::open(&path)?;
+                let size = file.metadata()?.len();
                 let mut hasher = Sha256::new();
+                let mut sample: Vec<u8> = Vec::with_capacity(PREUPLOAD_SAMPLE_SIZE);
                 let mut buf = vec![0u8; 64 * 1024];
                 loop {
                     let n = file.read(&mut buf)?;
@@ -626,43 +656,15 @@ async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
                         break;
                     }
                     hasher.update(&buf[..n]);
+                    if sample.len() < PREUPLOAD_SAMPLE_SIZE {
+                        let take = std::cmp::min(PREUPLOAD_SAMPLE_SIZE - sample.len(), n);
+                        sample.extend_from_slice(&buf[..take]);
+                    }
                 }
-                Ok(hex_encode(&hasher.finalize()))
+                Ok((size, sample, hex_encode(&hasher.finalize())))
             })
             .await
-            .map_err(|e| HFError::Other(format!("sha256 task failed: {e}")))?
-        },
-    }
-}
-
-async fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
-    const SAMPLE_SIZE: usize = 512;
-    match source {
-        AddSource::Bytes(bytes) => {
-            let size = bytes.len() as u64;
-            let sample = bytes[..std::cmp::min(bytes.len(), SAMPLE_SIZE)].to_vec();
-            Ok((size, sample))
-        },
-        AddSource::Stream(s) => {
-            let mut stream = s.open();
-            let mut sample: Vec<u8> = Vec::with_capacity(SAMPLE_SIZE);
-            while sample.len() < SAMPLE_SIZE {
-                let Some(chunk) = stream.next().await else { break };
-                let chunk = chunk?;
-                let take = std::cmp::min(SAMPLE_SIZE - sample.len(), chunk.len());
-                sample.extend_from_slice(&chunk[..take]);
-            }
-            Ok((s.size(), sample))
-        },
-        #[cfg(not(target_family = "wasm"))]
-        AddSource::File(path) => {
-            let mut file = std::fs::File::open(path)?;
-            let metadata = file.metadata()?;
-            let size = metadata.len();
-            let mut sample = vec![0u8; SAMPLE_SIZE];
-            let n = file.read(&mut sample)?;
-            sample.truncate(n);
-            Ok((size, sample))
+            .map_err(|e| HFError::Other(format!("prepare_source task failed: {e}")))?
         },
     }
 }
