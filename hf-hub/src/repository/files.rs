@@ -16,6 +16,7 @@
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 #[allow(unused_imports)] // used by intra-doc links
@@ -200,7 +201,7 @@ impl CommitOperation {
     /// `Add { path_in_repo, source: AddSource::bytes(source) }`. The bytes are
     /// retained in the operation and re-read at commit time — see
     /// [`AddSource::Bytes`] for the memory cost.
-    pub fn add_bytes(path_in_repo: impl Into<String>, source: impl Into<Vec<u8>>) -> Self {
+    pub fn add_bytes(path_in_repo: impl Into<String>, source: impl Into<Bytes>) -> Self {
         CommitOperation::Add {
             path_in_repo: path_in_repo.into(),
             source: AddSource::bytes(source),
@@ -233,8 +234,12 @@ pub enum AddSource {
     #[cfg(not(target_family = "wasm"))]
     File(PathBuf),
 
-    /// In-memory contents used as the file body.
-    Bytes(Vec<u8>),
+    /// In-memory contents used as the file body. Stored as [`bytes::Bytes`] so that
+    /// the internal `.clone()` calls along the upload path (e.g., building the
+    /// xet batch from operations) are cheap refcount bumps rather than full
+    /// memory copies — critical on `wasm32-unknown-unknown` where every extra
+    /// 100s of MB of working set risks exhausting the wasm linear memory.
+    Bytes(Bytes),
 }
 
 impl AddSource {
@@ -245,7 +250,12 @@ impl AddSource {
     }
 
     /// Construct an [`AddSource::Bytes`] from in-memory contents.
-    pub fn bytes(bytes: impl Into<Vec<u8>>) -> Self {
+    ///
+    /// `bytes` accepts any type that converts to [`bytes::Bytes`]: `Vec<u8>` is
+    /// taken by value with no copy (via `Bytes::from`), `&'static [u8]` /
+    /// `&'static str` are wrapped without copying, and an existing [`Bytes`]
+    /// passes through unchanged.
+    pub fn bytes(bytes: impl Into<Bytes>) -> Self {
         AddSource::Bytes(bytes.into())
     }
 }

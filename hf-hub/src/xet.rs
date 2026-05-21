@@ -268,8 +268,13 @@ async fn xet_upload_inner(
             },
             AddSource::Bytes(bytes) => {
                 item_name_to_target_path.insert(target_path.clone(), target_path.clone());
+                // Native xet still uses upload_bytes for the per-file XetFileUpload
+                // handle (needed by the progress-polling loop below). xet's
+                // upload_bytes signature wants `Vec<u8>` so we materialize one
+                // here — a one-shot copy that's fine on native, where memory
+                // isn't a 4 GiB-capped resource the way it is on wasm.
                 commit
-                    .upload_bytes(bytes.clone(), Sha256Policy::Compute, Some(target_path.clone()))
+                    .upload_bytes(bytes.to_vec(), Sha256Policy::Compute, Some(target_path.clone()))
                     .await
                     .map_err(|e| HFError::xet(XetOperation::Upload, e))?
             },
@@ -402,32 +407,43 @@ async fn xet_upload_inner(
         .await
         .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
 
-    tracing::info!("xet upload commit built, queuing file uploads (wasm)");
+    tracing::info!("xet upload commit built, streaming file uploads (wasm)");
 
-    let mut task_ids_in_order = Vec::with_capacity(files.len());
+    // Use `upload_stream` instead of `upload_bytes` to avoid xet's internal
+    // `Bytes::copy_from_slice` (`add_data(&[u8])` path). `upload_stream`'s
+    // `write(impl Into<Bytes>)` goes through `add_data_from_bytes(Bytes)`
+    // which forwards the buffer through to the chunker without copying.
+    //
+    // Combined with `AddSource::Bytes` now holding `bytes::Bytes`, this
+    // turns the wasm upload path's `bytes.clone()` from a full
+    // file-sized copy into a refcount bump — critical headroom on the
+    // 4 GiB-capped (and often browser-limited) wasm linear memory.
+    let mut xet_file_infos = Vec::with_capacity(files.len());
 
     for (target_path, source) in files {
-        tracing::info!(path = target_path.as_str(), "queuing xet upload (wasm)");
+        tracing::info!(path = target_path.as_str(), "streaming xet upload (wasm)");
         let crate::repository::AddSource::Bytes(bytes) = source;
-        let handle = commit
-            .upload_bytes(bytes.clone(), Sha256Policy::Compute, Some(target_path.clone()))
+
+        let stream_handle = commit
+            .upload_stream(Some(target_path.clone()), Sha256Policy::Compute)
             .await
             .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
-        task_ids_in_order.push(handle.task_id());
+
+        stream_handle
+            .write(bytes.clone())
+            .await
+            .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+
+        let metadata = stream_handle
+            .finish()
+            .await
+            .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+        xet_file_infos.push(metadata.xet_info.clone());
     }
 
     tracing::info!(file_count = files.len(), "committing xet uploads (wasm)");
-    let results = commit.commit().await.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+    commit.commit().await.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
     tracing::info!("xet upload commit complete (wasm)");
-
-    let mut xet_file_infos = Vec::with_capacity(files.len());
-    for task_id in &task_ids_in_order {
-        let metadata = results
-            .uploads
-            .get(task_id)
-            .ok_or_else(|| HFError::Other("Missing xet upload result for task".to_string()))?;
-        xet_file_infos.push(metadata.xet_info.clone());
-    }
 
     Ok(xet_file_infos)
 }

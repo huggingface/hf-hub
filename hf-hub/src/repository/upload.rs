@@ -206,9 +206,9 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     async fn inline_base64_entry(path_in_repo: &str, source: &AddSource) -> HFResult<serde_json::Value> {
-        let content = match source {
+        let content: bytes::Bytes = match source {
             #[cfg(not(target_family = "wasm"))]
-            AddSource::File(path) => std::fs::read(path)?,
+            AddSource::File(path) => bytes::Bytes::from(std::fs::read(path)?),
             AddSource::Bytes(bytes) => bytes.clone(),
         };
         let b64 = base64::engine::general_purpose::STANDARD.encode(&content);
