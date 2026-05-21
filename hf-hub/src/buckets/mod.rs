@@ -593,6 +593,7 @@ impl HFBucket {
             .iter()
             .map(|(_, source)| match source {
                 crate::repository::AddSource::Bytes(b) => b.len() as u64,
+                crate::repository::AddSource::Stream(s) => s.size(),
                 #[cfg(not(target_family = "wasm"))]
                 crate::repository::AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
             })

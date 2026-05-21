@@ -103,6 +103,7 @@ impl<T: RepoType> HFRepository<T> {
                 if let CommitOperation::Add { source, .. } = op {
                     total += match source {
                         AddSource::Bytes(b) => b.len() as u64,
+                        AddSource::Stream(s) => s.size(),
                         #[cfg(not(target_family = "wasm"))]
                         AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
                     };
@@ -210,6 +211,18 @@ impl<T: RepoType> HFRepository<T> {
             #[cfg(not(target_family = "wasm"))]
             AddSource::File(path) => bytes::Bytes::from(std::fs::read(path)?),
             AddSource::Bytes(bytes) => bytes.clone(),
+            AddSource::Stream(s) => {
+                // Inline path is only used for files the Hub classifies as
+                // "regular" (i.e., not LFS) — typically <10 MB. Buffering the
+                // full stream here is safe at that size; LFS-sized streams go
+                // through the xet path which never materializes them.
+                let mut stream = s.open();
+                let mut buf = bytes::BytesMut::with_capacity(s.size() as usize);
+                while let Some(chunk) = stream.next().await {
+                    buf.extend_from_slice(&chunk?);
+                }
+                buf.freeze()
+            },
         };
         let b64 = base64::engine::general_purpose::STANDARD.encode(&content);
         Ok(serde_json::json!({
@@ -371,7 +384,7 @@ impl<T: RepoType> HFRepository<T> {
         // Step 1: Gather file info (path, size, sample) for preupload check
         let mut file_infos: Vec<(String, u64, Vec<u8>, &AddSource)> = Vec::new();
         for (path_in_repo, source) in &add_ops {
-            let (size, sample) = read_size_and_sample(source)?;
+            let (size, sample) = read_size_and_sample(source).await?;
             file_infos.push(((*path_in_repo).clone(), size, sample, source));
         }
 
@@ -592,6 +605,14 @@ async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
             let hash = Sha256::digest(bytes);
             Ok(hex_encode(&hash))
         },
+        AddSource::Stream(s) => {
+            let mut stream = s.open();
+            let mut hasher = Sha256::new();
+            while let Some(chunk) = stream.next().await {
+                hasher.update(&chunk?);
+            }
+            Ok(hex_encode(&hasher.finalize()))
+        },
         #[cfg(not(target_family = "wasm"))]
         AddSource::File(path) => {
             let path = path.clone();
@@ -614,19 +635,31 @@ async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
     }
 }
 
-fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
+async fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
+    const SAMPLE_SIZE: usize = 512;
     match source {
         AddSource::Bytes(bytes) => {
             let size = bytes.len() as u64;
-            let sample = bytes[..std::cmp::min(bytes.len(), 512)].to_vec();
+            let sample = bytes[..std::cmp::min(bytes.len(), SAMPLE_SIZE)].to_vec();
             Ok((size, sample))
+        },
+        AddSource::Stream(s) => {
+            let mut stream = s.open();
+            let mut sample: Vec<u8> = Vec::with_capacity(SAMPLE_SIZE);
+            while sample.len() < SAMPLE_SIZE {
+                let Some(chunk) = stream.next().await else { break };
+                let chunk = chunk?;
+                let take = std::cmp::min(SAMPLE_SIZE - sample.len(), chunk.len());
+                sample.extend_from_slice(&chunk[..take]);
+            }
+            Ok((s.size(), sample))
         },
         #[cfg(not(target_family = "wasm"))]
         AddSource::File(path) => {
             let mut file = std::fs::File::open(path)?;
             let metadata = file.metadata()?;
             let size = metadata.len();
-            let mut sample = vec![0u8; 512];
+            let mut sample = vec![0u8; SAMPLE_SIZE];
             let n = file.read(&mut sample)?;
             sample.truncate(n);
             Ok((size, sample))

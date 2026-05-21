@@ -35,7 +35,7 @@ pub use commits::{CommitAuthor, DiffEntry, GitCommitInfo, GitRefInfo, GitRefs};
 pub use diff::{GitStatus, HFDiffParseError, HFFileDiff};
 pub use files::{
     AddSource, BlobLfsInfo, BlobSecurityInfo, CommitInfo, CommitOperation, FileMetadataInfo, LastCommitInfo,
-    RepoTreeEntry,
+    RepoTreeEntry, SourceByteStream, StreamFactory, StreamSource,
 };
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use files::{extract_file_size, extract_xet_hash};

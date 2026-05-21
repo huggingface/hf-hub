@@ -15,13 +15,17 @@
 
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use bytes::Bytes;
+use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 
 #[allow(unused_imports)] // used by intra-doc links
 use super::HFRepository;
 use crate::constants;
+use crate::error::HFResult;
 
 /// LFS metadata attached to a repository file, when the file is stored in Git LFS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,6 +232,74 @@ impl CommitOperation {
 ///
 /// `AddSource::File` is not available on `wasm32-unknown-unknown`; use
 /// [`AddSource::Bytes`] instead.
+/// Stream of byte chunks produced by a [`StreamSource`].
+///
+/// On native targets the stream is `Send`. On `wasm32-unknown-unknown` the
+/// `Send` bound is dropped because the most common wasm implementations
+/// (e.g., adapters around [`web_sys::Blob::stream`]) wrap JS values that
+/// are inherently thread-bound.
+#[cfg(not(target_family = "wasm"))]
+pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>> + Send>>;
+#[cfg(target_family = "wasm")]
+pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>>>>;
+
+/// Factory that produces a fresh [`SourceByteStream`] each time `open` is called.
+///
+/// hf-hub's upload pipeline reads a source up to three times — a small "sample"
+/// prefix for the preupload classification, the full content for the LFS SHA-256
+/// hash, and the full content for the xet upload — so a one-shot stream isn't
+/// enough. Implementations should be cheap to re-open (e.g., re-slice a
+/// [`web_sys::Blob`] or re-open a file handle) and must produce identical bytes
+/// across opens.
+///
+/// The trait requires `Send + Sync` so that [`AddSource`] (and therefore
+/// `CommitOperation::Add { source }`) can be moved between tasks. JS-backed
+/// implementations on `wasm32-unknown-unknown` typically wrap a non-`Send`
+/// value (a `Blob`) in a newtype with an `unsafe impl Send + Sync` justified
+/// by wasm's effective single-threadedness — see the `hf-hub-wasm-upload`
+/// Space for the pattern.
+pub trait StreamFactory: Send + Sync {
+    /// Produce a fresh stream over the source's bytes.
+    fn open(&self) -> SourceByteStream;
+}
+
+/// Source backed by a re-readable stream of byte chunks of known length.
+///
+/// Use this when the bytes are too large to materialize in memory at once —
+/// for example, when uploading a multi-GiB browser `File` from a wasm Space.
+/// The upload pipeline only ever holds one chunk in flight at a time.
+#[derive(Clone)]
+pub struct StreamSource {
+    factory: Arc<dyn StreamFactory>,
+    size: u64,
+}
+
+impl StreamSource {
+    /// Construct a [`StreamSource`] from a factory and a known total byte length.
+    ///
+    /// `size` must equal the total number of bytes produced by `factory.open()`,
+    /// which must be the same across every invocation.
+    pub fn new(factory: Arc<dyn StreamFactory>, size: u64) -> Self {
+        Self { factory, size }
+    }
+
+    /// Total number of bytes the stream will produce.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// Open a fresh byte stream from the source.
+    pub fn open(&self) -> SourceByteStream {
+        self.factory.open()
+    }
+}
+
+impl std::fmt::Debug for StreamSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamSource").field("size", &self.size).finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum AddSource {
     /// Read file contents from this local path at commit time.
@@ -240,6 +312,13 @@ pub enum AddSource {
     /// memory copies — critical on `wasm32-unknown-unknown` where every extra
     /// 100s of MB of working set risks exhausting the wasm linear memory.
     Bytes(Bytes),
+
+    /// Lazily-read byte stream of known total length. Lets the upload pipeline
+    /// process a source whose total size exceeds available memory: only one
+    /// chunk is held in flight at any time. See [`StreamSource`] for the
+    /// factory contract (must be re-readable to satisfy the sample, hash, and
+    /// upload passes).
+    Stream(StreamSource),
 }
 
 impl AddSource {
@@ -257,6 +336,14 @@ impl AddSource {
     /// passes through unchanged.
     pub fn bytes(bytes: impl Into<Bytes>) -> Self {
         AddSource::Bytes(bytes.into())
+    }
+
+    /// Construct an [`AddSource::Stream`] from a [`StreamSource`].
+    ///
+    /// The total length must be known up-front and the factory must produce
+    /// identical bytes on every `open()` — see [`StreamSource::new`].
+    pub fn stream(source: StreamSource) -> Self {
+        AddSource::Stream(source)
     }
 }
 

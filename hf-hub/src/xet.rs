@@ -278,6 +278,25 @@ async fn xet_upload_inner(
                     .await
                     .map_err(|e| HFError::xet(XetOperation::Upload, e))?
             },
+            AddSource::Stream(s) => {
+                item_name_to_target_path.insert(target_path.clone(), target_path.clone());
+                // Native fast path: collect the stream into a Vec for the
+                // upload_bytes API so we keep the XetFileUpload handle (and
+                // therefore per-file progress polling below). Streams exist
+                // primarily for the wasm path's memory constraints; on native
+                // the materialization cost is acceptable, and callers wanting
+                // a true streaming upload from disk should use
+                // `AddSource::File` which goes through `upload_from_path`.
+                let mut buf: Vec<u8> = Vec::with_capacity(s.size() as usize);
+                let mut stream = s.open();
+                while let Some(chunk) = futures::StreamExt::next(&mut stream).await {
+                    buf.extend_from_slice(&chunk?);
+                }
+                commit
+                    .upload_bytes(buf, Sha256Policy::Compute, Some(target_path.clone()))
+                    .await
+                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?
+            },
         };
         task_ids_in_order.push(handle.task_id());
         handles.push(handle);
@@ -339,6 +358,7 @@ async fn xet_upload_inner(
         .map(|(target_path, source)| {
             let size = match source {
                 AddSource::Bytes(b) => b.len() as u64,
+                AddSource::Stream(s) => s.size(),
                 AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
             };
             FileProgress {
@@ -409,30 +429,38 @@ async fn xet_upload_inner(
 
     tracing::info!("xet upload commit built, streaming file uploads (wasm)");
 
-    // Use `upload_stream` instead of `upload_bytes` to avoid xet's internal
-    // `Bytes::copy_from_slice` (`add_data(&[u8])` path). `upload_stream`'s
-    // `write(impl Into<Bytes>)` goes through `add_data_from_bytes(Bytes)`
-    // which forwards the buffer through to the chunker without copying.
-    //
-    // Combined with `AddSource::Bytes` now holding `bytes::Bytes`, this
-    // turns the wasm upload path's `bytes.clone()` from a full
-    // file-sized copy into a refcount bump — critical headroom on the
-    // 4 GiB-capped (and often browser-limited) wasm linear memory.
+    // Use `upload_stream` instead of `upload_bytes` so xet's per-write path
+    // is `add_data_from_bytes(Bytes)`, which slices through to the chunker
+    // without `Bytes::copy_from_slice`. For `AddSource::Stream`, this also
+    // means we only ever hold a single chunk in wasm linear memory at a
+    // time — the source itself never has to be materialized in full.
     let mut xet_file_infos = Vec::with_capacity(files.len());
 
     for (target_path, source) in files {
         tracing::info!(path = target_path.as_str(), "streaming xet upload (wasm)");
-        let crate::repository::AddSource::Bytes(bytes) = source;
-
         let stream_handle = commit
             .upload_stream(Some(target_path.clone()), Sha256Policy::Compute)
             .await
             .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
 
-        stream_handle
-            .write(bytes.clone())
-            .await
-            .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+        match source {
+            crate::repository::AddSource::Bytes(bytes) => {
+                stream_handle
+                    .write(bytes.clone())
+                    .await
+                    .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+            },
+            crate::repository::AddSource::Stream(s) => {
+                let mut byte_stream = s.open();
+                while let Some(chunk) = futures::StreamExt::next(&mut byte_stream).await {
+                    let chunk = chunk?;
+                    stream_handle
+                        .write(chunk)
+                        .await
+                        .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+                }
+            },
+        }
 
         let metadata = stream_handle
             .finish()
