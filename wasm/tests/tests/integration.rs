@@ -8,11 +8,12 @@
 
 use std::sync::{Arc, Mutex};
 
+use bytes::Bytes;
 use futures_util::StreamExt;
 use hf_hub::HFClientBuilder;
 use hf_hub::buckets::BucketTreeEntry;
 use hf_hub::progress::{DownloadEvent, ProgressEvent, ProgressHandler};
-use hf_hub::repository::AddSource;
+use hf_hub::repository::{AddSource, SourceByteStream, StreamFactory, StreamSource};
 use hf_hub::{HFClient, RepoTypeModel};
 use wasm_bindgen_test::wasm_bindgen_test;
 #[cfg(feature = "browser-tests")]
@@ -384,6 +385,89 @@ async fn upload_bucket_files_roundtrip() {
         size,
         payload.len() as u64,
         "uploaded file size mismatch in bucket: got {size}, want {}",
+        payload.len(),
+    );
+
+    client
+        .delete_bucket()
+        .bucket_id(&bucket_id)
+        .missing_ok(true)
+        .send()
+        .await
+        .expect("delete test bucket");
+}
+
+/// In-memory [`StreamFactory`] that re-opens the same byte slice on every call.
+/// Matches the contract of the `web_sys::Blob`-backed factory in the
+/// `hf-hub-wasm-upload` Space without the JS boundary, so the upload pipeline's
+/// `AddSource::Stream` branch can be exercised from a wasm-bindgen-test.
+struct InMemoryStreamFactory {
+    bytes: Bytes,
+}
+
+impl StreamFactory for InMemoryStreamFactory {
+    fn open(&self) -> SourceByteStream {
+        let bytes = self.bytes.clone();
+        Box::pin(futures_util::stream::once(async move { Ok(bytes) }))
+    }
+}
+
+#[wasm_bindgen_test]
+async fn upload_bucket_stream_files_roundtrip() {
+    let Some(token) = write_token() else {
+        return;
+    };
+
+    let client = authed_client(token);
+    let username = client.whoami().send().await.expect("whoami").username;
+    let bucket_name = format!("hf-hub-wasm-bucket-stream-{}", js_sys::Date::now() as u64);
+    let bucket_id = format!("{username}/{bucket_name}");
+
+    client
+        .create_bucket()
+        .namespace(&username)
+        .name(&bucket_name)
+        .private(true)
+        .exist_ok(true)
+        .send()
+        .await
+        .expect("create test bucket");
+
+    let bucket = client.bucket(&username, &bucket_name);
+    let payload = Bytes::from_static(b"hello from the wasm bucket stream upload test\n");
+    let remote_path = "wasm-bucket-stream-upload-test.txt".to_string();
+
+    let stream_source = StreamSource::new(
+        Arc::new(InMemoryStreamFactory {
+            bytes: payload.clone(),
+        }),
+        payload.len() as u64,
+    );
+
+    bucket
+        .upload_source_files()
+        .files(vec![(remote_path.clone(), AddSource::stream(stream_source))])
+        .send()
+        .await
+        .expect("bucket upload_source_files (stream)");
+
+    let entries = bucket
+        .get_paths_info()
+        .paths(vec![remote_path.clone()])
+        .send()
+        .await
+        .expect("get_paths_info after stream upload");
+    let entry = entries
+        .into_iter()
+        .find(|e| matches!(e, BucketTreeEntry::File { path, .. } if path == &remote_path))
+        .expect("uploaded stream file not visible in bucket tree");
+    let BucketTreeEntry::File { size, .. } = entry else {
+        panic!("expected File entry, got {entry:?}");
+    };
+    assert_eq!(
+        size,
+        payload.len() as u64,
+        "stream-uploaded file size mismatch: got {size}, want {}",
         payload.len(),
     );
 

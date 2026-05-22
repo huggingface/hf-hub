@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
+bytes = "1"
 hf-hub = { path = "../../hf-hub" }
 js-sys = "0.3"
 wasm-bindgen = "0.2"
