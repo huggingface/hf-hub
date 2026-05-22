@@ -1035,7 +1035,7 @@ async fn stream_response_to_file_with_progress(
 /// pipeline; xet keeps making progress as long as the channel has room. The channel depth bounds
 /// the extra in-flight bytes — at most `depth * max_chunk_size` beyond what xet already buffers.
 #[cfg(target_family = "wasm")]
-fn buffer_wasm_stream(inner: HFByteStream) -> HFByteStream {
+pub(crate) fn buffer_wasm_stream(inner: HFByteStream) -> HFByteStream {
     use futures::SinkExt;
     use futures::channel::mpsc;
 
@@ -1058,7 +1058,7 @@ fn buffer_wasm_stream(inner: HFByteStream) -> HFByteStream {
     Box::new(Box::pin(rx))
 }
 
-fn wrap_stream_with_progress(
+pub(crate) fn wrap_stream_with_progress(
     stream: HFByteStream,
     progress: Option<Progress>,
     filename: String,

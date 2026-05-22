@@ -20,19 +20,14 @@ pub mod sync;
 use std::path::PathBuf;
 
 use bon::bon;
-use futures::Stream;
-#[cfg(feature = "blocking")]
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::client::HFClient;
-#[cfg(not(target_family = "wasm"))]
-use crate::error::HFError;
-use crate::error::{HFResult, NotFoundContext};
-#[cfg(not(target_family = "wasm"))]
-use crate::progress::DownloadEvent;
-use crate::progress::{EmitEvent, Progress, UploadEvent};
+use crate::error::{HFError, HFResult, NotFoundContext};
+use crate::progress::{DownloadEvent, EmitEvent, Progress, UploadEvent};
+use crate::repository::download::{HFByteStream, wrap_stream_with_progress};
 use crate::retry;
 
 const BUCKET_BATCH_CHUNK_SIZE: usize = 1000;
@@ -215,6 +210,97 @@ impl HFBucket {
         }
 
         Ok(all_entries)
+    }
+
+    /// Stream the bytes of a single file in this bucket without writing to disk.
+    ///
+    /// Wasm-compatible parallel of [`HFRepository::download_file_stream`](crate::repository::HFRepository::download_file_stream)
+    /// for buckets. Returns `(content_length, stream)` — `content_length` reflects the file size
+    /// reported by `paths-info`. Xet-backed files dispatch through xet streaming; non-xet files
+    /// fall back to a direct GET on the bucket's `resolve` URL.
+    ///
+    /// Endpoint (non-xet branch): `GET {endpoint}/buckets/{bucket_id}/resolve/{remote_path}`.
+    ///
+    /// # Parameters
+    ///
+    /// - `remote_path` (required): file path within the bucket.
+    /// - `progress`: optional progress handler. `Start` is emitted before the stream is returned;
+    ///   `Progress` is emitted as the caller polls each chunk; `Complete` is emitted when the
+    ///   stream is exhausted.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn download_file_stream(
+        &self,
+        /// File path within the bucket.
+        #[builder(into)]
+        remote_path: String,
+        /// Progress handler. `Start` is emitted before the stream is returned; `Progress` is
+        /// emitted as the caller polls each chunk; `Complete` is emitted when the stream is
+        /// exhausted.
+        #[builder(into)]
+        progress: Option<Progress>,
+    ) -> HFResult<(Option<u64>, HFByteStream)> {
+        let bucket_id = self.bucket_id();
+
+        let entries = self.get_paths_info().paths(vec![remote_path.clone()]).send().await?;
+        let (xet_hash, file_size) = entries
+            .into_iter()
+            .find_map(|e| match e {
+                BucketTreeEntry::File {
+                    path,
+                    size,
+                    xet_hash,
+                    ..
+                } if path == remote_path => Some((xet_hash, size)),
+                _ => None,
+            })
+            .ok_or_else(|| HFError::EntryNotFound {
+                path: remote_path.clone(),
+                repo_id: bucket_id.clone(),
+                context: None,
+            })?;
+
+        if !xet_hash.is_empty() {
+            let stream = self.xet_download_stream(&xet_hash, file_size).await?;
+            progress.emit(DownloadEvent::Start {
+                total_files: 1,
+                total_bytes: file_size,
+            });
+            let boxed: HFByteStream = Box::new(Box::pin(stream));
+            let wrapped = wrap_stream_with_progress(boxed, progress, remote_path, file_size);
+            #[cfg(target_family = "wasm")]
+            let wrapped = crate::repository::download::buffer_wasm_stream(wrapped);
+            return Ok((Some(file_size), wrapped));
+        }
+
+        let url = format!("{}/buckets/{}/resolve/{}", self.hf_client.endpoint(), bucket_id, remote_path);
+        let headers = self.hf_client.auth_headers();
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().get(&url).headers(headers.clone()).send()
+        })
+        .await?;
+        let response = self
+            .hf_client
+            .check_response(
+                response,
+                Some(&bucket_id),
+                NotFoundContext::Entry {
+                    path: remote_path.clone(),
+                },
+            )
+            .await?;
+
+        let content_length = response.content_length().or(Some(file_size));
+        let total_bytes = content_length.unwrap_or(file_size);
+        let stream = response.bytes_stream().map(|r| r.map_err(HFError::from));
+        progress.emit(DownloadEvent::Start {
+            total_files: 1,
+            total_bytes,
+        });
+        let boxed: HFByteStream = Box::new(Box::pin(stream));
+        let wrapped = wrap_stream_with_progress(boxed, progress, remote_path, total_bytes);
+        #[cfg(target_family = "wasm")]
+        let wrapped = crate::repository::download::buffer_wasm_stream(wrapped);
+        Ok((content_length, wrapped))
     }
 
     /// Get metadata for a single file in this bucket via a HEAD request.

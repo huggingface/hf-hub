@@ -902,6 +902,81 @@ impl crate::buckets::HFBucket {
     }
 }
 
+impl crate::buckets::HFBucket {
+    /// Download a single bucket file via xet and return a byte stream.
+    ///
+    /// Wasm-compatible parallel of [`HFRepository::xet_download_stream`]. Uses the bucket's
+    /// xet read-token endpoint instead of the repo one, and operates without a revision since
+    /// buckets are revisionless.
+    pub(crate) async fn xet_download_stream(
+        &self,
+        file_hash: &str,
+        file_size: u64,
+    ) -> HFResult<impl futures::Stream<Item = HFResult<bytes::Bytes>> + use<>> {
+        let bucket_id = self.bucket_id();
+        let token_url = bucket_xet_token_url(&self.hf_client, "read", &bucket_id);
+        let conn = fetch_xet_connection_info(
+            &self.hf_client,
+            &token_url,
+            Some(&bucket_id),
+            crate::error::NotFoundContext::Bucket,
+        )
+        .await?;
+
+        let group = self
+            .new_download_stream_group_builder()?
+            .with_endpoint(conn.endpoint.clone())
+            .with_token_info(conn.access_token.clone(), conn.expiration_unix_epoch)
+            .with_token_refresh_url(token_url, self.hf_client.auth_headers())
+            .build()
+            .await
+            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?;
+
+        let file_info = XetFileInfo::new(file_hash.to_string(), file_size);
+
+        let mut stream = group
+            .download_stream(file_info, None)
+            .await
+            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))?;
+
+        stream.start();
+
+        Ok(futures::stream::unfold(stream, |mut stream| async move {
+            match stream.next().await {
+                Ok(Some(bytes)) => Some((Ok(bytes), stream)),
+                Ok(None) => None,
+                Err(e) => Some((Err(HFError::xet(XetOperation::StreamDownload, e)), stream)),
+            }
+        }))
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
+        let (session, generation) = self.hf_client.xet_session()?;
+        match session.new_download_stream_group() {
+            Ok(b) => Ok(b),
+            Err(e) => {
+                self.hf_client.replace_xet_session(generation, &e);
+                self.hf_client
+                    .xet_session()?
+                    .0
+                    .new_download_stream_group()
+                    .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))
+            },
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
+        let session = xet::xet_session::XetSessionBuilder::new()
+            .build()
+            .map_err(|e| HFError::xet(XetOperation::Session, e))?;
+        session
+            .new_download_stream_group()
+            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))
+    }
+}
+
 impl<T: RepoType> HFRepository<T> {
     /// Download a file (or byte range) via xet and return a byte stream.
     ///
