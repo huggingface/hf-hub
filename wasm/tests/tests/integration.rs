@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
 use hf_hub::HFClientBuilder;
+use hf_hub::buckets::BucketTreeEntry;
 use hf_hub::progress::{DownloadEvent, ProgressEvent, ProgressHandler};
 use hf_hub::repository::AddSource;
 use hf_hub::{HFClient, RepoTypeModel};
@@ -331,4 +332,66 @@ async fn upload_file_bytes_roundtrip() {
         .send()
         .await
         .expect("delete test repo");
+}
+
+#[wasm_bindgen_test]
+async fn upload_bucket_files_roundtrip() {
+    let Some(token) = write_token() else {
+        // HF_TOKEN / HF_TEST_WRITE not baked in at compile time — skip.
+        return;
+    };
+
+    let client = authed_client(token);
+    let username = client.whoami().send().await.expect("whoami").username;
+    let bucket_name = format!("hf-hub-wasm-bucket-{}", js_sys::Date::now() as u64);
+    let bucket_id = format!("{username}/{bucket_name}");
+
+    client
+        .create_bucket()
+        .namespace(&username)
+        .name(&bucket_name)
+        .private(true)
+        .exist_ok(true)
+        .send()
+        .await
+        .expect("create test bucket");
+
+    let bucket = client.bucket(&username, &bucket_name);
+    let payload: &[u8] = b"hello from the wasm bucket upload test\n";
+    let remote_path = "wasm-bucket-upload-test.txt".to_string();
+
+    bucket
+        .upload_source_files()
+        .files(vec![(remote_path.clone(), AddSource::bytes(payload.to_vec()))])
+        .send()
+        .await
+        .expect("bucket upload_source_files");
+
+    let entries = bucket
+        .get_paths_info()
+        .paths(vec![remote_path.clone()])
+        .send()
+        .await
+        .expect("get_paths_info after bucket upload");
+    let entry = entries
+        .into_iter()
+        .find(|e| matches!(e, BucketTreeEntry::File { path, .. } if path == &remote_path))
+        .expect("uploaded file not visible in bucket tree");
+    let BucketTreeEntry::File { size, .. } = entry else {
+        panic!("expected File entry, got {entry:?}");
+    };
+    assert_eq!(
+        size,
+        payload.len() as u64,
+        "uploaded file size mismatch in bucket: got {size}, want {}",
+        payload.len(),
+    );
+
+    client
+        .delete_bucket()
+        .bucket_id(&bucket_id)
+        .missing_ok(true)
+        .send()
+        .await
+        .expect("delete test bucket");
 }
