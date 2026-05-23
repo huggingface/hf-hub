@@ -214,19 +214,19 @@ impl HFBucket {
 
     /// Stream the bytes of a single file in this bucket without writing to disk.
     ///
-    /// Wasm-compatible parallel of [`HFRepository::download_file_stream`](crate::repository::HFRepository::download_file_stream)
-    /// for buckets. Returns `(content_length, stream)` — `content_length` reflects the file size
-    /// reported by `paths-info`. Xet-backed files dispatch through xet streaming; non-xet files
-    /// fall back to a direct GET on the bucket's `resolve` URL.
+    /// Wasm-compatible parallel of
+    /// [`HFRepository::download_file_stream`](crate::repository::HFRepository::download_file_stream) for buckets.
+    /// Returns `(content_length, stream)` — `content_length` reflects the file size reported by `paths-info`.
+    /// Xet-backed files dispatch through xet streaming; non-xet files fall back to a direct GET on the bucket's
+    /// `resolve` URL.
     ///
     /// Endpoint (non-xet branch): `GET {endpoint}/buckets/{bucket_id}/resolve/{remote_path}`.
     ///
     /// # Parameters
     ///
     /// - `remote_path` (required): file path within the bucket.
-    /// - `progress`: optional progress handler. `Start` is emitted before the stream is returned;
-    ///   `Progress` is emitted as the caller polls each chunk; `Complete` is emitted when the
-    ///   stream is exhausted.
+    /// - `progress`: optional progress handler. `Start` is emitted before the stream is returned; `Progress` is emitted
+    ///   as the caller polls each chunk; `Complete` is emitted when the stream is exhausted.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file_stream(
         &self,
@@ -246,10 +246,7 @@ impl HFBucket {
             .into_iter()
             .find_map(|e| match e {
                 BucketTreeEntry::File {
-                    path,
-                    size,
-                    xet_hash,
-                    ..
+                    path, size, xet_hash, ..
                 } if path == remote_path => Some((xet_hash, size)),
                 _ => None,
             })
@@ -489,14 +486,14 @@ impl HFBucket {
         self.batch_operations().delete(paths).send().await
     }
 
-    /// Upload an arbitrary set of [`AddSource`]-backed files to the bucket.
+    /// Upload an arbitrary set of [`AddSource`](crate::repository::AddSource)-backed files to the bucket.
     ///
     /// Wasm-safe analog of [`HFBucket::upload_files`] (which is native-only because it
-    /// reads from local paths): each pair can use any [`AddSource`] variant — `Bytes`
-    /// for in-memory content, `File` for a local path (native only), or `Stream` for
-    /// sources too large to materialize at once (typical wasm case for `Blob`-backed
+    /// reads from local paths): each pair can use any [`AddSource`](crate::repository::AddSource)
+    /// variant — `Bytes` for in-memory content, `File` for a local path (native only), or `Stream`
+    /// for sources too large to materialize at once (typical wasm case for `Blob`-backed
     /// uploads). For the common in-memory case, build entries with
-    /// [`AddSource::bytes`]:
+    /// [`AddSource::bytes`](crate::repository::AddSource::bytes):
     ///
     /// ```rust,no_run
     /// # use hf_hub::repository::AddSource;

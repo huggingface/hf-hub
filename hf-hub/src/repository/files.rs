@@ -220,23 +220,11 @@ impl CommitOperation {
     }
 }
 
-/// Source of content for a [`CommitOperation::Add`] operation.
-///
-/// Use [`File`](Self::File) for content already on disk, especially large files:
-/// the path is stored, but file contents are read when the commit runs and are
-/// streamed where possible. Use [`Bytes`](Self::Bytes) for small in-memory content;
-/// the buffer is owned by the operation and may be cloned for LFS/xet uploads.
-///
-/// `AddSource::File` is not a snapshot: the file must still exist, unchanged,
-/// when [`HFRepository::create_commit`] runs.
-///
-/// `AddSource::File` is not available on `wasm32-unknown-unknown`; use
-/// [`AddSource::Bytes`] instead.
 /// Stream of byte chunks produced by a [`StreamSource`].
 ///
 /// On native targets the stream is `Send`. On `wasm32-unknown-unknown` the
 /// `Send` bound is dropped because the most common wasm implementations
-/// (e.g., adapters around [`web_sys::Blob::stream`]) wrap JS values that
+/// (e.g., adapters around `web_sys::Blob::stream`) wrap JS values that
 /// are inherently thread-bound.
 #[cfg(not(target_family = "wasm"))]
 pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>> + Send>>;
@@ -249,7 +237,7 @@ pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>>>>;
 /// prefix for the preupload classification, the full content for the LFS SHA-256
 /// hash, and the full content for the xet upload — so a one-shot stream isn't
 /// enough. Implementations should be cheap to re-open (e.g., re-slice a
-/// [`web_sys::Blob`] or re-open a file handle) and must produce identical bytes
+/// `web_sys::Blob` or re-open a file handle) and must produce identical bytes
 /// across opens.
 ///
 /// The trait requires `Send + Sync` so that [`AddSource`] (and therefore
@@ -300,6 +288,18 @@ impl std::fmt::Debug for StreamSource {
     }
 }
 
+/// Source of content for a [`CommitOperation::Add`] operation.
+///
+/// Use [`File`](Self::File) for content already on disk, especially large files:
+/// the path is stored, but file contents are read when the commit runs and are
+/// streamed where possible. Use [`Bytes`](Self::Bytes) for small in-memory content;
+/// the buffer is owned by the operation and may be cloned for LFS/xet uploads.
+///
+/// `AddSource::File` is not a snapshot: the file must still exist, unchanged,
+/// when [`HFRepository::create_commit`] runs.
+///
+/// `AddSource::File` is not available on `wasm32-unknown-unknown`; use
+/// [`AddSource::Bytes`] instead.
 #[derive(Debug, Clone)]
 pub enum AddSource {
     /// Read file contents from this local path at commit time.
