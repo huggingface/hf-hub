@@ -152,12 +152,11 @@ impl HFBucket {
         recursive: bool,
     ) -> HFResult<impl Stream<Item = HFResult<BucketTreeEntry>> + '_> {
         let bucket_id = self.bucket_id();
-        let mut url_str = format!("{}/api/buckets/{}/tree", self.hf_client.endpoint(), bucket_id);
+        let url_str = format!("{}/api/buckets/{}/tree", self.hf_client.endpoint(), bucket_id);
+        let mut url = Url::parse(&url_str)?;
         if let Some(ref prefix) = prefix {
-            url_str = format!("{}/{}", url_str, prefix);
+            crate::client::append_path_segments(&mut url, prefix)?;
         }
-
-        let url = Url::parse(&url_str)?;
 
         let mut query = vec![];
         if recursive {
@@ -269,10 +268,11 @@ impl HFBucket {
             return Ok((Some(file_size), wrapped));
         }
 
-        let url = format!("{}/buckets/{}/resolve/{}", self.hf_client.endpoint(), bucket_id, remote_path);
+        let mut url = Url::parse(&format!("{}/buckets/{}/resolve", self.hf_client.endpoint(), bucket_id))?;
+        crate::client::append_path_segments(&mut url, &remote_path)?;
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().get(&url).headers(headers.clone()).send()
+            self.hf_client.http_client().get(url.clone()).headers(headers.clone()).send()
         })
         .await?;
         let response = self
@@ -316,11 +316,16 @@ impl HFBucket {
         remote_path: String,
     ) -> HFResult<BucketFileMetadata> {
         let bucket_id = self.bucket_id();
-        let url = format!("{}/buckets/{}/resolve/{}", self.hf_client.endpoint(), bucket_id, remote_path);
+        let mut url = Url::parse(&format!("{}/buckets/{}/resolve", self.hf_client.endpoint(), bucket_id))?;
+        crate::client::append_path_segments(&mut url, &remote_path)?;
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.no_redirect_client().head(&url).headers(headers.clone()).send()
+            self.hf_client
+                .no_redirect_client()
+                .head(url.clone())
+                .headers(headers.clone())
+                .send()
         })
         .await?;
 

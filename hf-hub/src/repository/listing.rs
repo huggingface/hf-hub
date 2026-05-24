@@ -59,15 +59,7 @@ impl<T: RepoType> HFRepository<T> {
             format!("{}/tree/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
         let mut url = Url::parse(&url_str)?;
         if let Some(path) = path_in_repo.as_deref() {
-            // `path_segments_mut` only errors on cannot-be-a-base URLs (e.g. `mailto:`,
-            // `data:`); `api_url()` always returns an http(s) URL with a host, so this
-            // branch is unreachable in practice.
-            let mut segments = url
-                .path_segments_mut()
-                .map_err(|_| HFError::InvalidParameter(format!("unexpected non-base API URL: {url_str}")))?;
-            for seg in path.split('/').filter(|s| !s.is_empty()) {
-                segments.push(seg);
-            }
+            crate::client::append_path_segments(&mut url, path)?;
         }
 
         let mut query: Vec<(String, String)> = Vec::new();
@@ -152,7 +144,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &filename);
+            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &filename)?;
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {

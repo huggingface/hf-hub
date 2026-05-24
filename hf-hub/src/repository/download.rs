@@ -126,7 +126,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(T::default().url_prefix(), &repo_path, revision, filename);
+            .download_url(T::default().url_prefix(), &repo_path, revision, filename)?;
         let headers = self.hf_client.auth_headers();
         let head_response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().head(&url).headers(headers.clone()).send()
@@ -187,7 +187,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename);
+            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename)?;
 
         let headers = self.hf_client.auth_headers();
 
@@ -272,7 +272,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename);
+            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename)?;
 
         let headers = self.hf_client.auth_headers();
         let head_response = retry::retry(self.hf_client.retry_config(), || {
@@ -444,7 +444,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename);
+            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename)?;
 
         let cached_etag = if !force_download {
             self.find_cached_etag(repo_folder, revision, &params.filename)
@@ -684,14 +684,16 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         let repo_path = self.repo_path();
+        let repo_path_ref = &repo_path;
         let commit_hash_ref = &commit_hash;
         let head_futs = filenames.iter().map(|filename| {
-                let url = self
-                    .hf_client.download_url(self.repo_type.url_prefix(), &repo_path, commit_hash_ref, filename);
                 let auth = self.hf_client.auth_headers();
                 let filename = filename.clone();
                 let repo_folder_ref = &repo_folder;
                 async move {
+                    let url = self
+                        .hf_client
+                        .download_url(self.repo_type.url_prefix(), repo_path_ref, commit_hash_ref, &filename)?;
                     let resp = retry::retry(self.hf_client.retry_config(), || {
                         self.hf_client.no_redirect_client().head(&url).headers(auth.clone()).send()
                     })

@@ -3,10 +3,31 @@ use std::time::Duration;
 
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use tracing::debug;
+use url::Url;
 
 use crate::constants;
 use crate::error::{HFError, HFResult, HttpErrorContext, NotFoundContext};
 use crate::retry::{self, RetryConfig};
+
+/// Append `path` to `url` as percent-encoded URL path segments.
+///
+/// Splits `path` on `/` and pushes each non-empty piece via
+/// [`Url::path_segments_mut`], which percent-encodes characters that aren't
+/// valid in a path segment (e.g. `#`, `?`, ` `, `%`).
+///
+/// Returns an error only if `url` is a cannot-be-a-base URL (e.g. `mailto:`,
+/// `data:`); all URLs hf-hub constructs are http(s) and so this never fails
+/// in practice.
+pub(crate) fn append_path_segments(url: &mut Url, path: &str) -> HFResult<()> {
+    let url_str = url.as_str().to_string();
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|()| HFError::InvalidParameter(format!("unexpected non-base URL: {url_str}")))?;
+    for seg in path.split('/').filter(|s| !s.is_empty()) {
+        segments.push(seg);
+    }
+    Ok(())
+}
 
 /// Async client for the Hugging Face Hub API.
 ///
@@ -321,13 +342,23 @@ impl HFClient {
         format!("{}/api/{}/{}", self.endpoint(), api_segment, repo_id)
     }
 
-    /// Build a download URL: {endpoint}/{url_prefix}{repo_id}/resolve/{revision}/{filename}.
+    /// Build a download URL: `{endpoint}/{url_prefix}{repo_id}/resolve/{revision}/{filename}`.
     ///
     /// `url_prefix` is `""` for models or `"<plural>/"` for the other repo types. Pass
     /// [`crate::repository::RepoType::url_prefix`] for the concrete repo type at the call
-    /// site.
-    pub(crate) fn download_url(&self, url_prefix: &str, repo_id: &str, revision: &str, filename: &str) -> String {
-        format!("{}/{}{}/resolve/{}/{}", self.endpoint(), url_prefix, repo_id, revision, filename)
+    /// site. `filename` is percent-encoded path-segment by path-segment, so values like
+    /// `subdir/file name #1.bin` produce a correctly escaped URL.
+    pub(crate) fn download_url(
+        &self,
+        url_prefix: &str,
+        repo_id: &str,
+        revision: &str,
+        filename: &str,
+    ) -> HFResult<String> {
+        let base = format!("{}/{}{}/resolve/{}", self.endpoint(), url_prefix, repo_id, revision);
+        let mut url = Url::parse(&base)?;
+        append_path_segments(&mut url, filename)?;
+        Ok(url.into())
     }
 
     /// Build a bucket API URL: `{endpoint}/api/buckets/{bucket_id}`
@@ -480,8 +511,60 @@ fn resolve_token() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
+    use url::Url;
 
-    use super::HFClientBuilder;
+    use super::{HFClientBuilder, append_path_segments};
+
+    #[test]
+    fn append_path_segments_encodes_special_chars() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "with space/and#hash?and+plus").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base/with%20space/and%23hash%3Fand+plus");
+    }
+
+    #[test]
+    fn append_path_segments_handles_leading_trailing_and_repeated_slashes() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "/a//b/c/").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base/a/b/c");
+    }
+
+    #[test]
+    fn append_path_segments_encodes_percent_literals() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "a%2Fb/c").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base/a%252Fb/c");
+    }
+
+    #[test]
+    fn append_path_segments_handles_unicode() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "ümlaut/файл.txt").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base/%C3%BCmlaut/%D1%84%D0%B0%D0%B9%D0%BB.txt");
+    }
+
+    #[test]
+    fn append_path_segments_empty_path_is_noop() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base");
+    }
+
+    #[test]
+    fn download_url_encodes_filename_segments() {
+        let client = HFClientBuilder::new().endpoint("https://huggingface.co").build().unwrap();
+        let url = client
+            .download_url("", "owner/repo", "main", "subdir/file name #1.bin")
+            .unwrap();
+        assert_eq!(url, "https://huggingface.co/owner/repo/resolve/main/subdir/file%20name%20%231.bin");
+    }
+
+    #[test]
+    fn download_url_dataset_prefix() {
+        let client = HFClientBuilder::new().endpoint("https://huggingface.co").build().unwrap();
+        let url = client.download_url("datasets/", "owner/ds", "v1.0", "data/train.csv").unwrap();
+        assert_eq!(url, "https://huggingface.co/datasets/owner/ds/resolve/v1.0/data/train.csv");
+    }
 
     #[test]
     fn test_builder_cache_dir_explicit() {

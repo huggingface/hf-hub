@@ -1216,7 +1216,7 @@ impl<T: RepoType> HFRepository<T> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &self.repo_path(), revision, &filename);
+            .download_url(self.repo_type.url_prefix(), &self.repo_path(), revision, &filename)?;
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().head(&url).headers(headers.clone()).send()
