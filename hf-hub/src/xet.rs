@@ -3,15 +3,18 @@
 //! repositories and buckets for high-performance Xet transfers.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use futures::StreamExt;
 use serde::Deserialize;
 #[cfg(test)]
 use xet::error::XetError;
 use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileInfo, XetFileMetadata, XetFileUpload};
 
+use crate::cache::storage as cache;
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, XetOperation};
 use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent};
@@ -103,6 +106,27 @@ fn emit_remaining_completes(progress: &Option<Progress>, tracked: &[TrackedDownl
     }
 }
 
+fn emit_xet_file_progress(
+    progress: &Option<Progress>,
+    filename: &str,
+    bytes_completed: u64,
+    total_bytes: u64,
+    status: FileStatus,
+) {
+    progress.emit(DownloadEvent::Progress {
+        files: vec![FileProgress {
+            filename: filename.to_string(),
+            bytes_completed,
+            total_bytes,
+            status,
+        }],
+    });
+}
+
+fn emit_xet_file_complete(progress: &Option<Progress>, filename: &str, file_size: u64) {
+    emit_xet_file_progress(progress, filename, file_size, file_size, FileStatus::Complete);
+}
+
 fn spawn_download_progress_poller(
     progress: &Option<Progress>,
     group: &xet::xet_session::XetFileDownloadGroup,
@@ -177,6 +201,23 @@ pub(crate) struct XetBatchFile {
     pub file_size: u64,
     pub path: PathBuf,
     pub filename: String,
+}
+
+pub(crate) struct XetBlobFile<'a> {
+    pub(crate) filename: &'a str,
+    pub(crate) file_hash: &'a str,
+    pub(crate) file_size: u64,
+    pub(crate) path: &'a std::path::Path,
+    pub(crate) force_download: bool,
+}
+
+struct XetResumeFile<'a> {
+    revision: &'a str,
+    file_hash: &'a str,
+    file_size: u64,
+    path: &'a std::path::Path,
+    filename: &'a str,
+    offset: u64,
 }
 
 /// Shared xet upload flow for both repositories and buckets.
@@ -374,6 +415,30 @@ impl<T: RepoType> HFRepository<T> {
             std::fs::create_dir_all(parent)?;
         }
 
+        match cache::partial_download_state(&dest_path, file_size, false)? {
+            cache::PartialDownloadState::Complete => {
+                emit_xet_file_complete(progress, filename, file_size);
+                return Ok(dest_path);
+            },
+            cache::PartialDownloadState::Resume(offset) => {
+                self.resume_xet_file_to_path(
+                    XetResumeFile {
+                        revision,
+                        file_hash: &file_hash,
+                        file_size,
+                        path: &dest_path,
+                        filename,
+                        offset,
+                    },
+                    progress,
+                )
+                .await?;
+                emit_xet_file_complete(progress, filename, file_size);
+                return Ok(dest_path);
+            },
+            cache::PartialDownloadState::Restart => {},
+        }
+
         let (session, generation) = self.hf_client.xet_session()?;
         let group = match session.new_file_download_group() {
             Ok(b) => b,
@@ -421,10 +486,7 @@ impl<T: RepoType> HFRepository<T> {
     pub(crate) async fn xet_download_to_blob(
         &self,
         revision: &str,
-        filename: &str,
-        file_hash: &str,
-        file_size: u64,
-        path: &std::path::Path,
+        file: XetBlobFile<'_>,
         progress: &Option<Progress>,
     ) -> HFResult<()> {
         let repo_path = self.repo_path();
@@ -438,11 +500,36 @@ impl<T: RepoType> HFRepository<T> {
         )
         .await?;
 
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = file.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let incomplete_path = PathBuf::from(format!("{}.incomplete", path.display()));
+        let incomplete_path = cache::incomplete_path(file.path);
+        match cache::partial_download_state(&incomplete_path, file.file_size, file.force_download)? {
+            cache::PartialDownloadState::Complete => {
+                std::fs::rename(&incomplete_path, file.path)?;
+                emit_xet_file_complete(progress, file.filename, file.file_size);
+                return Ok(());
+            },
+            cache::PartialDownloadState::Resume(offset) => {
+                self.resume_xet_file_to_path(
+                    XetResumeFile {
+                        revision,
+                        file_hash: file.file_hash,
+                        file_size: file.file_size,
+                        path: &incomplete_path,
+                        filename: file.filename,
+                        offset,
+                    },
+                    progress,
+                )
+                .await?;
+                std::fs::rename(&incomplete_path, file.path)?;
+                emit_xet_file_complete(progress, file.filename, file.file_size);
+                return Ok(());
+            },
+            cache::PartialDownloadState::Restart => {},
+        }
 
         let (session, generation) = self.hf_client.xet_session()?;
         let group = match session.new_file_download_group() {
@@ -463,7 +550,7 @@ impl<T: RepoType> HFRepository<T> {
         .await
         .map_err(|e| HFError::xet(XetOperation::Download, e))?;
 
-        let file_info = XetFileInfo::new(file_hash.to_string(), file_size);
+        let file_info = XetFileInfo::new(file.file_hash.to_string(), file.file_size);
 
         let handle = group
             .download_file_to_path(file_info, incomplete_path.clone())
@@ -472,8 +559,8 @@ impl<T: RepoType> HFRepository<T> {
 
         let tracked = Arc::new(vec![TrackedDownload {
             handle,
-            filename: filename.to_string(),
-            file_size,
+            filename: file.filename.to_string(),
+            file_size: file.file_size,
             complete_emitted: AtomicBool::new(false),
         }]);
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
@@ -485,7 +572,7 @@ impl<T: RepoType> HFRepository<T> {
         result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
         emit_remaining_completes(progress, &tracked);
 
-        std::fs::rename(&incomplete_path, path)?;
+        std::fs::rename(&incomplete_path, file.path)?;
         Ok(())
     }
 
@@ -493,6 +580,7 @@ impl<T: RepoType> HFRepository<T> {
         &self,
         revision: &str,
         files: &[XetBatchFile],
+        force_download: bool,
         progress: &Option<Progress>,
     ) -> HFResult<()> {
         if files.is_empty() {
@@ -536,7 +624,33 @@ impl<T: RepoType> HFRepository<T> {
                 std::fs::create_dir_all(parent)?;
             }
 
-            let incomplete = PathBuf::from(format!("{}.incomplete", file.path.display()));
+            let incomplete = cache::incomplete_path(&file.path);
+
+            match cache::partial_download_state(&incomplete, file.file_size, force_download)? {
+                cache::PartialDownloadState::Complete => {
+                    std::fs::rename(&incomplete, &file.path)?;
+                    emit_xet_file_complete(progress, &file.filename, file.file_size);
+                    continue;
+                },
+                cache::PartialDownloadState::Resume(offset) => {
+                    self.resume_xet_file_to_path(
+                        XetResumeFile {
+                            revision,
+                            file_hash: &file.hash,
+                            file_size: file.file_size,
+                            path: &incomplete,
+                            filename: &file.filename,
+                            offset,
+                        },
+                        progress,
+                    )
+                    .await?;
+                    std::fs::rename(&incomplete, &file.path)?;
+                    emit_xet_file_complete(progress, &file.filename, file.file_size);
+                    continue;
+                },
+                cache::PartialDownloadState::Restart => {},
+            }
 
             let file_info = XetFileInfo::new(file.hash.clone(), file.file_size);
 
@@ -555,6 +669,9 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         let tracked = Arc::new(tracked_vec);
+        if tracked.is_empty() {
+            return Ok(());
+        }
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
@@ -569,6 +686,13 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         Ok(())
+    }
+
+    async fn resume_xet_file_to_path(&self, file: XetResumeFile<'_>, progress: &Option<Progress>) -> HFResult<()> {
+        let stream = self
+            .xet_download_stream(file.revision, file.file_hash, file.file_size, Some(file.offset..file.file_size))
+            .await?;
+        append_xet_resume_stream_to_path(stream, file.path, file.filename, file.offset, file.file_size, progress).await
     }
 
     /// Download a file (or byte range) via xet and return a byte stream.
@@ -752,8 +876,40 @@ impl crate::buckets::HFBucket {
     }
 }
 
+async fn append_xet_resume_stream_to_path<S>(
+    stream: S,
+    path: &std::path::Path,
+    filename: &str,
+    offset: u64,
+    file_size: u64,
+    progress: &Option<Progress>,
+) -> HFResult<()>
+where
+    S: futures::Stream<Item = HFResult<bytes::Bytes>>,
+{
+    let mut stream = Box::pin(stream);
+    let mut output = std::fs::OpenOptions::new().append(true).create(true).open(path)?;
+    let mut completed = offset;
+    emit_xet_file_progress(progress, filename, completed, file_size, FileStatus::Started);
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        output.write_all(&chunk)?;
+        completed += chunk.len() as u64;
+        emit_xet_file_progress(progress, filename, completed, file_size, FileStatus::InProgress);
+    }
+    output.flush()?;
+    if completed != file_size {
+        return Err(HFError::Other(format!(
+            "downloaded {} bytes but expected {} bytes for {}",
+            completed, file_size, filename
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use xet::error::XetError;
 
     use super::*;
@@ -799,5 +955,33 @@ mod tests {
             HFError::Xet { operation, .. } => assert_eq!(operation, XetOperation::Download),
             other => panic!("expected HFError::Xet, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn xet_resume_stream_appends_remaining_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.gguf.incomplete");
+        std::fs::write(&path, b"abc").unwrap();
+        let chunks = futures::stream::iter([Ok(Bytes::from_static(b"de")), Ok(Bytes::from_static(b"f"))]);
+
+        append_xet_resume_stream_to_path(chunks, &path, "model.gguf", 3, 6, &None)
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
+    }
+
+    #[tokio::test]
+    async fn xet_resume_stream_rejects_short_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("model.gguf.incomplete");
+        std::fs::write(&path, b"abc").unwrap();
+        let chunks = futures::stream::iter([Ok(Bytes::from_static(b"de"))]);
+
+        let err = append_xet_resume_stream_to_path(chunks, &path, "model.gguf", 3, 6, &None)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("downloaded 5 bytes but expected 6 bytes"));
     }
 }
