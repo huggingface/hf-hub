@@ -305,7 +305,7 @@ pub(super) fn matches_any_glob(patterns: &[String], path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_file_size, BlobSecurityInfo, CommitInfo, FileMetadataInfo, RepoTreeEntry};
+    use super::{BlobSecurityInfo, CommitInfo, FileMetadataInfo, RepoTreeEntry, extract_file_size};
 
     fn response_with(status: u16, headers: &[(&str, &str)]) -> reqwest::Response {
         let mut builder = http::Response::builder().status(status);
