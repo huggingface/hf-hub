@@ -1106,6 +1106,7 @@ dependencies = [
  "getrandom 0.2.17",
  "globset",
  "hf-xet",
+ "http",
  "hyper",
  "pathdiff",
  "percent-encoding",
