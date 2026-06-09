@@ -409,7 +409,7 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Call the Hub preupload endpoint to determine the upload mode per file.
     /// Returns a map of path -> upload mode ("lfs" or "regular").
-    async fn fetch_upload_modes(
+    pub(crate) async fn fetch_upload_modes(
         &self,
         repo_id: &str,
         api_segment: &str,
@@ -684,7 +684,7 @@ async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
     }
 }
 
-fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
+pub(crate) fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
     match source {
         AddSource::Bytes(bytes) => {
             let size = bytes.len() as u64;
