@@ -281,6 +281,13 @@ pub enum UploadEvent {
         bytes_uploaded: u64,
         /// Bytes saved by xet deduplication so far.
         dedup_bytes_saved: u64,
+        /// Files whose work was reused from a previous run (resume): already
+        /// uploaded (lfs) or already committed when this run started. Not
+        /// re-uploaded this run.
+        skipped: usize,
+        /// Logical bytes of the `skipped` files — the upload work this run
+        /// avoided by resuming a previous run.
+        skipped_bytes: u64,
     },
 
     /// Terminal event on success. Not emitted on failure — check the returned `Result`.
@@ -418,6 +425,8 @@ mod large_folder_status_tests {
             ignored: 0,
             bytes_uploaded: 1234,
             dedup_bytes_saved: 56,
+            skipped: 0,
+            skipped_bytes: 0,
         });
         assert_eq!(cap.0.lock().unwrap().as_slice(), &["2/10".to_string()]);
     }

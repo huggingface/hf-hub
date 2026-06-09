@@ -18,13 +18,14 @@ const REPORT_INTERVAL: Duration = Duration::from_secs(60);
 /// Decouples the formatter from the event enum for straightforward unit testing.
 struct LargeFolderStatusView {
     files_total: usize,
-    upload_mode_known: usize,
     committed: usize,
+    skipped: usize,
     ignored: usize,
     lfs_total: usize,
     preuploaded: usize,
     bytes_uploaded: u64,
     dedup_bytes_saved: u64,
+    skipped_bytes: u64,
 }
 
 /// True if a report should print now: the first print (`last` is `None`) or once
@@ -55,15 +56,16 @@ fn format_report_block(elapsed: Duration, status: &LargeFolderStatusView, done: 
         format!("[{}] upload-large-folder", format_elapsed(elapsed))
     };
     format!(
-        "{header}\n  files:  {} total · {} classified · {} committed · {} ignored\n  lfs:    {} files · {} uploaded · {} sent · {} deduped",
+        "{header}\n  files:  {} total · {} committed · {} skipped · {} ignored\n  xet:    {} files · {} uploaded · {} sent · {} deduped · {} skipped",
         status.files_total,
-        status.upload_mode_known,
         status.committed,
+        status.skipped,
         status.ignored,
         status.lfs_total,
         status.preuploaded,
         HumanBytes(status.bytes_uploaded),
         HumanBytes(status.dedup_bytes_saved),
+        HumanBytes(status.skipped_bytes),
     )
 }
 
@@ -520,24 +522,26 @@ impl ProgressHandler for LargeFolderProgressHandler {
         match event {
             UploadEvent::LargeFolderStatus {
                 files_total,
-                upload_mode_known,
                 lfs_total,
                 preuploaded,
                 committed,
                 ignored,
                 bytes_uploaded,
                 dedup_bytes_saved,
+                skipped,
+                skipped_bytes,
                 ..
             } => {
                 let view = LargeFolderStatusView {
                     files_total: *files_total,
-                    upload_mode_known: *upload_mode_known,
                     committed: *committed,
+                    skipped: *skipped,
                     ignored: *ignored,
                     lfs_total: *lfs_total,
                     preuploaded: *preuploaded,
                     bytes_uploaded: *bytes_uploaded,
                     dedup_bytes_saved: *dedup_bytes_saved,
+                    skipped_bytes: *skipped_bytes,
                 };
                 if should_print(state.last_print, now, REPORT_INTERVAL) {
                     self.print_block(now.duration_since(start), &view, false);
@@ -652,23 +656,27 @@ mod tests {
     fn format_report_block_renders_counts_and_bytes() {
         let status = LargeFolderStatusView {
             files_total: 1000,
-            upload_mode_known: 840,
             committed: 83,
+            skipped: 640,
             ignored: 3,
             lfs_total: 300,
             preuploaded: 120,
             bytes_uploaded: 2_100_000_000,
             dedup_bytes_saved: 5_400_000_000,
+            skipped_bytes: 12_300_000_000,
         };
         let block = format_report_block(Duration::from_secs(135), &status, false);
         assert!(block.contains("[+02:15] upload-large-folder"));
         assert!(!block.contains("done"));
+        assert!(!block.contains("classified"));
         assert!(block.contains("1000 total"));
-        assert!(block.contains("840 classified"));
         assert!(block.contains("83 committed"));
+        assert!(block.contains("640 skipped"));
         assert!(block.contains("3 ignored"));
+        assert!(block.contains("xet:"));
         assert!(block.contains("300 files"));
         assert!(block.contains("120 uploaded"));
+        assert!(block.contains("deduped"));
         assert!(block.contains("GB") || block.contains("GiB"), "expected byte unit, got: {block}");
     }
 
@@ -676,13 +684,14 @@ mod tests {
     fn format_report_block_done_marks_header() {
         let status = LargeFolderStatusView {
             files_total: 1,
-            upload_mode_known: 1,
             committed: 1,
+            skipped: 0,
             ignored: 0,
             lfs_total: 0,
             preuploaded: 0,
             bytes_uploaded: 0,
             dedup_bytes_saved: 0,
+            skipped_bytes: 0,
         };
         let block = format_report_block(Duration::from_secs(1), &status, true);
         assert!(block.contains("upload-large-folder · done"), "done block: {block}");

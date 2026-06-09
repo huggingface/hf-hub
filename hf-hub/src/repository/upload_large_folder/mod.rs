@@ -394,6 +394,8 @@ impl<T: RepoType> HFRepository<T> {
                     }
                     if item.meta.is_committed {
                         counters.committed.fetch_add(1, Ordering::Relaxed);
+                        counters.skipped.fetch_add(1, Ordering::Relaxed);
+                        counters.skipped_bytes.fetch_add(item.size, Ordering::Relaxed);
                     }
                 },
                 WorkStage::Classify => to_classify.push_back(idx),
@@ -412,11 +414,11 @@ impl<T: RepoType> HFRepository<T> {
                     if item.meta.upload_mode.as_deref() == Some("lfs") {
                         counters.lfs_total.fetch_add(1, Ordering::Relaxed);
                         counters.preuploaded.fetch_add(1, Ordering::Relaxed);
+                        // Already uploaded to CAS in a previous run — its upload was reused.
+                        counters.skipped.fetch_add(1, Ordering::Relaxed);
+                        counters.skipped_bytes.fetch_add(item.size, Ordering::Relaxed);
                         let oid = item.meta.sha256.clone().ok_or_else(|| {
-                            HFError::Other(format!(
-                                "missing oid for uploaded lfs file {}",
-                                item.paths.path_in_repo
-                            ))
+                            HFError::Other(format!("missing oid for uploaded lfs file {}", item.paths.path_in_repo))
                         })?;
                         let _ = tx.send(CommitReady {
                             idx,

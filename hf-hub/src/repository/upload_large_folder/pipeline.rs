@@ -135,6 +135,10 @@ pub(crate) struct StatusCounters {
     pub ignored: AtomicUsize,
     pub bytes_uploaded: AtomicU64,
     pub dedup_bytes_saved: AtomicU64,
+    /// Files whose upload/commit was reused from a previous run (resume-seeded).
+    pub skipped: AtomicUsize,
+    /// Logical bytes of the skipped files.
+    pub skipped_bytes: AtomicU64,
 }
 
 /// Emit a `LargeFolderStatus` snapshot from the current counter values.
@@ -149,6 +153,8 @@ pub(crate) fn emit_status(counters: &StatusCounters, progress: &Option<Progress>
         ignored: counters.ignored.load(Ordering::Relaxed),
         bytes_uploaded: counters.bytes_uploaded.load(Ordering::Relaxed),
         dedup_bytes_saved: counters.dedup_bytes_saved.load(Ordering::Relaxed),
+        skipped: counters.skipped.load(Ordering::Relaxed),
+        skipped_bytes: counters.skipped_bytes.load(Ordering::Relaxed),
     });
 }
 
