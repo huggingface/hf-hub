@@ -9,6 +9,7 @@ use fs2::FileExt;
 
 use crate::error::HFResult;
 
+#[derive(Clone)]
 pub(crate) struct LocalUploadFilePaths {
     pub path_in_repo: String,
     pub file_path: PathBuf,
@@ -80,6 +81,7 @@ pub(crate) fn get_local_upload_paths(local_dir: &Path, path_in_repo: &str) -> HF
     })
 }
 
+#[derive(Clone)]
 pub(crate) struct LocalUploadFileMetadata {
     pub size: u64,
     pub timestamp: Option<f64>,
