@@ -67,7 +67,17 @@ fn help_shows_all_commands() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     for cmd in &[
-        "auth", "cache", "datasets", "download", "models", "repos", "spaces", "upload", "env", "version",
+        "auth",
+        "cache",
+        "datasets",
+        "download",
+        "models",
+        "repos",
+        "spaces",
+        "upload",
+        "upload-large-folder",
+        "env",
+        "version",
     ] {
         assert!(stdout.contains(cmd), "help output should contain command '{cmd}'");
     }
@@ -96,6 +106,41 @@ fn repos_help_shows_subcommands() {
     for cmd in &["create", "delete", "move", "settings", "delete-files", "branch", "tag"] {
         assert!(stdout.contains(cmd), "repos help should contain subcommand '{cmd}'");
     }
+}
+
+#[test]
+fn upload_large_folder_help_lists_flags() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hfrs"))
+        .args(["upload-large-folder", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for flag in &[
+        "--type",
+        "--revision",
+        "--private",
+        "--include",
+        "--exclude",
+        "--num-workers",
+        "--no-report",
+    ] {
+        assert!(stdout.contains(flag), "upload-large-folder help should list '{flag}'");
+    }
+}
+
+#[test]
+fn upload_large_folder_requires_positionals() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_hfrs"))
+        .arg("upload-large-folder")
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "missing positionals should fail");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("required") || stderr.contains("Usage") || stderr.contains("usage"),
+        "should show usage/required-arg error, got: {stderr}"
+    );
 }
 
 // --- Models comparison tests ---
@@ -1999,6 +2044,30 @@ fn write_upload_special_chars() {
     let _ = hfrs.run_raw(&["repos", "delete", &full_repo]);
 
     assert!(result.is_ok(), "upload with special chars in filename should succeed: {:?}", result.err());
+}
+
+#[test]
+fn write_upload_large_folder() {
+    require_token();
+    require_write();
+    let hfrs = CliRunner::hfrs_ci();
+
+    let repo_name = unique_repo_name("hfrs-ulf");
+    let full_repo = full_repo(&repo_name);
+
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("a.txt"), "alpha").unwrap();
+    std::fs::write(tmp.path().join("b.txt"), "beta").unwrap();
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(sub.join("c.txt"), "gamma").unwrap();
+
+    let result = hfrs.run_raw(&["upload-large-folder", &full_repo, tmp.path().to_str().unwrap()]);
+    let _ = hfrs.run_raw(&["repos", "delete", &full_repo]);
+
+    assert!(result.is_ok(), "upload-large-folder should succeed: {:?}", result.err());
+    let output = result.unwrap();
+    assert!(output.contains("http"), "output should contain a commit URL, got: {output}");
 }
 
 // =============================================================================
