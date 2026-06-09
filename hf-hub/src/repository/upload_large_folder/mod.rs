@@ -366,10 +366,17 @@ impl<T: RepoType> HFRepository<T> {
 
             for &idx in &batch {
                 let path = items[idx].paths.path_in_repo.clone();
-                if let Some((oid, _size)) = by_path.get(&path) {
-                    items[idx].meta.sha256 = Some(oid.clone());
-                    items[idx].meta.is_uploaded = true;
-                    items[idx].meta.save(&items[idx].paths)?;
+                match by_path.get(&path) {
+                    Some((oid, _size)) => {
+                        items[idx].meta.sha256 = Some(oid.clone());
+                        items[idx].meta.is_uploaded = true;
+                        items[idx].meta.save(&items[idx].paths)?;
+                    },
+                    None => {
+                        return Err(crate::error::HFError::Other(format!(
+                            "xet_upload_batch returned no result for {path}; aborting to avoid an upload loop"
+                        )));
+                    },
                 }
             }
             self.emit_status(items, *bytes_uploaded, *dedup_bytes_saved, progress);
