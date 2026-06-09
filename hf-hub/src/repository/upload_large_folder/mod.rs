@@ -32,7 +32,7 @@ pub struct UploadLargeFolderReport {
     pub files_committed_inline: usize,
     /// Files the Hub told us to ignore.
     pub files_ignored: usize,
-    /// Logical content bytes uploaded to CAS (before dedup).
+    /// Bytes actually transferred to CAS (post-dedup).
     pub bytes_uploaded: u64,
     /// Bytes saved by xet deduplication.
     pub dedup_bytes_saved: u64,

@@ -199,11 +199,9 @@ pub(crate) struct XetUploadedFile {
 
 pub(crate) struct XetBatchResult {
     pub files: Vec<XetUploadedFile>,
-    /// Logical content bytes for the batch (pre-dedup).
-    pub total_bytes: u64,
     /// Bytes actually transferred to CAS (post-dedup).
     pub transfer_bytes: u64,
-    /// total_bytes - transfer_bytes.
+    /// Logical content bytes minus transfer_bytes.
     pub dedup_bytes_saved: u64,
 }
 
@@ -728,7 +726,6 @@ impl<T: RepoType> HFRepository<T> {
         let dedup_bytes_saved = outcome.total_bytes.saturating_sub(outcome.transfer_bytes);
         Ok(XetBatchResult {
             files,
-            total_bytes: outcome.total_bytes,
             transfer_bytes: outcome.transfer_bytes,
             dedup_bytes_saved,
         })
