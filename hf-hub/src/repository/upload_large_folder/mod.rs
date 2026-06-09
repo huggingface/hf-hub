@@ -4,9 +4,14 @@
 pub mod local_folder;
 pub mod pipeline;
 
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 use bon::bon;
+use futures::future::FutureExt;
+use futures::stream::{FuturesUnordered, StreamExt};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::constants;
 use crate::error::{HFError, HFResult};
@@ -16,7 +21,9 @@ use crate::repository::upload::ResolvedAdd;
 use crate::repository::upload_large_folder::local_folder::{
     LocalUploadFileMetadata, LocalUploadFilePaths, get_local_upload_paths, read_upload_metadata,
 };
-use crate::repository::upload_large_folder::pipeline::{MAX_COMMIT_FILES, WorkStage, seed_stage};
+use crate::repository::upload_large_folder::pipeline::{
+    CommitReady, PipelineConfig, StatusCounters, TimedBatchBuffer, WorkStage, seed_stage, sleep_or_pending,
+};
 use crate::repository::{CommitInfo, HFRepository, RepoType};
 
 /// Summary returned by [`HFRepository::upload_large_folder`].
@@ -125,6 +132,72 @@ struct Item {
     size: u64,
 }
 
+/// An lfs file awaiting upload, buffered in the producer's staging buffer.
+struct StagedLfs {
+    idx: usize,
+    path_in_repo: String,
+    file_path: PathBuf,
+    size: u64,
+}
+
+/// Result of classifying one file via `/preupload`.
+struct ClassifyResult {
+    idx: usize,
+    upload_mode: String,
+    should_ignore: bool,
+}
+
+/// Output of one producer work future.
+enum WorkOutput {
+    Classified(Vec<ClassifyResult>),
+    Uploaded {
+        entries: Vec<StagedLfs>,
+        result: crate::xet::XetBatchResult,
+    },
+}
+
+impl<T: RepoType> HFRepository<T> {
+    /// Classify a chunk of files via `/preupload`. Owns its input; borrows only
+    /// `&self` + `revision`. Empty files are forced to "regular".
+    async fn classify_chunk(
+        &self,
+        input: Vec<(usize, String, u64, Vec<u8>)>,
+        revision: &str,
+    ) -> HFResult<WorkOutput> {
+        let repo_path = self.repo_path();
+        let api_segment = self.repo_type.plural();
+        let payload: Vec<(&str, u64, &[u8])> =
+            input.iter().map(|(_, path, size, sample)| (path.as_str(), *size, sample.as_slice())).collect();
+        let infos = self.fetch_upload_modes(&repo_path, api_segment, revision, &payload).await?;
+        let results = input
+            .iter()
+            .map(|(idx, path, size, _)| {
+                let info = infos.get(path);
+                let should_ignore = info.map(|i| i.should_ignore).unwrap_or(false);
+                let upload_mode = if *size == 0 {
+                    "regular".to_string()
+                } else {
+                    info.map(|i| i.upload_mode.clone()).unwrap_or_else(|| "regular".to_string())
+                };
+                ClassifyResult { idx: *idx, upload_mode, should_ignore }
+            })
+            .collect();
+        Ok(WorkOutput::Classified(results))
+    }
+
+    /// Upload one batch of lfs files as a single xet `UploadCommit`. Suppresses
+    /// per-batch progress (passes `&None`); the orchestrator emits aggregate
+    /// `LargeFolderStatus` instead.
+    async fn upload_chunk(&self, entries: Vec<StagedLfs>, revision: &str) -> HFResult<WorkOutput> {
+        let files_in: Vec<(String, AddSource)> = entries
+            .iter()
+            .map(|e| (e.path_in_repo.clone(), AddSource::File(e.file_path.clone())))
+            .collect();
+        let result = self.xet_upload_batch(&files_in, revision, &None).await?;
+        Ok(WorkOutput::Uploaded { entries, result })
+    }
+}
+
 #[bon]
 impl<T: RepoType> HFRepository<T> {
     /// Upload a large local folder to this repository as a sequence of resumable,
@@ -158,8 +231,10 @@ impl<T: RepoType> HFRepository<T> {
         allow_patterns: Option<Vec<String>>,
         /// Exclude globs (repo-relative), appended to the built-in defaults.
         ignore_patterns: Option<Vec<String>>,
-        /// Bound on concurrent classify/read tasks (reserved in v1; xet manages
-        /// upload parallelism internally). Defaults to available_parallelism()/2.
+        /// Max concurrent producer tasks — `/preupload` classify requests and
+        /// in-flight xet `UploadCommit` batches share this single budget. The Hub
+        /// committer is always single-flight and is not counted here. Defaults to
+        /// `available_parallelism() / 2` (min 1).
         num_workers: Option<usize>,
         /// Progress handler (aggregate + LargeFolderStatus events; no per-file).
         #[builder(into)]
@@ -201,10 +276,6 @@ impl<T: RepoType> HFRepository<T> {
         &self,
         args: UploadLargeFolderArgs,
     ) -> crate::error::HFResult<UploadLargeFolderReport> {
-        // num_workers is reserved for future concurrency tuning (xet manages its
-        // own upload parallelism in v1).
-        let _ = args.num_workers;
-
         let revision = args.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION).to_string();
         let commit_message = args
             .commit_message
@@ -228,7 +299,6 @@ impl<T: RepoType> HFRepository<T> {
             .send()
             .await?;
 
-        // Discover and seed.
         let discovered =
             discover_files(&folder, args.path_in_repo.as_deref(), &args.allow_patterns, &args.ignore_patterns)?;
         let total_files = discovered.len();
@@ -238,44 +308,33 @@ impl<T: RepoType> HFRepository<T> {
             let paths = get_local_upload_paths(&folder, &repo_path)?;
             let meta = read_upload_metadata(&paths)?;
             let (size, sample) = crate::repository::upload::read_size_and_sample(&AddSource::File(file_path.clone()))?;
-            items.push(Item {
-                paths,
-                file_path,
-                meta,
-                sample,
-                size,
-            });
+            items.push(Item { paths, file_path, meta, sample, size });
         }
 
         let total_bytes: u64 = items.iter().map(|i| i.size).sum();
-        args.progress.emit(UploadEvent::Start {
-            total_files,
-            total_bytes,
-        });
+        args.progress.emit(UploadEvent::Start { total_files, total_bytes });
 
-        self.classify_items(&mut items, &revision).await?;
+        let config = PipelineConfig::from_num_workers(args.num_workers);
+        let counters = StatusCounters::default();
+        let (tx, rx) = unbounded_channel::<CommitReady>();
 
-        let mut bytes_uploaded = 0u64;
-        let mut dedup_bytes_saved = 0u64;
-        self.upload_lfs_stage(
-            &mut items,
+        let producer = self.run_producer(&mut items, tx, &revision, &config, &counters, &args.progress);
+        let committer = self.run_committer(
+            rx,
+            &commit_message,
+            args.commit_description.as_deref(),
             &revision,
+            args.create_pr,
+            &config,
+            &counters,
             &args.progress,
-            &mut bytes_uploaded,
-            &mut dedup_bytes_saved,
-        )
-        .await?;
+        );
 
-        let commits = self
-            .commit_stage(
-                &mut items,
-                &commit_message,
-                args.commit_description.as_deref(),
-                &revision,
-                args.create_pr,
-                &args.progress,
-            )
-            .await?;
+        let ((), (commits, committed_indices)) = tokio::try_join!(producer, committer)?;
+
+        for idx in committed_indices {
+            items[idx].meta.is_committed = true;
+        }
 
         let files_uploaded_lfs = items.iter().filter(|i| i.meta.upload_mode.as_deref() == Some("lfs")).count();
         let files_ignored = items.iter().filter(|i| i.meta.should_ignore == Some(true)).count();
@@ -292,190 +351,299 @@ impl<T: RepoType> HFRepository<T> {
             files_uploaded_lfs,
             files_committed_inline,
             files_ignored,
-            bytes_uploaded,
-            dedup_bytes_saved,
+            bytes_uploaded: counters.bytes_uploaded.load(Ordering::Relaxed),
+            dedup_bytes_saved: counters.dedup_bytes_saved.load(Ordering::Relaxed),
         })
     }
 
-    /// Classify every item whose mode is unknown via `/preupload` (batched 256),
-    /// persisting `upload_mode` and the Hub's `should_ignore` flag to the cache.
-    /// Empty files are always regular. Files the Hub marks ignored are recorded
-    /// so [`seed_stage`] routes them to `Done` (never uploaded or committed).
-    async fn classify_items(&self, items: &mut [Item], revision: &str) -> crate::error::HFResult<()> {
-        let to_classify: Vec<usize> = items
-            .iter()
-            .enumerate()
-            .filter(|(_, i)| seed_stage(&i.meta) == WorkStage::Classify)
-            .map(|(idx, _)| idx)
-            .collect();
-
-        for chunk in to_classify.chunks(256) {
-            let payload: Vec<(&str, u64, &[u8])> = chunk
-                .iter()
-                .map(|&idx| (items[idx].paths.path_in_repo.as_str(), items[idx].size, items[idx].sample.as_slice()))
-                .collect();
-            let infos = self
-                .fetch_upload_modes(&self.repo_path(), self.repo_type.plural(), revision, &payload)
-                .await?;
-            for &idx in chunk {
-                let path = items[idx].paths.path_in_repo.clone();
-                let info = infos.get(&path);
-                let should_ignore = info.map(|i| i.should_ignore).unwrap_or(false);
-                let mode = if items[idx].size == 0 {
-                    "regular".to_string()
-                } else {
-                    info.map(|i| i.upload_mode.clone()).unwrap_or_else(|| "regular".to_string())
-                };
-                items[idx].meta.upload_mode = Some(mode);
-                items[idx].meta.should_ignore = Some(should_ignore);
-                items[idx].meta.save(&items[idx].paths)?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn upload_lfs_stage(
+    /// Producer half of the pipeline. Owns `items`, classifies + uploads with a
+    /// shared `num_workers`-bounded concurrency budget, and streams per-file
+    /// `CommitReady` messages to the committer. Closes the channel when done.
+    async fn run_producer(
         &self,
         items: &mut [Item],
+        tx: UnboundedSender<CommitReady>,
         revision: &str,
+        config: &PipelineConfig,
+        counters: &StatusCounters,
         progress: &Option<Progress>,
-        bytes_uploaded: &mut u64,
-        dedup_bytes_saved: &mut u64,
-    ) -> crate::error::HFResult<()> {
+    ) -> HFResult<()> {
+        counters.files_total.store(items.len(), Ordering::Relaxed);
+
+        let mut to_classify: VecDeque<usize> = VecDeque::new();
+        let mut staging: TimedBatchBuffer<StagedLfs> = TimedBatchBuffer::new();
+
+        // Initial routing from persisted metadata (resume + already-classified).
+        for idx in 0..items.len() {
+            match seed_stage(&items[idx].meta) {
+                WorkStage::Done => {
+                    if items[idx].meta.should_ignore == Some(true) {
+                        counters.ignored.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if items[idx].meta.is_committed {
+                        counters.committed.fetch_add(1, Ordering::Relaxed);
+                    }
+                },
+                WorkStage::Classify => to_classify.push_back(idx),
+                WorkStage::PreuploadLfs => {
+                    counters.upload_mode_known.fetch_add(1, Ordering::Relaxed);
+                    counters.lfs_total.fetch_add(1, Ordering::Relaxed);
+                    staging.push(StagedLfs {
+                        idx,
+                        path_in_repo: items[idx].paths.path_in_repo.clone(),
+                        file_path: items[idx].file_path.clone(),
+                        size: items[idx].size,
+                    });
+                },
+                WorkStage::Commit => {
+                    counters.upload_mode_known.fetch_add(1, Ordering::Relaxed);
+                    if items[idx].meta.upload_mode.as_deref() == Some("lfs") {
+                        counters.lfs_total.fetch_add(1, Ordering::Relaxed);
+                        counters.preuploaded.fetch_add(1, Ordering::Relaxed);
+                        let oid = items[idx].meta.sha256.clone().ok_or_else(|| {
+                            HFError::Other(format!("missing oid for uploaded lfs file {}", items[idx].paths.path_in_repo))
+                        })?;
+                        let _ = tx.send(CommitReady {
+                            idx,
+                            resolved: ResolvedAdd::Lfs {
+                                path_in_repo: items[idx].paths.path_in_repo.clone(),
+                                oid,
+                                size: items[idx].size,
+                            },
+                            paths: items[idx].paths.clone(),
+                            meta: items[idx].meta.clone(),
+                        });
+                    } else {
+                        let _ = tx.send(CommitReady {
+                            idx,
+                            resolved: ResolvedAdd::Inline {
+                                path_in_repo: items[idx].paths.path_in_repo.clone(),
+                                source: AddSource::File(items[idx].file_path.clone()),
+                            },
+                            paths: items[idx].paths.clone(),
+                            meta: items[idx].meta.clone(),
+                        });
+                    }
+                },
+            }
+        }
+        pipeline::emit_status(counters, progress);
+
+        // Element type (a boxed Send future) is inferred from the `.boxed()` pushes below.
+        let mut inflight = FuturesUnordered::new();
+        let mut classify_inflight: usize = 0usize;
+        let mut stale_flush_pending = false;
+
         loop {
-            let batch: Vec<usize> = items
-                .iter()
-                .enumerate()
-                .filter(|(_, i)| seed_stage(&i.meta) == WorkStage::PreuploadLfs)
-                .map(|(idx, _)| idx)
-                .take(256)
-                .collect();
-            if batch.is_empty() {
+            // Dispatch classify work while under the shared concurrency cap.
+            while inflight.len() < config.num_workers && !to_classify.is_empty() {
+                let mut chunk_input: Vec<(usize, String, u64, Vec<u8>)> = Vec::with_capacity(256);
+                for _ in 0..256 {
+                    match to_classify.pop_front() {
+                        Some(idx) => chunk_input.push((
+                            idx,
+                            items[idx].paths.path_in_repo.clone(),
+                            items[idx].size,
+                            items[idx].sample.clone(),
+                        )),
+                        None => break,
+                    }
+                }
+                classify_inflight += 1;
+                inflight.push(self.classify_chunk(chunk_input, revision).boxed());
+            }
+
+            let classify_done = to_classify.is_empty() && classify_inflight == 0;
+
+            // Dispatch upload batches: full, drained, or a pending stale flush.
+            while inflight.len() < config.num_workers
+                && !staging.is_empty()
+                && (staging.len() >= config.xet_batch_size || classify_done || stale_flush_pending)
+            {
+                let batch = staging.take(config.xet_batch_size);
+                inflight.push(self.upload_chunk(batch, revision).boxed());
+                stale_flush_pending = false;
+            }
+
+            if inflight.is_empty() && to_classify.is_empty() && staging.is_empty() {
                 break;
             }
 
-            let files_in: Vec<(String, AddSource)> = batch
-                .iter()
-                .map(|&idx| (items[idx].paths.path_in_repo.clone(), AddSource::File(items[idx].file_path.clone())))
-                .collect();
-
-            let result = self.xet_upload_batch(&files_in, revision, progress).await?;
-            *bytes_uploaded += result.transfer_bytes;
-            *dedup_bytes_saved += result.dedup_bytes_saved;
-
-            let by_path: std::collections::HashMap<String, (String, u64)> =
-                result.files.into_iter().map(|f| (f.path_in_repo, (f.oid, f.size))).collect();
-
-            for &idx in &batch {
-                let path = items[idx].paths.path_in_repo.clone();
-                match by_path.get(&path) {
-                    Some((oid, _size)) => {
-                        items[idx].meta.sha256 = Some(oid.clone());
-                        items[idx].meta.is_uploaded = true;
-                        items[idx].meta.save(&items[idx].paths)?;
-                    },
-                    None => {
-                        return Err(crate::error::HFError::Other(format!(
-                            "xet_upload_batch returned no result for {path}; aborting to avoid an upload loop"
-                        )));
-                    },
+            let deadline = staging.deadline(config.max_xet_batch_wait);
+            tokio::select! {
+                maybe = inflight.next(), if !inflight.is_empty() => {
+                    let out = maybe.expect("guarded by !inflight.is_empty()")?;
+                    match out {
+                        WorkOutput::Classified(results) => {
+                            classify_inflight -= 1;
+                            for r in results {
+                                items[r.idx].meta.upload_mode = Some(r.upload_mode.clone());
+                                items[r.idx].meta.should_ignore = Some(r.should_ignore);
+                                items[r.idx].meta.save(&items[r.idx].paths)?;
+                                counters.upload_mode_known.fetch_add(1, Ordering::Relaxed);
+                                if r.should_ignore {
+                                    counters.ignored.fetch_add(1, Ordering::Relaxed);
+                                } else if r.upload_mode == "lfs" {
+                                    counters.lfs_total.fetch_add(1, Ordering::Relaxed);
+                                    staging.push(StagedLfs {
+                                        idx: r.idx,
+                                        path_in_repo: items[r.idx].paths.path_in_repo.clone(),
+                                        file_path: items[r.idx].file_path.clone(),
+                                        size: items[r.idx].size,
+                                    });
+                                } else {
+                                    let _ = tx.send(CommitReady {
+                                        idx: r.idx,
+                                        resolved: ResolvedAdd::Inline {
+                                            path_in_repo: items[r.idx].paths.path_in_repo.clone(),
+                                            source: AddSource::File(items[r.idx].file_path.clone()),
+                                        },
+                                        paths: items[r.idx].paths.clone(),
+                                        meta: items[r.idx].meta.clone(),
+                                    });
+                                }
+                            }
+                            pipeline::emit_status(counters, progress);
+                        },
+                        WorkOutput::Uploaded { entries, result } => {
+                            let by_path: HashMap<String, String> =
+                                result.files.into_iter().map(|f| (f.path_in_repo, f.oid)).collect();
+                            counters.bytes_uploaded.fetch_add(result.transfer_bytes, Ordering::Relaxed);
+                            counters.dedup_bytes_saved.fetch_add(result.dedup_bytes_saved, Ordering::Relaxed);
+                            for e in entries {
+                                let oid = by_path.get(&e.path_in_repo).cloned().ok_or_else(|| {
+                                    HFError::Other(format!(
+                                        "xet_upload_batch returned no result for {}; aborting to avoid an upload loop",
+                                        e.path_in_repo
+                                    ))
+                                })?;
+                                items[e.idx].meta.sha256 = Some(oid.clone());
+                                items[e.idx].meta.is_uploaded = true;
+                                items[e.idx].meta.save(&items[e.idx].paths)?;
+                                counters.hashed.fetch_add(1, Ordering::Relaxed);
+                                counters.preuploaded.fetch_add(1, Ordering::Relaxed);
+                                let _ = tx.send(CommitReady {
+                                    idx: e.idx,
+                                    resolved: ResolvedAdd::Lfs { path_in_repo: e.path_in_repo, oid, size: e.size },
+                                    paths: items[e.idx].paths.clone(),
+                                    meta: items[e.idx].meta.clone(),
+                                });
+                            }
+                            pipeline::emit_status(counters, progress);
+                        },
+                    }
+                }
+                _ = sleep_or_pending(deadline), if !staging.is_empty() => {
+                    stale_flush_pending = true;
                 }
             }
-            self.emit_status(items, *bytes_uploaded, *dedup_bytes_saved, progress);
         }
+
+        drop(tx);
         Ok(())
     }
 
-    async fn commit_stage(
+    /// Commit up to `max` buffered files in one Hub commit, persist `is_committed`
+    /// for each on success, and record committed indices. Single call site of
+    /// `commit_resolved_operations` in the pipeline.
+    #[allow(clippy::too_many_arguments)]
+    async fn commit_batch(
         &self,
-        items: &mut [Item],
+        buffer: &mut TimedBatchBuffer<CommitReady>,
+        max: usize,
         commit_message: &str,
         commit_description: Option<&str>,
         revision: &str,
         create_pr: bool,
+        counters: &StatusCounters,
         progress: &Option<Progress>,
-    ) -> crate::error::HFResult<Vec<crate::repository::CommitInfo>> {
-        let mut commits = Vec::new();
-        loop {
-            let batch: Vec<usize> = items
-                .iter()
-                .enumerate()
-                .filter(|(_, i)| seed_stage(&i.meta) == WorkStage::Commit)
-                .map(|(idx, _)| idx)
-                .take(MAX_COMMIT_FILES)
-                .collect();
-            if batch.is_empty() {
-                break;
-            }
-
-            let mut adds: Vec<ResolvedAdd> = Vec::with_capacity(batch.len());
-            for &idx in &batch {
-                let path = items[idx].paths.path_in_repo.clone();
-                if items[idx].meta.upload_mode.as_deref() == Some("lfs") {
-                    let oid = items[idx].meta.sha256.clone().ok_or_else(|| {
-                        crate::error::HFError::Other(format!("missing oid for uploaded lfs file {path}"))
-                    })?;
-                    adds.push(ResolvedAdd::Lfs {
-                        path_in_repo: path,
-                        oid,
-                        size: items[idx].size,
-                    });
-                } else {
-                    adds.push(ResolvedAdd::Inline {
-                        path_in_repo: path,
-                        source: AddSource::File(items[idx].file_path.clone()),
-                    });
-                }
-            }
-
-            let info = self
-                .commit_resolved_operations(
-                    &adds,
-                    &[],
-                    commit_message,
-                    commit_description,
-                    revision,
-                    create_pr,
-                    None,
-                    progress,
-                )
-                .await;
-
-            match info {
-                Ok(info) => {
-                    for &idx in &batch {
-                        items[idx].meta.is_committed = true;
-                        items[idx].meta.save(&items[idx].paths)?;
-                    }
-                    commits.push(info);
-                },
-                Err(e) => {
-                    return Err(e);
-                },
-            }
+        commits: &mut Vec<CommitInfo>,
+        committed_indices: &mut Vec<usize>,
+    ) -> HFResult<()> {
+        let batch = buffer.take(max);
+        if batch.is_empty() {
+            return Ok(());
         }
-        Ok(commits)
+        let mut adds: Vec<ResolvedAdd> = Vec::with_capacity(batch.len());
+        let mut metas: Vec<(usize, LocalUploadFilePaths, LocalUploadFileMetadata)> = Vec::with_capacity(batch.len());
+        for cr in batch {
+            adds.push(cr.resolved);
+            metas.push((cr.idx, cr.paths, cr.meta));
+        }
+        let info = self
+            .commit_resolved_operations(&adds, &[], commit_message, commit_description, revision, create_pr, None, progress)
+            .await?;
+        for (idx, paths, mut meta) in metas {
+            meta.is_committed = true;
+            meta.save(&paths)?;
+            committed_indices.push(idx);
+            counters.committed.fetch_add(1, Ordering::Relaxed);
+        }
+        commits.push(info);
+        pipeline::emit_status(counters, progress);
+        Ok(())
     }
 
-    fn emit_status(&self, items: &[Item], bytes_uploaded: u64, dedup_bytes_saved: u64, progress: &Option<Progress>) {
-        let files_total = items.len();
-        let upload_mode_known = items.iter().filter(|i| i.meta.upload_mode.is_some()).count();
-        let lfs_total = items.iter().filter(|i| i.meta.upload_mode.as_deref() == Some("lfs")).count();
-        let preuploaded = items.iter().filter(|i| i.meta.is_uploaded).count();
-        let committed = items.iter().filter(|i| i.meta.is_committed).count();
-        let ignored = items.iter().filter(|i| i.meta.should_ignore == Some(true)).count();
-        let hashed = items.iter().filter(|i| i.meta.sha256.is_some()).count();
-        progress.emit(UploadEvent::LargeFolderStatus {
-            files_total,
-            hashed,
-            upload_mode_known,
-            lfs_total,
-            preuploaded,
-            committed,
-            ignored,
-            bytes_uploaded,
-            dedup_bytes_saved,
-        });
+    /// Committer half of the pipeline. Single task, single-flight commits. Drains
+    /// `rx` into a `TimedBatchBuffer`; commits on full / stale (oldest-anchored) /
+    /// channel-close.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_committer(
+        &self,
+        mut rx: UnboundedReceiver<CommitReady>,
+        commit_message: &str,
+        commit_description: Option<&str>,
+        revision: &str,
+        create_pr: bool,
+        config: &PipelineConfig,
+        counters: &StatusCounters,
+        progress: &Option<Progress>,
+    ) -> HFResult<(Vec<CommitInfo>, Vec<usize>)> {
+        let mut buffer: TimedBatchBuffer<CommitReady> = TimedBatchBuffer::new();
+        let mut commits: Vec<CommitInfo> = Vec::new();
+        let mut committed_indices: Vec<usize> = Vec::new();
+        let mut closed = false;
+
+        loop {
+            while buffer.len() >= config.max_commit_files {
+                self.commit_batch(
+                    &mut buffer, config.max_commit_files, commit_message, commit_description, revision,
+                    create_pr, counters, progress, &mut commits, &mut committed_indices,
+                )
+                .await?;
+            }
+
+            if closed {
+                if buffer.is_empty() {
+                    break;
+                }
+                self.commit_batch(
+                    &mut buffer, config.max_commit_files, commit_message, commit_description, revision,
+                    create_pr, counters, progress, &mut commits, &mut committed_indices,
+                )
+                .await?;
+                continue;
+            }
+
+            let deadline = buffer.deadline(config.max_commit_wait);
+            tokio::select! {
+                recv = rx.recv() => {
+                    match recv {
+                        Some(cr) => buffer.push(cr),
+                        None => closed = true,
+                    }
+                }
+                _ = sleep_or_pending(deadline), if !buffer.is_empty() => {
+                    self.commit_batch(
+                        &mut buffer, config.max_commit_files, commit_message, commit_description, revision,
+                        create_pr, counters, progress, &mut commits, &mut committed_indices,
+                    )
+                    .await?;
+                }
+            }
+        }
+
+        Ok((commits, committed_indices))
     }
 }
 
@@ -496,6 +664,8 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         private: Option<bool>,
         allow_patterns: Option<Vec<String>>,
         ignore_patterns: Option<Vec<String>>,
+        /// Max concurrent producer tasks (classify + xet upload batches); the Hub
+        /// committer is always single-flight. Defaults to `available_parallelism() / 2`.
         num_workers: Option<usize>,
         #[builder(into)] progress: Option<crate::progress::Progress>,
     ) -> crate::error::HFResult<UploadLargeFolderReport> {
