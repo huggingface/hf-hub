@@ -390,7 +390,11 @@ impl<T: RepoType> HFRepository<T> {
         let lfs_files: Vec<&(String, u64, Vec<u8>, &AddSource)> = file_infos
             .iter()
             .filter(|(path, size, _, _)| {
-                *size > 0 && upload_modes.get(path.as_str()).map(|m| m == "lfs").unwrap_or(false)
+                *size > 0
+                    && upload_modes
+                        .get(path.as_str())
+                        .map(|info| info.upload_mode == "lfs")
+                        .unwrap_or(false)
             })
             .collect();
 
@@ -407,15 +411,15 @@ impl<T: RepoType> HFRepository<T> {
         self.upload_lfs_files_via_xet(params, revision, &lfs_files).await
     }
 
-    /// Call the Hub preupload endpoint to determine the upload mode per file.
-    /// Returns a map of path -> upload mode ("lfs" or "regular").
+    /// Call the Hub preupload endpoint to classify each file. Returns a map of
+    /// path -> [`PreuploadInfo`] (upload mode plus the Hub's should-ignore flag).
     pub(crate) async fn fetch_upload_modes(
         &self,
         repo_id: &str,
         api_segment: &str,
         revision: &str,
         files: &[(&str, u64, &[u8])],
-    ) -> HFResult<HashMap<String, String>> {
+    ) -> HFResult<HashMap<String, PreuploadInfo>> {
         let url = format!("{}/preupload/{}", self.hf_client.api_url(api_segment, repo_id), revision);
 
         let files_payload: Vec<serde_json::Value> = files
@@ -449,7 +453,19 @@ impl<T: RepoType> HFRepository<T> {
 
         let preupload: PreuploadResponse = response.json().await?;
 
-        Ok(preupload.files.into_iter().map(|f| (f.path, f.upload_mode)).collect())
+        Ok(preupload
+            .files
+            .into_iter()
+            .map(|f| {
+                (
+                    f.path,
+                    PreuploadInfo {
+                        upload_mode: f.upload_mode,
+                        should_ignore: f.should_ignore,
+                    },
+                )
+            })
+            .collect())
     }
 
     /// Compute SHA256, negotiate LFS batch transfer, and upload via xet.
@@ -637,11 +653,21 @@ impl<T: RepoType> HFRepository<T> {
 struct PreuploadFileInfo {
     path: String,
     upload_mode: String,
+    #[serde(default)]
+    should_ignore: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]
 struct PreuploadResponse {
     files: Vec<PreuploadFileInfo>,
+}
+
+/// Per-file result of the preupload classification endpoint: the upload mode
+/// (`"lfs"`/`"regular"`) plus the Hub's should-ignore flag for the file.
+#[derive(Debug)]
+pub(crate) struct PreuploadInfo {
+    pub upload_mode: String,
+    pub should_ignore: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1180,5 +1206,20 @@ mod ndjson_tests {
         assert!(lines[1].contains("\"lfsFile\""));
         assert!(lines[2].contains("\"deletedFile\""));
         assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn preupload_response_parses_should_ignore() {
+        let json = r#"{"files":[
+            {"path":"a","uploadMode":"lfs","shouldIgnore":true},
+            {"path":"b","uploadMode":"regular"}
+        ]}"#;
+        let resp: PreuploadResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.files[0].path, "a");
+        assert_eq!(resp.files[0].upload_mode, "lfs");
+        assert!(resp.files[0].should_ignore);
+        // Absent shouldIgnore defaults to false.
+        assert_eq!(resp.files[1].upload_mode, "regular");
+        assert!(!resp.files[1].should_ignore);
     }
 }

@@ -301,7 +301,9 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     /// Classify every item whose mode is unknown via `/preupload` (batched 256),
-    /// persisting `upload_mode` to the cache. Empty files are always regular.
+    /// persisting `upload_mode` and the Hub's `should_ignore` flag to the cache.
+    /// Empty files are always regular. Files the Hub marks ignored are recorded
+    /// so [`seed_stage`] routes them to `Done` (never uploaded or committed).
     async fn classify_items(&self, items: &mut [Item], revision: &str) -> crate::error::HFResult<()> {
         let to_classify: Vec<usize> = items
             .iter()
@@ -315,17 +317,20 @@ impl<T: RepoType> HFRepository<T> {
                 .iter()
                 .map(|&idx| (items[idx].paths.path_in_repo.as_str(), items[idx].size, items[idx].sample.as_slice()))
                 .collect();
-            let modes = self
+            let infos = self
                 .fetch_upload_modes(&self.repo_path(), self.repo_type.plural(), revision, &payload)
                 .await?;
             for &idx in chunk {
                 let path = items[idx].paths.path_in_repo.clone();
+                let info = infos.get(&path);
+                let should_ignore = info.map(|i| i.should_ignore).unwrap_or(false);
                 let mode = if items[idx].size == 0 {
                     "regular".to_string()
                 } else {
-                    modes.get(&path).cloned().unwrap_or_else(|| "regular".to_string())
+                    info.map(|i| i.upload_mode.clone()).unwrap_or_else(|| "regular".to_string())
                 };
                 items[idx].meta.upload_mode = Some(mode);
+                items[idx].meta.should_ignore = Some(should_ignore);
                 items[idx].meta.save(&items[idx].paths)?;
             }
         }
