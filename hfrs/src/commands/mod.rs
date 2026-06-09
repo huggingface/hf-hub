@@ -8,4 +8,5 @@ pub mod models;
 pub mod repos;
 pub mod spaces;
 pub mod upload;
+pub mod upload_large_folder;
 pub mod version;

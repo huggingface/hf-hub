@@ -53,6 +53,9 @@ pub enum Command {
     Spaces(crate::commands::spaces::Args),
     /// Upload a file or folder to the Hub
     Upload(crate::commands::upload::Args),
+    /// Upload a large folder to the Hub (resumable, batched commits)
+    #[command(name = "upload-large-folder")]
+    UploadLargeFolder(crate::commands::upload_large_folder::Args),
     /// Print information about the environment
     Env(crate::commands::env::Args),
     /// Print the hfrs version

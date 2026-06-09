@@ -64,6 +64,7 @@ async fn main() -> ExitCode {
         Command::Repos(args) => commands::repos::execute(&client, args).await,
         Command::Spaces(args) => commands::spaces::execute(&client, args).await,
         Command::Upload(args) => commands::upload::execute(&client, args, multi.clone()).await,
+        Command::UploadLargeFolder(args) => commands::upload_large_folder::execute(&client, args, multi.clone()).await,
         Command::Env(args) => commands::env::execute(args).await,
         Command::Version(args) => commands::version::execute(args).await,
     };
