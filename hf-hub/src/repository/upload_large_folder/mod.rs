@@ -22,7 +22,8 @@ use crate::repository::upload_large_folder::local_folder::{
     LocalUploadFileMetadata, LocalUploadFilePaths, get_local_upload_paths, read_upload_metadata,
 };
 use crate::repository::upload_large_folder::pipeline::{
-    CommitReady, PipelineConfig, StatusCounters, TimedBatchBuffer, WorkStage, seed_stage, sleep_or_pending,
+    CommitReady, PREUPLOAD_BATCH_SIZE, PipelineConfig, StatusCounters, TimedBatchBuffer, WorkStage, seed_stage,
+    sleep_or_pending,
 };
 use crate::repository::{CommitInfo, HFRepository, RepoType};
 
@@ -159,15 +160,13 @@ enum WorkOutput {
 impl<T: RepoType> HFRepository<T> {
     /// Classify a chunk of files via `/preupload`. Owns its input; borrows only
     /// `&self` + `revision`. Empty files are forced to "regular".
-    async fn classify_chunk(
-        &self,
-        input: Vec<(usize, String, u64, Vec<u8>)>,
-        revision: &str,
-    ) -> HFResult<WorkOutput> {
+    async fn classify_chunk(&self, input: Vec<(usize, String, u64, Vec<u8>)>, revision: &str) -> HFResult<WorkOutput> {
         let repo_path = self.repo_path();
         let api_segment = self.repo_type.plural();
-        let payload: Vec<(&str, u64, &[u8])> =
-            input.iter().map(|(_, path, size, sample)| (path.as_str(), *size, sample.as_slice())).collect();
+        let payload: Vec<(&str, u64, &[u8])> = input
+            .iter()
+            .map(|(_, path, size, sample)| (path.as_str(), *size, sample.as_slice()))
+            .collect();
         let infos = self.fetch_upload_modes(&repo_path, api_segment, revision, &payload).await?;
         let results = input
             .iter()
@@ -179,7 +178,11 @@ impl<T: RepoType> HFRepository<T> {
                 } else {
                     info.map(|i| i.upload_mode.clone()).unwrap_or_else(|| "regular".to_string())
                 };
-                ClassifyResult { idx: *idx, upload_mode, should_ignore }
+                ClassifyResult {
+                    idx: *idx,
+                    upload_mode,
+                    should_ignore,
+                }
             })
             .collect();
         Ok(WorkOutput::Classified(results))
@@ -308,11 +311,20 @@ impl<T: RepoType> HFRepository<T> {
             let paths = get_local_upload_paths(&folder, &repo_path)?;
             let meta = read_upload_metadata(&paths)?;
             let (size, sample) = crate::repository::upload::read_size_and_sample(&AddSource::File(file_path.clone()))?;
-            items.push(Item { paths, file_path, meta, sample, size });
+            items.push(Item {
+                paths,
+                file_path,
+                meta,
+                sample,
+                size,
+            });
         }
 
         let total_bytes: u64 = items.iter().map(|i| i.size).sum();
-        args.progress.emit(UploadEvent::Start { total_files, total_bytes });
+        args.progress.emit(UploadEvent::Start {
+            total_files,
+            total_bytes,
+        });
 
         let config = PipelineConfig::from_num_workers(args.num_workers);
         let counters = StatusCounters::default();
@@ -374,13 +386,13 @@ impl<T: RepoType> HFRepository<T> {
         let mut staging: TimedBatchBuffer<StagedLfs> = TimedBatchBuffer::new();
 
         // Initial routing from persisted metadata (resume + already-classified).
-        for idx in 0..items.len() {
-            match seed_stage(&items[idx].meta) {
+        for (idx, item) in items.iter().enumerate() {
+            match seed_stage(&item.meta) {
                 WorkStage::Done => {
-                    if items[idx].meta.should_ignore == Some(true) {
+                    if item.meta.should_ignore == Some(true) {
                         counters.ignored.fetch_add(1, Ordering::Relaxed);
                     }
-                    if items[idx].meta.is_committed {
+                    if item.meta.is_committed {
                         counters.committed.fetch_add(1, Ordering::Relaxed);
                     }
                 },
@@ -390,38 +402,41 @@ impl<T: RepoType> HFRepository<T> {
                     counters.lfs_total.fetch_add(1, Ordering::Relaxed);
                     staging.push(StagedLfs {
                         idx,
-                        path_in_repo: items[idx].paths.path_in_repo.clone(),
-                        file_path: items[idx].file_path.clone(),
-                        size: items[idx].size,
+                        path_in_repo: item.paths.path_in_repo.clone(),
+                        file_path: item.file_path.clone(),
+                        size: item.size,
                     });
                 },
                 WorkStage::Commit => {
                     counters.upload_mode_known.fetch_add(1, Ordering::Relaxed);
-                    if items[idx].meta.upload_mode.as_deref() == Some("lfs") {
+                    if item.meta.upload_mode.as_deref() == Some("lfs") {
                         counters.lfs_total.fetch_add(1, Ordering::Relaxed);
                         counters.preuploaded.fetch_add(1, Ordering::Relaxed);
-                        let oid = items[idx].meta.sha256.clone().ok_or_else(|| {
-                            HFError::Other(format!("missing oid for uploaded lfs file {}", items[idx].paths.path_in_repo))
+                        let oid = item.meta.sha256.clone().ok_or_else(|| {
+                            HFError::Other(format!(
+                                "missing oid for uploaded lfs file {}",
+                                item.paths.path_in_repo
+                            ))
                         })?;
                         let _ = tx.send(CommitReady {
                             idx,
                             resolved: ResolvedAdd::Lfs {
-                                path_in_repo: items[idx].paths.path_in_repo.clone(),
+                                path_in_repo: item.paths.path_in_repo.clone(),
                                 oid,
-                                size: items[idx].size,
+                                size: item.size,
                             },
-                            paths: items[idx].paths.clone(),
-                            meta: items[idx].meta.clone(),
+                            paths: item.paths.clone(),
+                            meta: item.meta.clone(),
                         });
                     } else {
                         let _ = tx.send(CommitReady {
                             idx,
                             resolved: ResolvedAdd::Inline {
-                                path_in_repo: items[idx].paths.path_in_repo.clone(),
-                                source: AddSource::File(items[idx].file_path.clone()),
+                                path_in_repo: item.paths.path_in_repo.clone(),
+                                source: AddSource::File(item.file_path.clone()),
                             },
-                            paths: items[idx].paths.clone(),
-                            meta: items[idx].meta.clone(),
+                            paths: item.paths.clone(),
+                            meta: item.meta.clone(),
                         });
                     }
                 },
@@ -437,8 +452,8 @@ impl<T: RepoType> HFRepository<T> {
         loop {
             // Dispatch classify work while under the shared concurrency cap.
             while inflight.len() < config.num_workers && !to_classify.is_empty() {
-                let mut chunk_input: Vec<(usize, String, u64, Vec<u8>)> = Vec::with_capacity(256);
-                for _ in 0..256 {
+                let mut chunk_input: Vec<(usize, String, u64, Vec<u8>)> = Vec::with_capacity(PREUPLOAD_BATCH_SIZE);
+                for _ in 0..PREUPLOAD_BATCH_SIZE {
                     match to_classify.pop_front() {
                         Some(idx) => chunk_input.push((
                             idx,
@@ -571,7 +586,16 @@ impl<T: RepoType> HFRepository<T> {
             metas.push((cr.idx, cr.paths, cr.meta));
         }
         let info = self
-            .commit_resolved_operations(&adds, &[], commit_message, commit_description, revision, create_pr, None, progress)
+            .commit_resolved_operations(
+                &adds,
+                &[],
+                commit_message,
+                commit_description,
+                revision,
+                create_pr,
+                None,
+                progress,
+            )
             .await?;
         for (idx, paths, mut meta) in metas {
             meta.is_committed = true;
@@ -607,8 +631,16 @@ impl<T: RepoType> HFRepository<T> {
         loop {
             while buffer.len() >= config.max_commit_files {
                 self.commit_batch(
-                    &mut buffer, config.max_commit_files, commit_message, commit_description, revision,
-                    create_pr, counters, progress, &mut commits, &mut committed_indices,
+                    &mut buffer,
+                    config.max_commit_files,
+                    commit_message,
+                    commit_description,
+                    revision,
+                    create_pr,
+                    counters,
+                    progress,
+                    &mut commits,
+                    &mut committed_indices,
                 )
                 .await?;
             }
@@ -618,8 +650,16 @@ impl<T: RepoType> HFRepository<T> {
                     break;
                 }
                 self.commit_batch(
-                    &mut buffer, config.max_commit_files, commit_message, commit_description, revision,
-                    create_pr, counters, progress, &mut commits, &mut committed_indices,
+                    &mut buffer,
+                    config.max_commit_files,
+                    commit_message,
+                    commit_description,
+                    revision,
+                    create_pr,
+                    counters,
+                    progress,
+                    &mut commits,
+                    &mut committed_indices,
                 )
                 .await?;
                 continue;

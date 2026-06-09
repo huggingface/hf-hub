@@ -194,7 +194,6 @@ pub(crate) struct XetUploadedFile {
     pub path_in_repo: String,
     /// git sha256 oid (the LFS oid), produced by `Sha256Policy::Compute`.
     pub oid: String,
-    pub size: u64,
 }
 
 pub(crate) struct XetBatchResult {
@@ -707,19 +706,14 @@ impl<T: RepoType> HFRepository<T> {
         .await?;
 
         let mut files = Vec::with_capacity(files_in.len());
-        for ((path_in_repo, source), info) in files_in.iter().zip(&outcome.infos) {
+        for ((path_in_repo, _), info) in files_in.iter().zip(&outcome.infos) {
             let oid = info
                 .sha256()
                 .ok_or_else(|| HFError::Other(format!("xet did not return a sha256 for {path_in_repo}")))?
                 .to_string();
-            let size = info.file_size().unwrap_or_else(|| match source {
-                AddSource::Bytes(b) => b.len() as u64,
-                AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
-            });
             files.push(XetUploadedFile {
                 path_in_repo: path_in_repo.clone(),
                 oid,
-                size,
             });
         }
 

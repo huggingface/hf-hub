@@ -15,6 +15,8 @@ use crate::repository::upload_large_folder::local_folder::{LocalUploadFileMetada
 /// Max files queued into a single xet `UploadCommit` before it is dispatched.
 /// Larger batches improve client-side dedup and reduce finalize round-trips.
 pub(crate) const XET_BATCH_SIZE: usize = 1024;
+/// Files per `/preupload` classify request (Hub endpoint limit).
+pub(crate) const PREUPLOAD_BATCH_SIZE: usize = 256;
 /// Max files in a single Hub commit (validated top of Python's old scale).
 pub(crate) const MAX_COMMIT_FILES: usize = 1000;
 /// How long the oldest queued lfs file may wait before a partial xet batch is
@@ -258,5 +260,4 @@ mod tests {
         let auto = PipelineConfig::from_num_workers(None);
         assert!(auto.num_workers >= 1);
     }
-
 }

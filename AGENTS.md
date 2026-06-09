@@ -183,7 +183,8 @@ hf-hub/
 │   │   │   └── upload_large_folder/   # Resumable large-folder upload (Python parity + xet improvements)
 │   │   │       ├── mod.rs             # upload_large_folder method, orchestration, UploadLargeFolderReport
 │   │   │       ├── local_folder.rs    # byte-compatible .cache/huggingface/upload metadata + flock
-│   │   │       └── pipeline.rs        # adaptive commit batching, stage seeding
+│   │   │       └── pipeline.rs        # tuning (PipelineConfig), oldest-anchored TimedBatchBuffer,
+│   │   │                              #   StatusCounters/emit_status, CommitReady, stage seeding
 │   │   ├── spaces.rs               # Spaces component: HFSpace handle, SpaceRuntime, SpaceVariable,
 │   │   │                           #   runtime/hardware/secrets/variables/duplicate
 │   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
