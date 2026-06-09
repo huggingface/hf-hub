@@ -26,6 +26,7 @@ pub mod files;
 pub mod listing;
 pub mod repo_type;
 pub mod upload;
+pub mod upload_large_folder;
 
 use std::collections::HashMap;
 use std::str::FromStr;
