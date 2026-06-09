@@ -181,6 +181,110 @@ impl Drop for MetadataLock {
     }
 }
 
+const S3_EXPIRATION_SECS: f64 = 20.0 * 3600.0;
+
+/// Reads metadata for a file, applying Python's recovery rules:
+/// - missing file -> fresh metadata sized from the target file (if it exists).
+/// - parse error -> delete the corrupt file, return fresh metadata.
+/// - file mtime newer than recorded timestamp -> stale, return fresh metadata.
+/// - `is_uploaded && !is_committed` older than 20h -> reset `is_uploaded`.
+pub(crate) fn read_upload_metadata(paths: &LocalUploadFilePaths) -> HFResult<LocalUploadFileMetadata> {
+    let _guard = MetadataLock::acquire(&paths.lock_path)?;
+
+    let file_size = std::fs::metadata(&paths.file_path).map(|m| m.len()).unwrap_or(0);
+
+    if !paths.metadata_path.exists() {
+        return Ok(LocalUploadFileMetadata::new(file_size));
+    }
+
+    let raw = std::fs::read_to_string(&paths.metadata_path)?;
+    let parsed = match parse_metadata(&raw) {
+        Ok(m) => m,
+        Err(_) => {
+            tracing::warn!(path = %paths.metadata_path.display(), "corrupt upload metadata; resetting");
+            let _ = std::fs::remove_file(&paths.metadata_path);
+            return Ok(LocalUploadFileMetadata::new(file_size));
+        },
+    };
+
+    // Staleness: if the target file changed after the metadata was written, the
+    // hash/mode no longer apply.
+    if let Ok(file_meta) = std::fs::metadata(&paths.file_path)
+        && let Ok(modified) = file_meta.modified()
+        && let Ok(mtime) = modified.duration_since(UNIX_EPOCH)
+    {
+        let ts = parsed.timestamp.unwrap_or(0.0);
+        if mtime.as_secs_f64() > ts {
+            return Ok(LocalUploadFileMetadata::new(file_meta.len()));
+        }
+    }
+
+    let mut parsed = parsed;
+    if parsed.is_uploaded
+        && !parsed.is_committed
+        && now_unix_secs() - parsed.timestamp.unwrap_or(0.0) > S3_EXPIRATION_SECS
+    {
+        parsed.is_uploaded = false;
+    }
+    Ok(parsed)
+}
+
+fn parse_metadata(raw: &str) -> Result<LocalUploadFileMetadata, &'static str> {
+    let mut lines = raw.split('\n');
+    let timestamp: f64 = lines
+        .next()
+        .ok_or("missing timestamp")?
+        .trim()
+        .parse()
+        .map_err(|_| "bad timestamp")?;
+    let size: u64 = lines.next().ok_or("missing size")?.trim().parse().map_err(|_| "bad size")?;
+    let should_ignore = parse_opt_bool(lines.next().ok_or("missing should_ignore")?)?;
+    let sha256 = parse_opt_str(lines.next().ok_or("missing sha256")?);
+    let upload_mode = parse_opt_str(lines.next().ok_or("missing upload_mode")?);
+    if let Some(ref m) = upload_mode
+        && m != "regular"
+        && m != "lfs"
+    {
+        return Err("invalid upload_mode");
+    }
+    let remote_oid = parse_opt_str(lines.next().ok_or("missing remote_oid")?);
+    let is_uploaded = parse_bool(lines.next().ok_or("missing is_uploaded")?)?;
+    let is_committed = parse_bool(lines.next().ok_or("missing is_committed")?)?;
+
+    Ok(LocalUploadFileMetadata {
+        size,
+        timestamp: Some(timestamp),
+        should_ignore,
+        sha256,
+        upload_mode,
+        remote_oid,
+        is_uploaded,
+        is_committed,
+    })
+}
+
+fn parse_opt_str(line: &str) -> Option<String> {
+    let v = line.trim();
+    if v.is_empty() { None } else { Some(v.to_string()) }
+}
+
+fn parse_opt_bool(line: &str) -> Result<Option<bool>, &'static str> {
+    match line.trim() {
+        "" => Ok(None),
+        "0" => Ok(Some(false)),
+        "1" => Ok(Some(true)),
+        _ => Err("bad optional bool"),
+    }
+}
+
+fn parse_bool(line: &str) -> Result<bool, &'static str> {
+    match line.trim() {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        _ => Err("bad bool"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +363,99 @@ mod tests {
         assert_eq!(lines[5], ""); // remote_oid None
         assert_eq!(lines[6], "0"); // is_uploaded false
         assert_eq!(lines[7], "0"); // is_committed false
+    }
+
+    fn touch_file(path: &std::path::Path, bytes: &[u8]) {
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn round_trip_read_after_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = get_local_upload_paths(dir.path(), "f.bin").unwrap();
+        touch_file(&paths.file_path, b"hello");
+        let mut meta = LocalUploadFileMetadata::new(5);
+        meta.upload_mode = Some("regular".to_string());
+        meta.is_committed = true;
+        meta.save(&paths).unwrap();
+
+        let read = read_upload_metadata(&paths).unwrap();
+        assert_eq!(read.size, 5);
+        assert_eq!(read.upload_mode.as_deref(), Some("regular"));
+        assert!(read.is_committed);
+        assert!(read.should_ignore.is_none());
+    }
+
+    #[test]
+    fn corrupt_metadata_is_deleted_and_reset() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = get_local_upload_paths(dir.path(), "c.bin").unwrap();
+        touch_file(&paths.file_path, b"abcd");
+        std::fs::write(&paths.metadata_path, "not a valid metadata file").unwrap();
+        let read = read_upload_metadata(&paths).unwrap();
+        assert_eq!(read.size, 4); // from stat
+        assert!(read.sha256.is_none());
+        assert!(!paths.metadata_path.exists()); // corrupt file removed
+    }
+
+    #[test]
+    fn stale_metadata_when_file_newer_than_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = get_local_upload_paths(dir.path(), "s.bin").unwrap();
+        touch_file(&paths.file_path, b"xyz");
+        let mut meta = LocalUploadFileMetadata::new(3);
+        meta.sha256 = Some("abc".to_string());
+        meta.save(&paths).unwrap();
+        rewrite_timestamp(&paths.metadata_path, 1.0);
+
+        let read = read_upload_metadata(&paths).unwrap();
+        assert!(read.sha256.is_none()); // discarded as stale -> fresh
+    }
+
+    #[test]
+    fn s3_gc_resets_is_uploaded_after_20h() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = get_local_upload_paths(dir.path(), "g.bin").unwrap();
+        touch_file(&paths.file_path, b"zz");
+        let mut meta = LocalUploadFileMetadata::new(2);
+        meta.upload_mode = Some("lfs".to_string());
+        meta.sha256 = Some("aa".to_string());
+        meta.is_uploaded = true;
+        meta.save(&paths).unwrap();
+        rewrite_timestamp(&paths.metadata_path, now_unix_secs() - 21.0 * 3600.0);
+        // Backdate the TARGET file's mtime to older than the recorded timestamp so
+        // the staleness check does NOT fire — this isolates the 20h GC rule.
+        let f = std::fs::OpenOptions::new().write(true).open(&paths.file_path).unwrap();
+        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(22 * 3600))
+            .unwrap();
+
+        let read = read_upload_metadata(&paths).unwrap();
+        assert!(!read.is_uploaded); // reset by the 20h GC rule (not by staleness)
+    }
+
+    /// Overwrites only line 1 (timestamp) of an existing metadata file.
+    fn rewrite_timestamp(metadata_path: &std::path::Path, ts: f64) {
+        let content = std::fs::read_to_string(metadata_path).unwrap();
+        let mut lines: Vec<String> = content.split('\n').map(str::to_string).collect();
+        lines[0] = ts.to_string();
+        std::fs::write(metadata_path, lines.join("\n")).unwrap();
+    }
+
+    #[test]
+    fn reads_python_written_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = get_local_upload_paths(dir.path(), "model.bin").unwrap();
+        touch_file(&paths.file_path, &[0u8; 10]);
+        // Metadata exactly as Python writes: timestamp far in the future so the
+        // staleness check passes; sha256 + lfs + uploaded, not committed.
+        let body = "99999999999.0\n10\n0\n0123abcd\nlfs\n\n1\n0\n";
+        std::fs::write(&paths.metadata_path, body).unwrap();
+        let read = read_upload_metadata(&paths).unwrap();
+        assert_eq!(read.size, 10);
+        assert_eq!(read.upload_mode.as_deref(), Some("lfs"));
+        assert_eq!(read.sha256.as_deref(), Some("0123abcd"));
+        assert!(read.is_uploaded);
+        assert!(!read.is_committed);
+        assert_eq!(read.should_ignore, Some(false));
     }
 }
