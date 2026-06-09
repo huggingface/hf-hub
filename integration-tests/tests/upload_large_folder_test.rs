@@ -144,3 +144,60 @@ async fn resumes_python_written_cache() {
         .send()
         .await;
 }
+
+/// Many small (regular) files plus explicit num_workers. Exercises parallel
+/// classify, the committer's batching, and produces ≥1 commit with all files.
+#[tokio::test]
+async fn upload_large_folder_many_small_files_with_workers() {
+    let Some(_token) = resolve_hub_ci_token() else {
+        eprintln!("skipping: no token");
+        return;
+    };
+    if !write_enabled() {
+        eprintln!("skipping: HF_TEST_WRITE not set");
+        return;
+    }
+    let Some(client) = make_client() else {
+        eprintln!("skipping: no token");
+        return;
+    };
+
+    let owner = client.whoami().send().await.unwrap().username;
+    let name = unique_repo_name("rs-ulf-small");
+    let repo = client.dataset(&owner, &name);
+
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..25 {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), format!("content {i}")).unwrap();
+    }
+
+    let report = repo
+        .upload_large_folder()
+        .folder_path(dir.path().to_path_buf())
+        .num_workers(3)
+        .send()
+        .await
+        .expect("upload_large_folder failed");
+
+    assert_eq!(report.total_files, 25);
+    assert_eq!(report.files_committed_inline, 25);
+    assert_eq!(report.files_uploaded_lfs, 0);
+    assert!(!report.commits.is_empty());
+
+    // Resume: nothing new to commit.
+    let report2 = repo
+        .upload_large_folder()
+        .folder_path(dir.path().to_path_buf())
+        .num_workers(1)
+        .send()
+        .await
+        .expect("resume failed");
+    assert!(report2.commits.is_empty(), "resume should create no new commits");
+
+    let _ = client
+        .delete_repository()
+        .repo_id(format!("{owner}/{name}"))
+        .repo_type(RepoTypeDataset)
+        .send()
+        .await;
+}
