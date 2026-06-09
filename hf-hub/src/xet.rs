@@ -179,6 +179,34 @@ pub(crate) struct XetBatchFile {
     pub filename: String,
 }
 
+/// Outcome of a xet upload commit: per-file infos (in input order) plus the
+/// batch's aggregate byte counts (for dedup reporting).
+pub(crate) struct XetUploadOutcome {
+    pub infos: Vec<XetFileInfo>,
+    /// Logical content bytes (pre-dedup).
+    pub total_bytes: u64,
+    /// Bytes actually transferred to CAS (post-dedup).
+    pub transfer_bytes: u64,
+}
+
+/// One file uploaded through xet for the large-folder path.
+pub(crate) struct XetUploadedFile {
+    pub path_in_repo: String,
+    /// git sha256 oid (the LFS oid), produced by `Sha256Policy::Compute`.
+    pub oid: String,
+    pub size: u64,
+}
+
+pub(crate) struct XetBatchResult {
+    pub files: Vec<XetUploadedFile>,
+    /// Logical content bytes for the batch (pre-dedup).
+    pub total_bytes: u64,
+    /// Bytes actually transferred to CAS (post-dedup).
+    pub transfer_bytes: u64,
+    /// total_bytes - transfer_bytes.
+    pub dedup_bytes_saved: u64,
+}
+
 /// Shared xet upload flow for both repositories and buckets.
 ///
 /// Callers build the xet write-token URL with the appropriate variant
@@ -193,7 +221,7 @@ async fn xet_upload_inner(
     not_found_ctx: crate::error::NotFoundContext,
     owner_kind: &'static str,
     progress: &Option<Progress>,
-) -> HFResult<Vec<XetFileInfo>> {
+) -> HFResult<XetUploadOutcome> {
     tracing::info!(owner_kind, owner = owner_id, "fetching xet write token");
     let conn = fetch_xet_connection_info(hf_client, &token_url, Some(owner_id), not_found_ctx).await?;
     tracing::info!(endpoint = conn.endpoint.as_str(), "xet write token obtained, building session");
@@ -340,7 +368,11 @@ async fn xet_upload_inner(
         xet_file_infos.push(metadata.xet_info.clone());
     }
 
-    Ok(xet_file_infos)
+    Ok(XetUploadOutcome {
+        infos: xet_file_infos,
+        total_bytes: results.progress.total_bytes_completed,
+        transfer_bytes: results.progress.total_transfer_bytes_completed,
+    })
 }
 
 impl<T: RepoType> HFRepository<T> {
@@ -640,7 +672,7 @@ impl<T: RepoType> HFRepository<T> {
     ) -> HFResult<Vec<XetFileInfo>> {
         let repo_path = self.repo_path();
         let token_url = repo_xet_token_url(&self.hf_client, "write", &repo_path, self.repo_type.plural(), revision);
-        xet_upload_inner(
+        Ok(xet_upload_inner(
             &self.hf_client,
             files,
             token_url,
@@ -649,7 +681,57 @@ impl<T: RepoType> HFRepository<T> {
             "repo",
             progress,
         )
-        .await
+        .await?
+        .infos)
+    }
+
+    /// Upload a batch of files through xet for `upload_large_folder`. Returns each
+    /// file's git-sha256 oid (computed during the xet clean pass) and size, plus
+    /// the batch's dedup metrics. Reuses the shared `XetSession` so dedup spans
+    /// across batches.
+    pub(crate) async fn xet_upload_batch(
+        &self,
+        files_in: &[(String, AddSource)],
+        revision: &str,
+        progress: &Option<Progress>,
+    ) -> HFResult<XetBatchResult> {
+        let token_url =
+            repo_xet_token_url(&self.hf_client, "write", &self.repo_path(), self.repo_type.plural(), revision);
+        let outcome = xet_upload_inner(
+            &self.hf_client,
+            files_in,
+            token_url,
+            &self.repo_path(),
+            crate::error::NotFoundContext::Repo,
+            "repo",
+            progress,
+        )
+        .await?;
+
+        let mut files = Vec::with_capacity(files_in.len());
+        for ((path_in_repo, source), info) in files_in.iter().zip(&outcome.infos) {
+            let oid = info
+                .sha256()
+                .ok_or_else(|| HFError::Other(format!("xet did not return a sha256 for {path_in_repo}")))?
+                .to_string();
+            let size = info.file_size().unwrap_or_else(|| match source {
+                AddSource::Bytes(b) => b.len() as u64,
+                AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+            });
+            files.push(XetUploadedFile {
+                path_in_repo: path_in_repo.clone(),
+                oid,
+                size,
+            });
+        }
+
+        let dedup_bytes_saved = outcome.total_bytes.saturating_sub(outcome.transfer_bytes);
+        Ok(XetBatchResult {
+            files,
+            total_bytes: outcome.total_bytes,
+            transfer_bytes: outcome.transfer_bytes,
+            dedup_bytes_saved,
+        })
     }
 }
 
@@ -661,7 +743,7 @@ impl crate::buckets::HFBucket {
     ) -> HFResult<Vec<XetFileInfo>> {
         let bucket_id = self.bucket_id();
         let token_url = bucket_xet_token_url(&self.hf_client, "write", &bucket_id);
-        xet_upload_inner(
+        Ok(xet_upload_inner(
             &self.hf_client,
             files,
             token_url,
@@ -670,7 +752,8 @@ impl crate::buckets::HFBucket {
             "bucket",
             progress,
         )
-        .await
+        .await?
+        .infos)
     }
 
     pub(crate) async fn xet_download_batch(&self, files: &[XetBatchFile], progress: &Option<Progress>) -> HFResult<()> {
