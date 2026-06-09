@@ -483,6 +483,45 @@ impl<T: RepoType> HFRepository<T> {
     }
 }
 
+#[cfg(feature = "blocking")]
+#[bon]
+impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
+    /// Blocking counterpart of [`HFRepository::upload_large_folder`]. See the async
+    /// method for parameters and behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn upload_large_folder(
+        &self,
+        folder_path: PathBuf,
+        #[builder(into)] path_in_repo: Option<String>,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(into)] commit_description: Option<String>,
+        #[builder(default)] create_pr: bool,
+        private: Option<bool>,
+        allow_patterns: Option<Vec<String>>,
+        ignore_patterns: Option<Vec<String>>,
+        num_workers: Option<usize>,
+        #[builder(into)] progress: Option<crate::progress::Progress>,
+    ) -> crate::error::HFResult<UploadLargeFolderReport> {
+        self.runtime.block_on(
+            self.inner
+                .upload_large_folder()
+                .folder_path(folder_path)
+                .maybe_path_in_repo(path_in_repo)
+                .maybe_revision(revision)
+                .maybe_commit_message(commit_message)
+                .maybe_commit_description(commit_description)
+                .create_pr(create_pr)
+                .maybe_private(private)
+                .maybe_allow_patterns(allow_patterns)
+                .maybe_ignore_patterns(ignore_patterns)
+                .maybe_num_workers(num_workers)
+                .maybe_progress(progress)
+                .send(),
+        )
+    }
+}
+
 #[cfg(test)]
 mod discovery_tests {
     use super::*;

@@ -432,3 +432,26 @@ fn test_sync_branch_operations() {
 
     delete_test_repo(&client, &repo_id);
 }
+
+#[test]
+fn test_sync_upload_large_folder_smoke() {
+    let Some(client) = ci_sync_api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client);
+    let parts: Vec<&str> = repo_id.splitn(2, '/').collect();
+    let test_repo = client.model(parts[0], parts[1]);
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("small.txt"), b"blocking hello").unwrap();
+
+    let report = test_repo
+        .upload_large_folder()
+        .folder_path(dir.path().to_path_buf())
+        .send()
+        .expect("blocking upload_large_folder failed");
+    assert_eq!(report.total_files, 1);
+
+    delete_test_repo(&client, &repo_id);
+}
