@@ -27,6 +27,19 @@ use crate::error::{HFError, HFResult};
 use crate::progress::{EmitEvent, Progress, UploadEvent};
 use crate::{constants, retry};
 
+/// A file whose upload has already been resolved, ready to be referenced in a
+/// commit without further classification or transfer.
+pub(crate) enum ResolvedAdd {
+    /// Inline a (small, "regular") file's bytes as base64.
+    Inline { path_in_repo: String, source: AddSource },
+    /// Reference an already-uploaded lfs/xet object by its sha256 oid and size.
+    Lfs {
+        path_in_repo: String,
+        oid: String,
+        size: u64,
+    },
+}
+
 /// Internal options struct for [`HFRepository::create_commit`]. Built by the bon-generated
 /// `create_commit()` builder.
 struct CreateCommitParams {
@@ -487,6 +500,81 @@ impl<T: RepoType> HFRepository<T> {
             .collect();
 
         Ok(result)
+    }
+
+    /// Builds and POSTs a single commit from already-resolved operations. Emits
+    /// `Committing` before the call. Does not run preupload or xet — callers must
+    /// have resolved every add already.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn commit_resolved_operations(
+        &self,
+        adds: &[ResolvedAdd],
+        deletes: &[String],
+        commit_message: &str,
+        commit_description: Option<&str>,
+        revision: &str,
+        create_pr: bool,
+        parent_commit: Option<&str>,
+        progress: &Option<Progress>,
+    ) -> HFResult<CommitInfo> {
+        let url = format!("{}/commit/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+
+        let mut header_value = serde_json::json!({
+            "summary": commit_message,
+            "description": commit_description.unwrap_or(""),
+        });
+        if let Some(parent) = parent_commit {
+            header_value["parentCommit"] = serde_json::Value::String(parent.to_string());
+        }
+        let header_line = serde_json::json!({"key": "header", "value": header_value});
+
+        let mut entries: Vec<serde_json::Value> = Vec::with_capacity(adds.len() + deletes.len());
+        for add in adds {
+            match add {
+                ResolvedAdd::Lfs {
+                    path_in_repo,
+                    oid,
+                    size,
+                } => {
+                    entries.push(serde_json::json!({
+                        "key": "lfsFile",
+                        "value": {"path": path_in_repo, "algo": "sha256", "oid": oid, "size": size}
+                    }));
+                },
+                ResolvedAdd::Inline { path_in_repo, source } => {
+                    entries.push(Self::inline_base64_entry(path_in_repo, source).await?);
+                },
+            }
+        }
+        for path in deletes {
+            entries.push(serde_json::json!({"key": "deletedFile", "value": {"path": path}}));
+        }
+
+        let body = build_commit_ndjson(&header_line, &entries)?;
+
+        progress.emit(UploadEvent::Committing);
+
+        let mut headers = self.hf_client.auth_headers();
+        headers.insert(reqwest::header::CONTENT_TYPE, "application/x-ndjson".parse().unwrap());
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            let mut req = self
+                .hf_client
+                .http_client()
+                .post(&url)
+                .headers(headers.clone())
+                .body(body.clone());
+            if create_pr {
+                req = req.query(&[("create_pr", "1")]);
+            }
+            req.send()
+        })
+        .await?;
+        let repo_path = self.repo_path();
+        let response = self
+            .hf_client
+            .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Repo)
+            .await?;
+        Ok(response.json().await?)
     }
 
     /// Call the LFS batch endpoint to negotiate the transfer method.
