@@ -7,7 +7,27 @@ pub mod pipeline;
 use std::path::{Path, PathBuf};
 
 use crate::error::{HFError, HFResult};
+use crate::repository::CommitInfo;
 use crate::repository::files::matches_any_glob;
+
+/// Summary returned by [`HFRepository::upload_large_folder`].
+#[derive(Debug, Clone, Default)]
+pub struct UploadLargeFolderReport {
+    /// The commits created, in the order they were committed (one per batch).
+    pub commits: Vec<CommitInfo>,
+    /// Total files in the upload set after filtering.
+    pub total_files: usize,
+    /// Files uploaded via xet/lfs.
+    pub files_uploaded_lfs: usize,
+    /// Files committed inline (regular).
+    pub files_committed_inline: usize,
+    /// Files the Hub told us to ignore.
+    pub files_ignored: usize,
+    /// Logical content bytes uploaded to CAS (before dedup).
+    pub bytes_uploaded: u64,
+    /// Bytes saved by xet deduplication.
+    pub dedup_bytes_saved: u64,
+}
 
 const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
     ".git",

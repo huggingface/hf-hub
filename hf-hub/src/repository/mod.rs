@@ -43,6 +43,7 @@ use futures::Stream;
 pub use repo_type::{RepoType, RepoTypeAny, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize, Serializer};
+pub use upload_large_folder::UploadLargeFolderReport;
 use url::Url;
 
 use crate::client::HFClient;
