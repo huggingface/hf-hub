@@ -81,6 +81,7 @@ impl ProgressHandler for PrintProgressHandler {
                 UploadEvent::Complete => {
                     println!("Upload complete.");
                 },
+                UploadEvent::LargeFolderStatus { .. } => {},
             },
         }
     }

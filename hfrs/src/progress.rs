@@ -329,6 +329,7 @@ impl CliProgressHandler {
                     self.multi.remove(&spinner);
                 }
             },
+            UploadEvent::LargeFolderStatus { .. } => {},
         }
     }
 

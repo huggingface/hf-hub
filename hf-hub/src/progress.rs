@@ -257,6 +257,32 @@ pub enum UploadEvent {
     /// transfer is done; the call itself is silent until `Complete`.
     Committing,
 
+    /// Coarse, aggregate status for `upload_large_folder`. Mirrors the Python
+    /// status report as structured data. Per-file progress is intentionally
+    /// omitted (a large folder has too many files); consumers render counts and
+    /// the aggregate byte fields from `Progress`.
+    LargeFolderStatus {
+        /// Total files in the upload set.
+        files_total: usize,
+        /// Files whose content hash is known (regular hashed in-memory, or lfs
+        /// hashed during the xet clean pass).
+        hashed: usize,
+        /// Files whose upload mode (regular/lfs) has been determined.
+        upload_mode_known: usize,
+        /// Files classified as lfs.
+        lfs_total: usize,
+        /// lfs files whose data has been uploaded to CAS.
+        preuploaded: usize,
+        /// Files committed to the repo.
+        committed: usize,
+        /// Files the Hub told us to ignore.
+        ignored: usize,
+        /// Logical bytes uploaded to CAS so far.
+        bytes_uploaded: u64,
+        /// Bytes saved by xet deduplication so far.
+        dedup_bytes_saved: u64,
+    },
+
     /// Terminal event on success. Not emitted on failure — check the returned `Result`.
     Complete,
 }
@@ -356,6 +382,44 @@ impl EmitEvent for Option<Progress> {
         if let Some(h) = self {
             h.on_progress(&event.into());
         }
+    }
+}
+
+#[cfg(test)]
+mod large_folder_status_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct Capture(Mutex<Vec<String>>);
+    impl ProgressHandler for Capture {
+        fn on_progress(&self, event: &ProgressEvent) {
+            if let ProgressEvent::Upload(UploadEvent::LargeFolderStatus {
+                committed, files_total, ..
+            }) = event
+            {
+                self.0.lock().unwrap().push(format!("{committed}/{files_total}"));
+            }
+        }
+    }
+
+    #[test]
+    fn large_folder_status_emits() {
+        let cap = Arc::new(Capture::default());
+        let progress = Progress::from(cap.clone());
+        progress.emit(UploadEvent::LargeFolderStatus {
+            files_total: 10,
+            hashed: 4,
+            upload_mode_known: 6,
+            lfs_total: 3,
+            preuploaded: 1,
+            committed: 2,
+            ignored: 0,
+            bytes_uploaded: 1234,
+            dedup_bytes_saved: 56,
+        });
+        assert_eq!(cap.0.lock().unwrap().as_slice(), &["2/10".to_string()]);
     }
 }
 
