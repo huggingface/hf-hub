@@ -64,6 +64,10 @@ name = "diff"
 path = "diff.rs"
 
 [[example]]
+name = "upload_large_folder"
+path = "upload_large_folder.rs"
+
+[[example]]
 name = "blocking_read"
 path = "blocking_read.rs"
 required-features = ["blocking"]
