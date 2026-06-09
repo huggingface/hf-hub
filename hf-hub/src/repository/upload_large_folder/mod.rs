@@ -16,7 +16,7 @@ use crate::repository::upload::ResolvedAdd;
 use crate::repository::upload_large_folder::local_folder::{
     LocalUploadFileMetadata, LocalUploadFilePaths, get_local_upload_paths, read_upload_metadata,
 };
-use crate::repository::upload_large_folder::pipeline::{CommitChunkSizer, WorkStage, seed_stage};
+use crate::repository::upload_large_folder::pipeline::{MAX_COMMIT_FILES, WorkStage, seed_stage};
 use crate::repository::{CommitInfo, HFRepository, RepoType};
 
 /// Summary returned by [`HFRepository::upload_large_folder`].
@@ -255,14 +255,12 @@ impl<T: RepoType> HFRepository<T> {
 
         self.classify_items(&mut items, &revision).await?;
 
-        let mut sizer = CommitChunkSizer::new();
         let mut bytes_uploaded = 0u64;
         let mut dedup_bytes_saved = 0u64;
         self.upload_lfs_stage(
             &mut items,
             &revision,
             &args.progress,
-            &mut sizer,
             &mut bytes_uploaded,
             &mut dedup_bytes_saved,
         )
@@ -276,7 +274,6 @@ impl<T: RepoType> HFRepository<T> {
                 &revision,
                 args.create_pr,
                 &args.progress,
-                &mut sizer,
             )
             .await?;
 
@@ -337,26 +334,21 @@ impl<T: RepoType> HFRepository<T> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn upload_lfs_stage(
         &self,
         items: &mut [Item],
         revision: &str,
         progress: &Option<Progress>,
-        sizer: &mut CommitChunkSizer,
         bytes_uploaded: &mut u64,
         dedup_bytes_saved: &mut u64,
     ) -> crate::error::HFResult<()> {
         loop {
-            // lfs upload batches reuse the commit sizer's current target (initially 50);
-            // the sizer is only grown/shrunk by commit feedback, so before any commit this
-            // is effectively a fixed 50-file (capped at 256) preupload batch.
             let batch: Vec<usize> = items
                 .iter()
                 .enumerate()
                 .filter(|(_, i)| seed_stage(&i.meta) == WorkStage::PreuploadLfs)
                 .map(|(idx, _)| idx)
-                .take(sizer.target().min(256))
+                .take(256)
                 .collect();
             if batch.is_empty() {
                 break;
@@ -394,7 +386,6 @@ impl<T: RepoType> HFRepository<T> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn commit_stage(
         &self,
         items: &mut [Item],
@@ -403,7 +394,6 @@ impl<T: RepoType> HFRepository<T> {
         revision: &str,
         create_pr: bool,
         progress: &Option<Progress>,
-        sizer: &mut CommitChunkSizer,
     ) -> crate::error::HFResult<Vec<crate::repository::CommitInfo>> {
         let mut commits = Vec::new();
         loop {
@@ -412,7 +402,7 @@ impl<T: RepoType> HFRepository<T> {
                 .enumerate()
                 .filter(|(_, i)| seed_stage(&i.meta) == WorkStage::Commit)
                 .map(|(idx, _)| idx)
-                .take(sizer.target())
+                .take(MAX_COMMIT_FILES)
                 .collect();
             if batch.is_empty() {
                 break;
@@ -438,7 +428,6 @@ impl<T: RepoType> HFRepository<T> {
                 }
             }
 
-            let start = std::time::Instant::now();
             let info = self
                 .commit_resolved_operations(
                     &adds,
@@ -451,7 +440,6 @@ impl<T: RepoType> HFRepository<T> {
                     progress,
                 )
                 .await;
-            let duration = start.elapsed().as_secs_f64();
 
             match info {
                 Ok(info) => {
@@ -459,11 +447,9 @@ impl<T: RepoType> HFRepository<T> {
                         items[idx].meta.is_committed = true;
                         items[idx].meta.save(&items[idx].paths)?;
                     }
-                    sizer.update(true, batch.len(), duration);
                     commits.push(info);
                 },
                 Err(e) => {
-                    sizer.update(false, batch.len(), duration);
                     return Err(e);
                 },
             }

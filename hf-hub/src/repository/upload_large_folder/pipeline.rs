@@ -1,33 +1,61 @@
-//! Pipeline primitives for `upload_large_folder`: adaptive commit batching,
-//! per-file stage seeding, shared-session xet upload batches, and the
-//! single-flight committer.
+//! Pipeline primitives for `upload_large_folder`: tuning config, the
+//! oldest-item-anchored batch buffer, per-file commit-ready messages, shared
+//! progress counters, and per-file stage seeding.
 
-use crate::repository::upload_large_folder::local_folder::LocalUploadFileMetadata;
+use std::collections::VecDeque;
+use std::time::Duration;
 
-const COMMIT_SIZE_SCALE: [usize; 10] = [20, 50, 75, 100, 125, 200, 250, 400, 600, 1000];
+use tokio::time::Instant;
 
-/// Adaptive commit-batch sizer mirroring Python's `COMMIT_SIZE_SCALE` logic.
-/// Starts at index 1 (= 50). Grows one step on a fast full commit, shrinks one
-/// step on failure, clamped to the scale bounds.
-pub(crate) struct CommitChunkSizer {
-    idx: usize,
+use crate::progress::{EmitEvent, Progress, UploadEvent};
+use crate::repository::upload::ResolvedAdd;
+use crate::repository::upload_large_folder::local_folder::{LocalUploadFileMetadata, LocalUploadFilePaths};
+
+/// Max files queued into a single xet `UploadCommit` before it is dispatched.
+/// Larger batches improve client-side dedup and reduce finalize round-trips.
+pub(crate) const XET_BATCH_SIZE: usize = 1024;
+/// Max files in a single Hub commit (validated top of Python's old scale).
+pub(crate) const MAX_COMMIT_FILES: usize = 1000;
+/// How long the oldest queued lfs file may wait before a partial xet batch is
+/// dispatched anyway.
+pub(crate) const MAX_XET_BATCH_WAIT: Duration = Duration::from_secs(300);
+/// How long the oldest queued commit-ready file may wait before a partial commit.
+pub(crate) const MAX_COMMIT_WAIT: Duration = Duration::from_secs(300);
+
+/// Tuning for one `upload_large_folder` run. Production builds it from
+/// `num_workers`; tests construct it directly with tiny timeouts.
+#[derive(Debug, Clone)]
+pub(crate) struct PipelineConfig {
+    pub num_workers: usize,
+    pub xet_batch_size: usize,
+    pub max_commit_files: usize,
+    pub max_xet_batch_wait: Duration,
+    pub max_commit_wait: Duration,
 }
 
-impl CommitChunkSizer {
-    pub(crate) fn new() -> Self {
-        Self { idx: 1 }
-    }
-
-    pub(crate) fn target(&self) -> usize {
-        COMMIT_SIZE_SCALE[self.idx]
-    }
-
-    pub(crate) fn update(&mut self, success: bool, nb_items: usize, duration_secs: f64) {
-        if !success {
-            self.idx = self.idx.saturating_sub(1);
-        } else if nb_items >= COMMIT_SIZE_SCALE[self.idx] && duration_secs < 40.0 {
-            self.idx = (self.idx + 1).min(COMMIT_SIZE_SCALE.len() - 1);
+impl PipelineConfig {
+    pub(crate) fn from_num_workers(num_workers: Option<usize>) -> Self {
+        Self {
+            num_workers: num_workers.map(|n| n.max(1)).unwrap_or_else(default_num_workers),
+            xet_batch_size: XET_BATCH_SIZE,
+            max_commit_files: MAX_COMMIT_FILES,
+            max_xet_batch_wait: MAX_XET_BATCH_WAIT,
+            max_commit_wait: MAX_COMMIT_WAIT,
         }
+    }
+}
+
+/// Default concurrency budget: half the available parallelism, at least 1.
+pub(crate) fn default_num_workers() -> usize {
+    (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) / 2).max(1)
+}
+
+/// Await `deadline` if present, else never resolve. Lets a `select!` arm be a
+/// no-op when no deadline is active (empty buffer).
+pub(crate) async fn sleep_or_pending(deadline: Option<Instant>) {
+    match deadline {
+        Some(d) => tokio::time::sleep_until(d).await,
+        None => std::future::pending::<()>().await,
     }
 }
 
@@ -96,34 +124,21 @@ mod tests {
     }
 
     #[test]
-    fn chunk_sizer_grows_shrinks_clamps() {
-        let mut s = CommitChunkSizer::new();
-        assert_eq!(s.target(), 50); // index 1
-
-        // Fast, full commit -> grow.
-        s.update(true, 50, 10.0);
-        assert_eq!(s.target(), 75);
-
-        // Slow commit -> no growth.
-        s.update(true, 75, 45.0);
-        assert_eq!(s.target(), 75);
-
-        // Failure -> shrink.
-        s.update(false, 0, 1.0);
-        assert_eq!(s.target(), 50);
-
-        // Shrink never underflows past index 0.
-        let mut low = CommitChunkSizer::new();
-        low.update(false, 0, 1.0); // -> index 0 (20)
-        low.update(false, 0, 1.0); // stays at 0
-        assert_eq!(low.target(), 20);
-
-        // Grow clamps at the top (1000).
-        let mut high = CommitChunkSizer::new();
-        for _ in 0..50 {
-            let t = high.target();
-            high.update(true, t, 1.0);
-        }
-        assert_eq!(high.target(), 1000);
+    fn default_num_workers_is_at_least_one() {
+        assert!(default_num_workers() >= 1);
     }
+
+    #[test]
+    fn pipeline_config_defaults() {
+        let cfg = PipelineConfig::from_num_workers(Some(4));
+        assert_eq!(cfg.num_workers, 4);
+        assert_eq!(cfg.xet_batch_size, 1024);
+        assert_eq!(cfg.max_commit_files, 1000);
+        assert_eq!(cfg.max_xet_batch_wait, std::time::Duration::from_secs(300));
+        assert_eq!(cfg.max_commit_wait, std::time::Duration::from_secs(300));
+
+        let auto = PipelineConfig::from_num_workers(None);
+        assert!(auto.num_workers >= 1);
+    }
+
 }
