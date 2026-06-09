@@ -26,15 +26,17 @@ pub struct UploadLargeFolderReport {
     pub commits: Vec<CommitInfo>,
     /// Total files in the upload set after filtering.
     pub total_files: usize,
-    /// Files uploaded via xet/lfs.
+    /// Files classified as lfs (uploaded via xet). Counts lfs-mode files in the set, including ones skipped on a
+    /// resumed run because they were already uploaded.
     pub files_uploaded_lfs: usize,
     /// Files committed inline (regular).
     pub files_committed_inline: usize,
     /// Files the Hub told us to ignore.
     pub files_ignored: usize,
-    /// Bytes actually transferred to CAS (post-dedup).
+    /// Bytes actually transferred to CAS (post-dedup) during THIS invocation. A resumed run skips already-uploaded
+    /// files, so this counts only the current run's transfers.
     pub bytes_uploaded: u64,
-    /// Bytes saved by xet deduplication.
+    /// Bytes saved by xet deduplication during this invocation.
     pub dedup_bytes_saved: u64,
 }
 
@@ -341,6 +343,9 @@ impl<T: RepoType> HFRepository<T> {
         dedup_bytes_saved: &mut u64,
     ) -> crate::error::HFResult<()> {
         loop {
+            // lfs upload batches reuse the commit sizer's current target (initially 50);
+            // the sizer is only grown/shrunk by commit feedback, so before any commit this
+            // is effectively a fixed 50-file (capped at 256) preupload batch.
             let batch: Vec<usize> = items
                 .iter()
                 .enumerate()
