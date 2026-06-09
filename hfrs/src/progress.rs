@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use hf_hub::progress::{DownloadEvent, FileProgress, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
 use indicatif::{HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
@@ -8,6 +9,63 @@ use indicatif::{HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressS
 /// Renders indicatif progress bars in the terminal for download and upload operations.
 const MAX_VISIBLE_FILE_BARS: usize = 10;
 const MAX_VISIBLE_UPLOAD_BARS: usize = 10;
+
+/// Reprint the upload-large-folder status report at most this often. Matches the
+/// Python `huggingface_hub` cadence.
+const REPORT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Plain-data snapshot of the `LargeFolderStatus` fields the report renders.
+/// Decouples the formatter from the event enum for straightforward unit testing.
+struct LargeFolderStatusView {
+    files_total: usize,
+    upload_mode_known: usize,
+    committed: usize,
+    ignored: usize,
+    lfs_total: usize,
+    preuploaded: usize,
+    bytes_uploaded: u64,
+    dedup_bytes_saved: u64,
+}
+
+/// True if a report should print now: the first print (`last` is `None`) or once
+/// at least `interval` has elapsed since the previous print.
+fn should_print(last: Option<Instant>, now: Instant, interval: Duration) -> bool {
+    match last {
+        None => true,
+        Some(prev) => now.duration_since(prev) >= interval,
+    }
+}
+
+/// Format an elapsed duration as `+mm:ss`, or `+h:mm:ss` once past an hour.
+fn format_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    if h > 0 {
+        format!("+{h}:{m:02}:{s:02}")
+    } else {
+        format!("+{m:02}:{s:02}")
+    }
+}
+
+/// Render the three-line status block for one report.
+fn format_report_block(elapsed: Duration, status: &LargeFolderStatusView, done: bool) -> String {
+    let header = if done {
+        format!("[{}] upload-large-folder · done", format_elapsed(elapsed))
+    } else {
+        format!("[{}] upload-large-folder", format_elapsed(elapsed))
+    };
+    format!(
+        "{header}\n  files:  {} total · {} classified · {} committed · {} ignored\n  lfs:    {} files · {} uploaded · {} sent · {} deduped",
+        status.files_total,
+        status.upload_mode_known,
+        status.committed,
+        status.ignored,
+        status.lfs_total,
+        status.preuploaded,
+        HumanBytes(status.bytes_uploaded),
+        HumanBytes(status.dedup_bytes_saved),
+    )
+}
 
 pub struct CliProgressHandler {
     multi: MultiProgress,
@@ -419,6 +477,84 @@ pub fn progress_disabled_by_env() -> bool {
     std::env::var("HF_HUB_DISABLE_PROGRESS_BARS").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
+struct ReportState {
+    start: Option<Instant>,
+    last_print: Option<Instant>,
+    latest: Option<LargeFolderStatusView>,
+}
+
+/// Renders `upload_large_folder`'s coarse `LargeFolderStatus` events as a
+/// periodically reprinted text block (no progress bars), throttled to once per
+/// [`REPORT_INTERVAL`]. The latest snapshot always prints on `Complete` so the
+/// final numbers are never lost to throttling.
+pub struct LargeFolderProgressHandler {
+    multi: MultiProgress,
+    state: Mutex<ReportState>,
+}
+
+impl LargeFolderProgressHandler {
+    pub fn new(multi: MultiProgress) -> Self {
+        Self {
+            multi,
+            state: Mutex::new(ReportState {
+                start: None,
+                last_print: None,
+                latest: None,
+            }),
+        }
+    }
+
+    fn print_block(&self, elapsed: Duration, status: &LargeFolderStatusView, done: bool) {
+        let _ = self.multi.println(format_report_block(elapsed, status, done));
+    }
+}
+
+impl ProgressHandler for LargeFolderProgressHandler {
+    fn on_progress(&self, event: &ProgressEvent) {
+        let ProgressEvent::Upload(event) = event else {
+            return;
+        };
+        let now = Instant::now();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let start = *state.start.get_or_insert(now);
+        match event {
+            UploadEvent::LargeFolderStatus {
+                files_total,
+                upload_mode_known,
+                lfs_total,
+                preuploaded,
+                committed,
+                ignored,
+                bytes_uploaded,
+                dedup_bytes_saved,
+                ..
+            } => {
+                let view = LargeFolderStatusView {
+                    files_total: *files_total,
+                    upload_mode_known: *upload_mode_known,
+                    committed: *committed,
+                    ignored: *ignored,
+                    lfs_total: *lfs_total,
+                    preuploaded: *preuploaded,
+                    bytes_uploaded: *bytes_uploaded,
+                    dedup_bytes_saved: *dedup_bytes_saved,
+                };
+                if should_print(state.last_print, now, REPORT_INTERVAL) {
+                    self.print_block(now.duration_since(start), &view, false);
+                    state.last_print = Some(now);
+                }
+                state.latest = Some(view);
+            },
+            UploadEvent::Complete => {
+                if let Some(view) = state.latest.take() {
+                    self.print_block(now.duration_since(start), &view, true);
+                }
+            },
+            _ => {},
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +610,82 @@ mod tests {
     fn format_eta_caps_absurd_values() {
         let s = format_eta(1_000_000_000_000_000, Some(1.0));
         assert_eq!(s, "--");
+    }
+
+    #[test]
+    fn should_print_first_time_is_true() {
+        let now = Instant::now();
+        assert!(should_print(None, now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn should_print_within_interval_is_false() {
+        let now = Instant::now();
+        let last = now - Duration::from_secs(10);
+        assert!(!should_print(Some(last), now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn should_print_after_interval_is_true() {
+        let now = Instant::now();
+        let last = now - Duration::from_secs(61);
+        assert!(should_print(Some(last), now, Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn format_elapsed_under_a_minute() {
+        assert_eq!(format_elapsed(Duration::from_secs(0)), "+00:00");
+        assert_eq!(format_elapsed(Duration::from_secs(7)), "+00:07");
+    }
+
+    #[test]
+    fn format_elapsed_minutes_seconds() {
+        assert_eq!(format_elapsed(Duration::from_secs(135)), "+02:15");
+    }
+
+    #[test]
+    fn format_elapsed_past_an_hour() {
+        assert_eq!(format_elapsed(Duration::from_secs(3735)), "+1:02:15");
+    }
+
+    #[test]
+    fn format_report_block_renders_counts_and_bytes() {
+        let status = LargeFolderStatusView {
+            files_total: 1000,
+            upload_mode_known: 840,
+            committed: 83,
+            ignored: 3,
+            lfs_total: 300,
+            preuploaded: 120,
+            bytes_uploaded: 2_100_000_000,
+            dedup_bytes_saved: 5_400_000_000,
+        };
+        let block = format_report_block(Duration::from_secs(135), &status, false);
+        assert!(block.contains("[+02:15] upload-large-folder"));
+        assert!(!block.contains("done"));
+        assert!(block.contains("1000 total"));
+        assert!(block.contains("840 classified"));
+        assert!(block.contains("83 committed"));
+        assert!(block.contains("3 ignored"));
+        assert!(block.contains("300 files"));
+        assert!(block.contains("120 uploaded"));
+        assert!(block.contains("GB") || block.contains("GiB"), "expected byte unit, got: {block}");
+    }
+
+    #[test]
+    fn format_report_block_done_marks_header() {
+        let status = LargeFolderStatusView {
+            files_total: 1,
+            upload_mode_known: 1,
+            committed: 1,
+            ignored: 0,
+            lfs_total: 0,
+            preuploaded: 0,
+            bytes_uploaded: 0,
+            dedup_bytes_saved: 0,
+        };
+        let block = format_report_block(Duration::from_secs(1), &status, true);
+        assert!(block.contains("upload-large-folder · done"), "done block: {block}");
     }
 }
 
