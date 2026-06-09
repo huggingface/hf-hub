@@ -3,6 +3,7 @@
 //! progress counters, and per-file stage seeding.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tokio::time::Instant;
@@ -116,6 +117,47 @@ pub(crate) fn seed_stage(meta: &LocalUploadFileMetadata) -> WorkStage {
     } else {
         WorkStage::Commit
     }
+}
+
+/// Live progress counters shared between the producer and committer. Display
+/// only — the final report is computed from the post-join `items` scan plus the
+/// per-invocation byte counters here.
+#[derive(Default)]
+pub(crate) struct StatusCounters {
+    pub files_total: AtomicUsize,
+    pub hashed: AtomicUsize,
+    pub upload_mode_known: AtomicUsize,
+    pub lfs_total: AtomicUsize,
+    pub preuploaded: AtomicUsize,
+    pub committed: AtomicUsize,
+    pub ignored: AtomicUsize,
+    pub bytes_uploaded: AtomicU64,
+    pub dedup_bytes_saved: AtomicU64,
+}
+
+/// Emit a `LargeFolderStatus` snapshot from the current counter values.
+pub(crate) fn emit_status(counters: &StatusCounters, progress: &Option<Progress>) {
+    progress.emit(UploadEvent::LargeFolderStatus {
+        files_total: counters.files_total.load(Ordering::Relaxed),
+        hashed: counters.hashed.load(Ordering::Relaxed),
+        upload_mode_known: counters.upload_mode_known.load(Ordering::Relaxed),
+        lfs_total: counters.lfs_total.load(Ordering::Relaxed),
+        preuploaded: counters.preuploaded.load(Ordering::Relaxed),
+        committed: counters.committed.load(Ordering::Relaxed),
+        ignored: counters.ignored.load(Ordering::Relaxed),
+        bytes_uploaded: counters.bytes_uploaded.load(Ordering::Relaxed),
+        dedup_bytes_saved: counters.dedup_bytes_saved.load(Ordering::Relaxed),
+    });
+}
+
+/// One file, fully resolved and ready to be referenced in a Hub commit. Carries
+/// owned cache handles so the committer can persist `is_committed` immediately
+/// after a successful commit POST, without sharing the producer's `items`.
+pub(crate) struct CommitReady {
+    pub idx: usize,
+    pub resolved: ResolvedAdd,
+    pub paths: LocalUploadFilePaths,
+    pub meta: LocalUploadFileMetadata,
 }
 
 #[cfg(test)]
