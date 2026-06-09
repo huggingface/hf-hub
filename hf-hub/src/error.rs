@@ -58,13 +58,29 @@ pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     raw.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
-fn format_http_suffix(ctx: &HttpErrorContext) -> String {
-    match (&ctx.request_id, &ctx.error_code) {
-        (Some(rid), Some(code)) => format!(" (request_id={rid}, error_code={code})"),
-        (Some(rid), None) => format!(" (request_id={rid})"),
-        (None, Some(code)) => format!(" (error_code={code})"),
-        (None, None) => String::new(),
+/// Render the human-readable tail shared by every HTTP-derived [`HFError`] variant.
+///
+/// Leads with the server's explanation (`server_message`) when present, then appends a
+/// parenthetical of `url`, `request_id`, and `error_code`. Each piece is omitted when absent,
+/// so a context carrying only a URL renders as ` (url=…)` with no dangling separators.
+fn format_http_detail(ctx: &HttpErrorContext) -> String {
+    let mut detail = String::new();
+
+    if let Some(message) = ctx.server_message.as_deref().filter(|m| !m.is_empty()) {
+        detail.push_str(": ");
+        detail.push_str(message);
     }
+
+    let mut fields = vec![format!("url={}", ctx.url)];
+    if let Some(rid) = &ctx.request_id {
+        fields.push(format!("request_id={rid}"));
+    }
+    if let Some(code) = &ctx.error_code {
+        fields.push(format!("error_code={code}"));
+    }
+    detail.push_str(&format!(" ({})", fields.join(", ")));
+
+    detail
 }
 
 /// Error type returned by public `hf-hub` APIs.
@@ -81,14 +97,14 @@ fn format_http_suffix(ctx: &HttpErrorContext) -> String {
 pub enum HFError {
     /// Non-success HTTP response that was not mapped to a more specific
     /// variant.
-    #[error("HTTP error: {} {}{}", .context.status, .context.url, format_http_suffix(.context))]
+    #[error("HTTP error: {}{}", .context.status, format_http_detail(.context))]
     Http {
         /// Response metadata captured from the server.
         context: Box<HttpErrorContext>,
     },
 
     /// Authentication is required or the configured token was rejected.
-    #[error("Authentication required: {}{}", .context.url, format_http_suffix(.context))]
+    #[error("Authentication required{}", format_http_detail(.context))]
     AuthRequired {
         /// Response metadata captured from the server.
         context: Box<HttpErrorContext>,
@@ -136,7 +152,7 @@ pub enum HFError {
 
     /// Credentials are valid, but the caller is not allowed to perform the
     /// operation.
-    #[error("Forbidden: {}{}", .context.url, format_http_suffix(.context))]
+    #[error("Forbidden{}", format_http_detail(.context))]
     Forbidden {
         /// Response metadata captured from the server.
         context: Box<HttpErrorContext>,
@@ -144,14 +160,14 @@ pub enum HFError {
 
     /// Server reported a conflict, such as an already-existing resource or a
     /// branch head mismatch.
-    #[error("Conflict: {}{}", .context.body, format_http_suffix(.context))]
+    #[error("Conflict{}", format_http_detail(.context))]
     Conflict {
         /// Response metadata captured from the server.
         context: Box<HttpErrorContext>,
     },
 
     /// Request was rate limited by the Hub.
-    #[error("Rate limited: {}{}", .context.url, format_http_suffix(.context))]
+    #[error("Rate limited{}", format_http_detail(.context))]
     RateLimited {
         /// Parsed `Retry-After` delay, when the server returned one.
         retry_after: Option<Duration>,
@@ -435,6 +451,52 @@ mod tests {
         c.request_id = Some("req-xyz".to_string());
         let msg = HFError::Http { context: Box::new(c) }.to_string();
         assert!(msg.contains("req-xyz"), "display missing request_id: {msg}");
+    }
+
+    #[test]
+    fn display_includes_server_message_when_present() {
+        let mut c = ctx(400);
+        c.server_message = Some("You can't create a commit with more than 1000 files".to_string());
+        c.request_id = Some("req-xyz".to_string());
+        let msg = HFError::Http { context: Box::new(c) }.to_string();
+        assert!(
+            msg.contains("You can't create a commit with more than 1000 files"),
+            "display missing server_message: {msg}"
+        );
+        assert!(msg.contains("req-xyz"), "display missing request_id: {msg}");
+    }
+
+    #[test]
+    fn display_surfaces_server_message_across_variants() {
+        let make = |status| {
+            let mut c = ctx(status);
+            c.server_message = Some("server explanation".to_string());
+            Box::new(c)
+        };
+        for err in [
+            HFError::Http { context: make(400) },
+            HFError::AuthRequired { context: make(401) },
+            HFError::Forbidden { context: make(403) },
+            HFError::Conflict { context: make(409) },
+            HFError::RateLimited {
+                retry_after: None,
+                context: make(429),
+            },
+        ] {
+            let msg = err.to_string();
+            assert!(msg.contains("server explanation"), "variant dropped server_message: {msg}");
+        }
+    }
+
+    #[test]
+    fn display_omits_message_section_when_absent() {
+        // server_message is None on the bare ctx(); the rendered string should carry the URL in
+        // the parenthetical without a dangling ": " where the message would go.
+        let msg = HFError::Http {
+            context: Box::new(ctx(500)),
+        }
+        .to_string();
+        assert_eq!(msg, "HTTP error: 500 Internal Server Error (url=https://example)");
     }
 
     #[tokio::test]
