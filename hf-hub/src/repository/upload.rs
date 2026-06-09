@@ -115,8 +115,6 @@ impl<T: RepoType> HFRepository<T> {
         let lfs_uploaded: HashMap<String, (String, u64)> =
             self.preupload_and_upload_lfs_files(&params, revision).await?;
 
-        let mut ndjson_lines: Vec<Vec<u8>> = Vec::new();
-
         let mut header_value = serde_json::json!({
             "summary": params.commit_message,
             "description": params.commit_description.as_deref().unwrap_or(""),
@@ -125,10 +123,10 @@ impl<T: RepoType> HFRepository<T> {
             header_value["parentCommit"] = serde_json::Value::String(parent.clone());
         }
         let header_line = serde_json::json!({"key": "header", "value": header_value});
-        ndjson_lines.push(serde_json::to_vec(&header_line)?);
 
+        let mut entries: Vec<serde_json::Value> = Vec::new();
         for op in &params.operations {
-            let line = match op {
+            let entry = match op {
                 CommitOperation::Add { path_in_repo, source } => {
                     if let Some((oid, size)) = lfs_uploaded.get(path_in_repo) {
                         tracing::info!(
@@ -158,16 +156,10 @@ impl<T: RepoType> HFRepository<T> {
                     })
                 },
             };
-            ndjson_lines.push(serde_json::to_vec(&line)?);
+            entries.push(entry);
         }
 
-        let body: Vec<u8> = ndjson_lines
-            .into_iter()
-            .flat_map(|mut line| {
-                line.push(b'\n');
-                line
-            })
-            .collect();
+        let body = build_commit_ndjson(&header_line, &entries)?;
 
         params.progress.emit(UploadEvent::Committing);
 
@@ -623,6 +615,19 @@ fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
     }
 }
 
+/// Serializes a commit header value plus per-operation entry values into the
+/// newline-delimited JSON body the Hub `/commit` endpoint expects.
+fn build_commit_ndjson(header: &serde_json::Value, entries: &[serde_json::Value]) -> HFResult<Vec<u8>> {
+    let mut body: Vec<u8> = Vec::new();
+    body.extend(serde_json::to_vec(header)?);
+    body.push(b'\n');
+    for entry in entries {
+        body.extend(serde_json::to_vec(entry)?);
+        body.push(b'\n');
+    }
+    Ok(body)
+}
+
 /// Recursively collect files from a directory into CommitOperation::Add entries.
 /// Respects allow_patterns and ignore_patterns (glob-style).
 fn collect_files_recursive(
@@ -1065,5 +1070,27 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .create_pr(create_pr)
                 .send(),
         )
+    }
+}
+
+#[cfg(test)]
+mod ndjson_tests {
+    use super::*;
+
+    #[test]
+    fn build_commit_ndjson_orders_header_then_entries() {
+        let header = serde_json::json!({"key": "header", "value": {"summary": "msg"}});
+        let entries = vec![
+            serde_json::json!({"key": "lfsFile", "value": {"path": "a", "algo": "sha256", "oid": "x", "size": 1}}),
+            serde_json::json!({"key": "deletedFile", "value": {"path": "b"}}),
+        ];
+        let body = build_commit_ndjson(&header, &entries).unwrap();
+        let text = String::from_utf8(body).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("\"header\""));
+        assert!(lines[1].contains("\"lfsFile\""));
+        assert!(lines[2].contains("\"deletedFile\""));
+        assert!(text.ends_with('\n'));
     }
 }
