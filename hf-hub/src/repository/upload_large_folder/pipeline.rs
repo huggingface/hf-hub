@@ -59,6 +59,43 @@ pub(crate) async fn sleep_or_pending(deadline: Option<Instant>) {
     }
 }
 
+/// FIFO buffer that timestamps each item at push and exposes a flush deadline
+/// anchored to the OLDEST buffered item. The timer therefore does not run while
+/// the buffer is empty, and advances to the next-oldest item after a partial
+/// drain — so an item arriving after an idle gap gets its full wait window.
+pub(crate) struct TimedBatchBuffer<T> {
+    items: VecDeque<(Instant, T)>,
+}
+
+impl<T> TimedBatchBuffer<T> {
+    pub(crate) fn new() -> Self {
+        Self { items: VecDeque::new() }
+    }
+
+    pub(crate) fn push(&mut self, item: T) {
+        self.items.push_back((Instant::now(), item));
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Flush deadline = oldest item's enqueue instant + `max_wait`; `None` when empty.
+    pub(crate) fn deadline(&self, max_wait: Duration) -> Option<Instant> {
+        self.items.front().map(|(t, _)| *t + max_wait)
+    }
+
+    /// Drain up to `max` oldest items (fewer if the buffer is smaller).
+    pub(crate) fn take(&mut self, max: usize) -> Vec<T> {
+        let n = max.min(self.items.len());
+        self.items.drain(..n).map(|(_, item)| item).collect()
+    }
+}
+
 /// The next stage of work for a file, derived from its persisted metadata.
 /// Tolerant of both Rust- and Python-written caches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +158,45 @@ mod tests {
         assert!(matches!(seed_stage(&meta_with(Some("regular"), None, false, true, None)), WorkStage::Done));
         // should_ignore -> done.
         assert!(matches!(seed_stage(&meta_with(Some("regular"), None, false, false, Some(true))), WorkStage::Done));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timed_buffer_deadline_anchored_to_oldest() {
+        let wait = std::time::Duration::from_secs(300);
+        let mut buf: TimedBatchBuffer<u32> = TimedBatchBuffer::new();
+        assert!(buf.is_empty());
+        assert!(buf.deadline(wait).is_none());
+
+        let t0 = tokio::time::Instant::now();
+        buf.push(1);
+        assert_eq!(buf.len(), 1);
+        assert_eq!(buf.deadline(wait), Some(t0 + wait));
+
+        tokio::time::advance(std::time::Duration::from_secs(100)).await;
+        buf.push(2); // enqueued 100s later
+        // Still anchored to item 1.
+        assert_eq!(buf.deadline(wait), Some(t0 + wait));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timed_buffer_take_advances_anchor() {
+        let wait = std::time::Duration::from_secs(300);
+        let mut buf: TimedBatchBuffer<u32> = TimedBatchBuffer::new();
+        let t0 = tokio::time::Instant::now();
+        buf.push(10);
+        tokio::time::advance(std::time::Duration::from_secs(100)).await;
+        buf.push(20);
+
+        let drained = buf.take(1);
+        assert_eq!(drained, vec![10]);
+        assert_eq!(buf.len(), 1);
+        // Anchor advanced to item 20 (enqueued at t0 + 100s).
+        assert_eq!(buf.deadline(wait), Some(t0 + std::time::Duration::from_secs(100) + wait));
+
+        let rest = buf.take(50);
+        assert_eq!(rest, vec![20]);
+        assert!(buf.is_empty());
+        assert!(buf.deadline(wait).is_none());
     }
 
     #[test]
