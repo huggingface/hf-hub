@@ -29,7 +29,7 @@ base64 = "0.22"
 pathdiff = "0.2"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
-hf-xet = { git = "https://github.com/huggingface/xet-core", branch = "feat/wasm-xet-pkg-compile" }
+hf-xet = { git = "https://github.com/huggingface/xet-core", rev = "008e8eb" }
 sha2 = "0.11"
 
 [features]
