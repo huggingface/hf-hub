@@ -15,20 +15,12 @@ use hf_hub::buckets::BucketTreeEntry;
 use hf_hub::progress::{DownloadEvent, ProgressEvent, ProgressHandler};
 use hf_hub::repository::{AddSource, SourceByteStream, StreamFactory, StreamSource};
 use hf_hub::{HFClient, RepoTypeModel};
-use wasm_bindgen_test::wasm_bindgen_test;
-#[cfg(feature = "browser-tests")]
-use wasm_bindgen_test::wasm_bindgen_test_configure;
+use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 
-// `wasm-bindgen-test`'s default runner is Node.js; compiling in
-// `wasm_bindgen_test_configure!(run_in_browser)` switches it to the headless
-// browser runner. We want both, so the directive is feature-gated: the
-// `browser-tests` feature flips it on (the `wasm-test` CI job + local
-// `RUN_IN_BROWSER=1 ./run_tests.sh`), absent it the tests run under Node
-// (default `./run_tests.sh` and the `wasm-test-node` CI job). `hf-xet`'s
-// threaded wasm needs `SharedArrayBuffer`, which Node 20+ provides natively
-// and the `wasm-bindgen-test-runner` browser harness exposes via the
-// COOP/COEP headers it sets automatically.
-#[cfg(feature = "browser-tests")]
+// These tests run in a headless browser. `hf-xet`'s threaded wasm needs
+// `SharedArrayBuffer` and Web Workers in a `crossOriginIsolated` context,
+// which `wasm-bindgen-test-runner` (>= 0.2.121) provides by serving the
+// required COOP/COEP headers automatically.
 wasm_bindgen_test_configure!(run_in_browser);
 
 const ENDPOINT: &str = "https://huggingface.co";

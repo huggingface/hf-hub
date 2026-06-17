@@ -19,18 +19,3 @@ futures-util = "0.3"
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
-
-[features]
-# `wasm-bindgen-test`'s default test runner is Node.js; opting into the browser
-# runner requires the `wasm_bindgen_test_configure!(run_in_browser)` directive
-# in the test crate, which once compiled in cannot be turned off at runtime.
-#
-# Tests want both runners (browser is what `wasm-test` CI runs, Node is the
-# fast-feedback local + `wasm-test-node` CI path). This feature is the toggle:
-# absent (default) → no `run_in_browser`, tests run under Node; present →
-# `run_in_browser` is compiled in, tests drive a headless browser via
-# `wasm-bindgen-test-runner`.
-#
-# `./run_tests.sh` (default mode, no env var) compiles without this feature.
-# `RUN_IN_BROWSER=1 ./run_tests.sh` and the `wasm-test` CI job enable it.
-browser-tests = []

@@ -1,39 +1,32 @@
 #!/bin/sh
 #
-# Run hf-hub's wasm32-unknown-unknown integration tests. Mirrors
-# `wasm/smoke/build_wasm.sh`'s compile flags — atomics, bulk-memory,
-# mutable-globals, shared memory, and a rebuilt std (via `-Z build-std`) —
-# because the xet download test exercises `hf-xet`'s threaded wasm at
-# runtime. The rest of the tests (plain HTTP) would build without these
-# flags, but a single build matrix keeps the crate simple.
+# Run hf-hub's wasm32-unknown-unknown integration tests in a headless browser.
 #
-# Two run modes:
+# The tests drive `hf-xet`'s threaded wasm at runtime, so the build needs
+# atomics, bulk-memory, mutable-globals, shared memory, and a rebuilt std (via
+# `-Z build-std`) — hence the nightly toolchain and the rustflags below.
 #
-#   * Node (default): builds without the `browser-tests` feature, so the test
-#     crate doesn't compile in `wasm_bindgen_test_configure!(run_in_browser)`
-#     and `wasm-bindgen-test-runner` falls back to its default Node.js runner.
-#     No webdriver / headless browser required. Validated against Node 20+;
-#     older versions may not support the shared-memory + atomics combination
-#     `hf-xet` needs.
-#   * Browser (`RUN_IN_BROWSER=1`): builds with `--features browser-tests`,
-#     compiling the `run_in_browser` directive in and driving a headless
-#     browser through `wasm-bindgen-test-runner`. v0.2.121 serves
-#     `Cross-Origin-Opener-Policy: same-origin` and
-#     `Cross-Origin-Embedder-Policy: require-corp` by default, so
-#     `SharedArrayBuffer` is available in the browser test page without
-#     extra configuration. (Disable via
-#     `WASM_BINDGEN_TEST_NO_ORIGIN_ISOLATION` if you ever need to compare
-#     behaviour.)
+# Browser only: the test crate compiles in
+# `wasm_bindgen_test_configure!(run_in_browser)` unconditionally, so
+# `wasm-bindgen-test-runner` always drives a headless browser. Node is not
+# supported — `hf-xet`'s upload path spawns Web Workers that only function in a
+# `crossOriginIsolated` context, which Node's wasm-bindgen-test runner can't
+# provide (Node has `SharedArrayBuffer` but no Web `Worker`). `wasm-bindgen-
+# test-runner` (>= 0.2.121) serves the required
+# `Cross-Origin-Opener-Policy: same-origin` and
+# `Cross-Origin-Embedder-Policy: require-corp` headers automatically, so
+# `SharedArrayBuffer` and workers are available on the test page. Node
+# consumers should use a native addon instead of the wasm build.
 #
 # Requirements:
 #   - Nightly Rust toolchain with `rust-src` (`rustup component add
 #     rust-src --toolchain nightly`)
 #   - `wasm-bindgen-cli` 0.2.121 (installed automatically if missing)
-#   - Node mode only: `node` on PATH (Node 20+).
-#   - Browser mode only: one of Chrome + chromedriver, Firefox +
-#     geckodriver, or Safari + safaridriver in PATH (selected via the
-#     relevant `*DRIVER` env var — see
+#   - One of Chrome + chromedriver, Firefox + geckodriver, or Safari +
+#     safaridriver in PATH (selected via the relevant `*DRIVER` env var — see
 #     https://rustwasm.github.io/wasm-bindgen/wasm-bindgen-test/browsers.html).
+#
+# Extra arguments are forwarded to `cargo test` (e.g. a test-name filter).
 
 set -ex
 
@@ -63,21 +56,14 @@ TARGET_RUSTFLAGS="-C target-feature=+atomics,+bulk-memory,+mutable-globals \
   --cfg getrandom_backend=\"wasm_js\""
 
 # `wasm-bindgen-test` defaults to a 20s per-test timeout; live Hub calls
-# (especially the xet download, which fans out to the CAS gateway) can
+# (especially the xet transfers, which fan out to the CAS gateway) can
 # exceed that.
 : "${WASM_BINDGEN_TEST_TIMEOUT:=180}"
 export WASM_BINDGEN_TEST_TIMEOUT
-
-if [ "${RUN_IN_BROWSER:-0}" = "1" ]; then
-    FEATURE_FLAGS="--features browser-tests"
-else
-    FEATURE_FLAGS=""
-fi
 
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$TARGET_RUSTFLAGS" \
 cargo +nightly test \
     --target wasm32-unknown-unknown \
     --release \
     -Z build-std=std,panic_abort \
-    $FEATURE_FLAGS \
     "$@"
