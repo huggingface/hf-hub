@@ -678,6 +678,40 @@ async fn test_get_file_metadata_bogus_revision() {
     );
 }
 
+// Regression test for https://github.com/huggingface/hf-hub/issues/163: the metadata HEAD on an
+// LFS/Xet-backed file resolves to a CDN redirect carrying `X-Linked-Etag` / `X-Repo-Commit`. The
+// client must read those headers off the (unfollowed) redirect rather than chasing it to the CDN,
+// where they are absent.
+#[tokio::test]
+async fn test_get_file_metadata_lfs_file() {
+    let Some(client) = prod_api() else { return };
+    let r = repo(&client, TEST_MODEL_REPO);
+
+    let stream = r.list_tree().recursive(true).expand(true).send().unwrap();
+    futures::pin_mut!(stream);
+    let mut large_file: Option<String> = None;
+    while let Some(entry) = stream.next().await {
+        if let RepoTreeEntry::File {
+            path, lfs, xet_hash, ..
+        } = entry.unwrap()
+            && (lfs.is_some() || xet_hash.is_some())
+        {
+            large_file = Some(path);
+            break;
+        }
+    }
+    let Some(filepath) = large_file else {
+        eprintln!("skipping: no LFS/xet-backed file found in {TEST_MODEL_REPO}");
+        return;
+    };
+
+    let meta = r.get_file_metadata().filepath(filepath.clone()).send().await.unwrap();
+    assert_eq!(meta.filename, filepath);
+    assert!(!meta.etag.is_empty(), "expected non-empty ETag for {filepath}");
+    assert!(!meta.commit_hash.is_empty(), "expected non-empty commit hash for {filepath}");
+    assert!(meta.file_size > 0, "expected non-zero file size for {filepath}");
+}
+
 // --- Commit and diff tests ---
 
 #[tokio::test]

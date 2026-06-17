@@ -276,6 +276,19 @@ pub(crate) fn extract_xet_hash(response: &reqwest::Response) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Resolve the download location of a metadata `HEAD` response, mirroring Python's
+/// `response.headers.get("Location") or response.request.url`: prefer the `Location` header
+/// (present on an unfollowed CDN redirect, where it points at the signed blob URL) and fall back
+/// to the final request URL when the response was served directly.
+pub(super) fn extract_location(response: &reqwest::Response) -> String {
+    response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| response.url().to_string())
+}
+
 /// Check if a path matches any of the given glob patterns using the `globset` crate.
 pub(super) fn matches_any_glob(patterns: &[String], path: &str) -> bool {
     patterns.iter().any(|p| {
