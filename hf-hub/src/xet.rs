@@ -481,7 +481,10 @@ async fn xet_upload_inner(
     let conn = fetch_xet_connection_info(hf_client, &token_url, Some(owner_id), not_found_ctx).await?;
     tracing::info!(endpoint = conn.endpoint.as_str(), "xet write token obtained, building session (wasm)");
 
-    let session = xet::xet_session::XetSessionBuilder::new()
+    // Cap concurrency in wasm to avoid hitting memory limits
+    let mut config = xet::xet_session::XetConfig::new();
+    config.client.ac_max_upload_concurrency = 8;
+    let session = xet::xet_session::XetSessionBuilder::new_with_config(config)
         .build()
         .map_err(|e| HFError::xet(XetOperation::Session, e))?;
 
