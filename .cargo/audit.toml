@@ -16,4 +16,10 @@ ignore = [
     # Revisit if/when we adopt HTTP/3 or move retry logic off `tokio-retry`.
     "RUSTSEC-2026-0097",
     "RUSTSEC-2026-0104",
+    # `quinn-proto` reaches Cargo.lock only as `reqwest`'s optional `http3`
+    # dependency, which no feature we enable turns on — `cargo tree -i
+    # quinn-proto` resolves to nothing, so it is never compiled or shipped.
+    # `cargo audit` flags it from the lockfile regardless. Revisit if/when we
+    # adopt HTTP/3.
+    "RUSTSEC-2026-0185",
 ]
