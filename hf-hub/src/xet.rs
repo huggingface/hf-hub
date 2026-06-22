@@ -971,7 +971,10 @@ impl crate::buckets::HFBucket {
 
     #[cfg(target_family = "wasm")]
     fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
-        let session = xet::xet_session::XetSessionBuilder::new()
+        // Cap concurrency in wasm to avoid hitting memory limits
+        let mut config = xet::xet_session::XetConfig::new();
+        config.client.ac_max_download_concurrency = 8;
+        let session = xet::xet_session::XetSessionBuilder::new_with_config(config)
             .build()
             .map_err(|e| HFError::xet(XetOperation::Session, e))?;
         session
@@ -1052,7 +1055,10 @@ impl<T: RepoType> HFRepository<T> {
 
     #[cfg(target_family = "wasm")]
     fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
-        let session = xet::xet_session::XetSessionBuilder::new()
+        // Cap concurrency in wasm to avoid hitting memory limits
+        let mut config = xet::xet_session::XetConfig::new();
+        config.client.ac_max_download_concurrency = 8;
+        let session = xet::xet_session::XetSessionBuilder::new_with_config(config)
             .build()
             .map_err(|e| HFError::xet(XetOperation::Session, e))?;
         session
