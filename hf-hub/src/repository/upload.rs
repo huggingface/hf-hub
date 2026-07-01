@@ -212,10 +212,6 @@ impl<T: RepoType> HFRepository<T> {
             AddSource::File(path) => bytes::Bytes::from(std::fs::read(path)?),
             AddSource::Bytes(bytes) => bytes.clone(),
             AddSource::Stream(s) => {
-                // Inline path is only used for files the Hub classifies as
-                // "regular" (i.e., not LFS) — typically <10 MB. Buffering the
-                // full stream here is safe at that size; LFS-sized streams go
-                // through the xet path which never materializes them.
                 let mut stream = s.open();
                 let mut buf = bytes::BytesMut::with_capacity(s.size() as usize);
                 while let Some(chunk) = stream.next().await {
@@ -605,21 +601,8 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 const PREUPLOAD_SAMPLE_SIZE: usize = 512;
 
-/// Compute size, preupload sample, and SHA-256 from a single pass over the source.
-///
-/// hf-hub previously walked each source three times: once for the preupload
-/// sample, once for the LFS-batch SHA, and once for the xet upload. For
-/// [`AddSource::Stream`] backed by a JS `Blob` (or any other re-readable
-/// source), that meant three full reads of the underlying bytes. This
-/// function fuses the sample and SHA passes into one stream traversal so we
-/// only ever pay two reads — the metadata pass here and the final upload
-/// pass via xet.
-///
-/// SHA is computed eagerly for every variant, including files the Hub will
-/// later classify as "regular" (non-LFS). The wasted work is bounded:
-/// regular files are small (Hub threshold is ~10 MB), so the extra SHA
-/// hashing is negligible compared to skipping a full re-read for LFS-sized
-/// streams.
+// Compute size, preupload sample, and SHA-256 in a single pass so a stream
+// source is only read twice total: the metadata pass here and the xet upload.
 async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>, String)> {
     match source {
         AddSource::Bytes(bytes) => {
@@ -795,8 +778,7 @@ impl<T: RepoType> HFRepository<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_file(
         &self,
-        /// File content source. Bytes on any target; local file path on native only
-        /// (`AddSource::File` is not available on `wasm32-unknown-unknown`).
+        /// File content source.
         source: AddSource,
         /// Destination path within the repository.
         #[builder(into)]

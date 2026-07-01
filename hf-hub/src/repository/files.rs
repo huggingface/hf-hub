@@ -191,8 +191,6 @@ impl CommitOperation {
     /// `Add { path_in_repo, source: AddSource::file(source) }`. Prefer this
     /// for any non-trivial file size — see [`AddSource::File`] for the streaming
     /// behavior and memory cost.
-    ///
-    /// Not available on `wasm32-unknown-unknown`; use [`CommitOperation::add_bytes`] instead.
     #[cfg(not(target_family = "wasm"))]
     pub fn add_file(path_in_repo: impl Into<String>, source: impl Into<PathBuf>) -> Self {
         CommitOperation::Add {
@@ -297,9 +295,6 @@ impl std::fmt::Debug for StreamSource {
 ///
 /// `AddSource::File` is not a snapshot: the file must still exist, unchanged,
 /// when [`HFRepository::create_commit`] runs.
-///
-/// `AddSource::File` is not available on `wasm32-unknown-unknown`; use
-/// [`AddSource::Bytes`] instead.
 #[derive(Debug, Clone)]
 pub enum AddSource {
     /// Read file contents from this local path at commit time.

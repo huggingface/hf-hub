@@ -36,14 +36,9 @@ fn is_transient_status(status: StatusCode) -> bool {
 }
 
 fn is_transient_reqwest_error(err: &ReqwestError) -> bool {
-    // The wasm reqwest backend exposes only `is_status`, `is_timeout`, `is_builder`,
-    // and `is_request` — there's no `is_connect`, no `is_body`/`is_decode`/`is_redirect`,
-    // and no access to a `hyper::Error` source through `err.source()`. So on wasm we
-    // can still rule the universally-fatal classes (builder, status) out and retry on
-    // timeout, but the hyper-source heuristics for canceled / incomplete-message / IO
-    // are unreachable. Retry on the wasm side is therefore strictly less generous than
-    // native; callers driving flaky CAS reads should expect fewer automatic retries in
-    // the browser.
+    // The wasm reqwest backend exposes no `is_connect`/`is_body`/`is_decode`/
+    // `is_redirect` and no `hyper::Error` source, so wasm retries only on
+    // timeout — strictly less generous than native.
     if err.is_timeout() {
         return true;
     }

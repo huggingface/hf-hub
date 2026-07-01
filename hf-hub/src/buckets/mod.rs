@@ -495,7 +495,7 @@ impl HFBucket {
     ///
     /// Wasm-safe analog of [`HFBucket::upload_files`] (which is native-only because it
     /// reads from local paths): each pair can use any [`AddSource`](crate::repository::AddSource)
-    /// variant — `Bytes` for in-memory content, `File` for a local path (native only), or `Stream`
+    /// variant — `Bytes` for in-memory content, `File` for a local path, or `Stream`
     /// for sources too large to materialize at once (typical wasm case for `Blob`-backed
     /// uploads). For the common in-memory case, build entries with
     /// [`AddSource::bytes`](crate::repository::AddSource::bytes):

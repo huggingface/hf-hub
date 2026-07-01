@@ -187,17 +187,9 @@
 //! - `blocking` — enables the synchronous `*Sync` handles.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-// On `wasm32-unknown-unknown` several modules drop most of their public surface
-// behind `#[cfg(not(target_family = "wasm"))]`: `cache` is gated out wholesale,
-// and `buckets`, `repository::{download, upload}`, `blocking`, and the
-// `xet_state`/`no_redirect_client`/`xet_session` paths in `client.rs` are
-// partially gated. That leaves shared helpers downstream of them — most of
-// `pagination`, the `NotFoundContext::*` variants in `error.rs`, several
-// `progress` constructors, and the no-redirect / cached-XetSession plumbing in
-// `client.rs` — reachable only from native call sites. Without this blanket
-// allow, each becomes a `dead_code` warning under wasm. Anything intentionally
-// dead lives in those modules; a wasm-only warning under this allow likely
-// indicates a real unused item.
+// With the fs/tokio-dependent modules cfg-gated out on wasm, many shared
+// helpers are reachable only from native call sites and would each warn as
+// `dead_code`; allow them wholesale.
 #![cfg_attr(target_family = "wasm", allow(dead_code))]
 
 mod client;
@@ -210,11 +202,8 @@ mod retry;
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 mod blocking;
 
-// On `wasm32-unknown-unknown` the only modules that don't compile are the ones
-// that touch the filesystem, spawn OS processes, or rely on the multi-threaded
-// tokio runtime (`cache`, `blocking`). Pure-HTTP modules — `repository`,
-// `spaces`, `users`, and `buckets` (with individual fs-using methods inside
-// them gated) — are exposed on wasm too. See `verify_wasm.sh`.
+// Modules needing the filesystem or the multi-threaded tokio runtime are
+// native-only; pure-HTTP modules are exposed on wasm too. See `verify_wasm.sh`.
 pub mod buckets;
 #[cfg(not(target_family = "wasm"))]
 pub mod cache;
