@@ -83,7 +83,6 @@ pub(crate) struct HFClientInner {
     pub(crate) token: Option<String>,
     pub(crate) cache_dir: std::path::PathBuf,
     pub(crate) cache_enabled: bool,
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) xet_state: std::sync::Mutex<crate::xet::XetState>,
 }
 
@@ -237,7 +236,6 @@ impl HFClientBuilder {
                 token,
                 cache_dir,
                 cache_enabled: self.cache_enabled.unwrap_or(true),
-                #[cfg(not(target_family = "wasm"))]
                 xet_state: std::sync::Mutex::new(crate::xet::XetState::default()),
             }),
         })
@@ -430,7 +428,6 @@ impl HFClient {
     /// [`replace_xet_session`](Self::replace_xet_session) so that only the
     /// caller that observed the error triggers a replacement — concurrent
     /// callers that already got a session won't clobber it.
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn xet_session(&self) -> HFResult<(xet::xet_session::XetSession, u64)> {
         let mut guard = self
             .inner
@@ -442,7 +439,17 @@ impl HFClient {
             return Ok((session.clone(), guard.generation));
         }
 
-        let session = xet::xet_session::XetSessionBuilder::new()
+        #[cfg(not(target_family = "wasm"))]
+        let builder = xet::xet_session::XetSessionBuilder::new();
+        // Cap transfer concurrency on wasm to avoid exhausting linear memory.
+        #[cfg(target_family = "wasm")]
+        let builder = {
+            let mut config = xet::xet_session::XetConfig::new();
+            config.client.ac_max_upload_concurrency = 8;
+            config.client.ac_max_download_concurrency = 8;
+            xet::xet_session::XetSessionBuilder::new_with_config(config)
+        };
+        let session = builder
             .build()
             .map_err(|e| HFError::xet(crate::error::XetOperation::Session, e))?;
         guard.session = Some(session.clone());
@@ -455,7 +462,6 @@ impl HFClient {
     /// Called by xet call sites when a factory method returns an error.
     /// The generation check ensures that if another thread already replaced
     /// the session, this call is a no-op rather than discarding the fresh one.
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn replace_xet_session(&self, generation: u64, err: &xet::error::XetError) {
         tracing::warn!(error = %err, generation, "replacing cached XetSession");
         let Ok(mut guard) = self.inner.xet_state.lock() else {

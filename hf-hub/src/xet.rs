@@ -2,9 +2,8 @@
 //! (session management, upload/download groups, progress pollers) used by
 //! repositories and buckets for high-performance Xet transfers.
 //!
-//! On `wasm32-unknown-unknown`, session caching and progress polling are
-//! omitted — fresh `XetSession` per call, no in-flight progress events.
-//! See per-item `#[cfg]` attributes.
+//! On `wasm32-unknown-unknown`, progress polling is omitted — no in-flight
+//! progress events. See per-item `#[cfg]` attributes.
 
 #[cfg(not(target_family = "wasm"))]
 use std::{
@@ -41,7 +40,6 @@ struct XetTokenResponse {
     cas_url: String,
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[derive(Default)]
 pub(crate) struct XetState {
     pub(crate) session: Option<xet::xet_session::XetSession>,
@@ -461,10 +459,8 @@ async fn xet_upload_inner(
     Ok(xet_file_infos)
 }
 
-/// Wasm counterpart of `xet_upload_inner` (above). Builds a fresh
-/// `XetSession` per call since the cached-session-on-`HFClient` pattern
-/// isn't available on wasm; no session-poison retry is needed because
-/// each call gets a clean session.
+/// Wasm counterpart of `xet_upload_inner` (above): no filesystem sources
+/// and no progress tracking, but the same cached `XetSession` on `HFClient`.
 #[cfg(target_family = "wasm")]
 async fn xet_upload_inner(
     hf_client: &HFClient,
@@ -481,23 +477,25 @@ async fn xet_upload_inner(
     let conn = fetch_xet_connection_info(hf_client, &token_url, Some(owner_id), not_found_ctx).await?;
     tracing::info!(endpoint = conn.endpoint.as_str(), "xet write token obtained, building session (wasm)");
 
-    // Cap concurrency in wasm to avoid hitting memory limits
-    let mut config = xet::xet_session::XetConfig::new();
-    config.client.ac_max_upload_concurrency = 8;
-    let session = xet::xet_session::XetSessionBuilder::new_with_config(config)
-        .build()
-        .map_err(|e| HFError::xet(XetOperation::Session, e))?;
-
     tracing::info!("building xet upload commit (wasm)");
-    let commit = session
-        .new_upload_commit()
-        .map_err(|e| HFError::xet(XetOperation::Upload, e))?
-        .with_endpoint(conn.endpoint.clone())
-        .with_token_info(conn.access_token.clone(), conn.expiration_unix_epoch)
-        .with_token_refresh_url(token_url, hf_client.auth_headers())
-        .build()
-        .await
-        .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+    let (session, generation) = hf_client.xet_session()?;
+    let commit = match session.new_upload_commit() {
+        Ok(b) => b,
+        Err(e) => {
+            hf_client.replace_xet_session(generation, &e);
+            hf_client
+                .xet_session()?
+                .0
+                .new_upload_commit()
+                .map_err(|e| HFError::xet(XetOperation::Upload, e))?
+        },
+    }
+    .with_endpoint(conn.endpoint.clone())
+    .with_token_info(conn.access_token.clone(), conn.expiration_unix_epoch)
+    .with_token_refresh_url(token_url, hf_client.auth_headers())
+    .build()
+    .await
+    .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
 
     tracing::info!("xet upload commit built, streaming file uploads (wasm)");
 
@@ -953,7 +951,6 @@ impl crate::buckets::HFBucket {
         }))
     }
 
-    #[cfg(not(target_family = "wasm"))]
     fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
         let (session, generation) = self.hf_client.xet_session()?;
         match session.new_download_stream_group() {
@@ -967,19 +964,6 @@ impl crate::buckets::HFBucket {
                     .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))
             },
         }
-    }
-
-    #[cfg(target_family = "wasm")]
-    fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
-        // Cap concurrency in wasm to avoid hitting memory limits
-        let mut config = xet::xet_session::XetConfig::new();
-        config.client.ac_max_download_concurrency = 8;
-        let session = xet::xet_session::XetSessionBuilder::new_with_config(config)
-            .build()
-            .map_err(|e| HFError::xet(XetOperation::Session, e))?;
-        session
-            .new_download_stream_group()
-            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))
     }
 }
 
@@ -1032,12 +1016,8 @@ impl<T: RepoType> HFRepository<T> {
         }))
     }
 
-    /// Obtain a stream-download group builder.
-    ///
-    /// Native reuses a cached `XetSession` on `HFClient` and replaces it on
-    /// poison. Wasm has no `tokio::sync::Mutex` available, so it builds a
-    /// fresh `XetSession` per call.
-    #[cfg(not(target_family = "wasm"))]
+    /// Obtain a stream-download group builder from the cached `XetSession`,
+    /// replacing the session on poison.
     fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
         let (session, generation) = self.hf_client.xet_session()?;
         match session.new_download_stream_group() {
@@ -1051,19 +1031,6 @@ impl<T: RepoType> HFRepository<T> {
                     .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))
             },
         }
-    }
-
-    #[cfg(target_family = "wasm")]
-    fn new_download_stream_group_builder(&self) -> HFResult<xet::xet_session::XetDownloadStreamGroupBuilder> {
-        // Cap concurrency in wasm to avoid hitting memory limits
-        let mut config = xet::xet_session::XetConfig::new();
-        config.client.ac_max_download_concurrency = 8;
-        let session = xet::xet_session::XetSessionBuilder::new_with_config(config)
-            .build()
-            .map_err(|e| HFError::xet(XetOperation::Session, e))?;
-        session
-            .new_download_stream_group()
-            .map_err(|e| HFError::xet(XetOperation::StreamDownload, e))
     }
 }
 
