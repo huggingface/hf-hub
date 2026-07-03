@@ -92,6 +92,20 @@
 //! Space-specific methods like `runtime`, `add_secret`, and `pause` live as `impl`
 //! blocks on `HFRepository<RepoTypeSpace>` — there is no separate `HFSpace` wrapper.
 //!
+//! When you start from a single `"owner/name"` string, [`split_id`] turns it into
+//! the `(owner, name)` pair these constructors take (short-form ids like `"gpt2"`
+//! yield an empty owner):
+//!
+//! ```rust,no_run
+//! use hf_hub::{HFClient, split_id};
+//!
+//! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+//! let client = HFClient::new()?;
+//! let (owner, name) = split_id("openai-community/gpt2");
+//! let model = client.model(owner, name);
+//! # let _ = model; Ok(()) }
+//! ```
+//!
 //! ## File operations
 //!
 //! File APIs live on the repository handle. Downloads go through the local cache
@@ -218,7 +232,7 @@ pub(crate) mod xet;
 pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync};
 #[doc(inline)]
 pub use buckets::HFBucket;
-pub use client::{HFClient, HFClientBuilder};
+pub use client::{HFClient, HFClientBuilder, split_id};
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult, XetOperation};

@@ -42,6 +42,40 @@ pub(crate) fn encode_path_segment(value: &str) -> String {
     url.path()[1..].to_string()
 }
 
+/// Split a repo or bucket id into its `(owner, name)` parts.
+///
+/// A fully-qualified id (`"owner/name"`) splits on the first `/`. A short-form
+/// id with no owner (`"gpt2"`) yields an empty owner, matching the `owner, name`
+/// argument pair taken by [`HFClient::model`], [`HFClient::dataset`],
+/// [`HFClient::space`], and [`HFClient::repository`]. Only the first `/` is a
+/// separator, so nested names (`"owner/sub/name"`) keep their tail intact
+/// (`("owner", "sub/name")`).
+///
+/// ```
+/// use hf_hub::split_id;
+///
+/// assert_eq!(split_id("openai-community/gpt2"), ("openai-community", "gpt2"));
+/// assert_eq!(split_id("gpt2"), ("", "gpt2"));
+/// ```
+///
+/// Handy for turning a user-supplied id straight into a repo handle:
+///
+/// ```no_run
+/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+/// use hf_hub::{HFClient, split_id};
+///
+/// let client = HFClient::new()?;
+/// let (owner, name) = split_id("openai-community/gpt2");
+/// let info = client.model(owner, name).info().send().await?;
+/// # let _ = info; Ok(()) }
+/// ```
+pub fn split_id(id: &str) -> (&str, &str) {
+    match id.split_once('/') {
+        Some((owner, name)) => (owner, name),
+        None => ("", id),
+    }
+}
+
 /// Whether a `Location` header value is a relative reference (no scheme, no
 /// host), like `/Snowflake/repo/resolve/main/config.json`. Protocol-relative
 /// URLs (`//host/path`) carry a host and are treated as absolute.
@@ -575,7 +609,7 @@ mod tests {
     use serial_test::serial;
     use url::Url;
 
-    use super::{HFClientBuilder, append_path_segments, encode_path_segment, is_relative_location};
+    use super::{HFClientBuilder, append_path_segments, encode_path_segment, is_relative_location, split_id};
 
     #[test]
     fn append_path_segments_encodes_special_chars() {
@@ -648,6 +682,29 @@ mod tests {
         assert_eq!(encode_path_segment("main"), "main");
         assert_eq!(encode_path_segment("v1.0"), "v1.0");
         assert_eq!(encode_path_segment("main..feature"), "main..feature");
+    }
+
+    #[test]
+    fn split_id_splits_owner_and_name() {
+        assert_eq!(split_id("openai-community/gpt2"), ("openai-community", "gpt2"));
+        assert_eq!(split_id("HuggingFaceFW/fineweb"), ("HuggingFaceFW", "fineweb"));
+    }
+
+    #[test]
+    fn split_id_ownerless_short_form() {
+        assert_eq!(split_id("gpt2"), ("", "gpt2"));
+        assert_eq!(split_id(""), ("", ""));
+    }
+
+    #[test]
+    fn split_id_only_splits_first_slash() {
+        assert_eq!(split_id("owner/sub/name"), ("owner", "sub/name"));
+    }
+
+    #[test]
+    fn split_id_empty_owner_or_name() {
+        assert_eq!(split_id("/name"), ("", "name"));
+        assert_eq!(split_id("owner/"), ("owner", ""));
     }
 
     #[test]
