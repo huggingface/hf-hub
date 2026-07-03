@@ -196,7 +196,9 @@
 //! [`EntryNotFound`][HFError::EntryNotFound], [`RevisionNotFound`][HFError::RevisionNotFound],
 //! [`AuthRequired`][HFError::AuthRequired], [`Forbidden`][HFError::Forbidden], and
 //! [`RateLimited`][HFError::RateLimited] — so you can match on them directly without
-//! parsing HTTP status codes or response bodies.
+//! parsing HTTP status codes or response bodies. When you do want the raw status the
+//! server returned, [`HFError::status_code`] extracts it from any variant that
+//! carries one.
 //!
 //! ## Caching
 //!

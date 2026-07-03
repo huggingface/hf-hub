@@ -321,6 +321,49 @@ impl HFError {
         }
     }
 
+    /// Returns the HTTP status code the server actually returned, when this
+    /// error carries one.
+    ///
+    /// Covers every variant holding an [`HttpErrorContext`] ([`Http`](Self::Http),
+    /// [`AuthRequired`](Self::AuthRequired), [`Forbidden`](Self::Forbidden),
+    /// [`Conflict`](Self::Conflict), [`RateLimited`](Self::RateLimited), and the
+    /// not-found family when their optional context was captured) plus
+    /// [`Request`](Self::Request) errors whose underlying `reqwest` error knows
+    /// a status. No status is ever synthesized: a
+    /// [`RepoNotFound`](Self::RepoNotFound) constructed without a response
+    /// context returns `None` rather than a canonical 404, and purely local
+    /// errors (I/O, JSON, cache) always return `None`.
+    ///
+    /// ```no_run
+    /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+    /// use reqwest::StatusCode;
+    ///
+    /// let repo = hf_hub::HFClient::new()?.model("openai-community", "gpt2");
+    /// if let Err(err) = repo.info().send().await {
+    ///     match err.status_code() {
+    ///         Some(StatusCode::TOO_MANY_REQUESTS) => println!("back off and retry"),
+    ///         Some(status) => println!("hub returned {status}"),
+    ///         None => println!("no HTTP response involved: {err}"),
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub fn status_code(&self) -> Option<reqwest::StatusCode> {
+        match self {
+            HFError::Http { context }
+            | HFError::AuthRequired { context }
+            | HFError::Forbidden { context }
+            | HFError::Conflict { context }
+            | HFError::RateLimited { context, .. } => Some(context.status),
+            HFError::RepoNotFound { context, .. }
+            | HFError::RevisionNotFound { context, .. }
+            | HFError::EntryNotFound { context, .. }
+            | HFError::BucketNotFound { context, .. } => context.as_ref().map(|c| c.status),
+            HFError::Request { source, .. } => source.status(),
+            _ => None,
+        }
+    }
+
     /// Returns true for errors that indicate transient network/server issues
     /// where falling back to a cached version is appropriate.
     pub(crate) fn is_transient(&self) -> bool {
@@ -441,6 +484,71 @@ mod tests {
                 "{s} should not be transient"
             );
         }
+    }
+
+    #[test]
+    fn status_code_from_context_variants() {
+        let err = HFError::Http {
+            context: Box::new(ctx(500)),
+        };
+        assert_eq!(err.status_code(), Some(StatusCode::INTERNAL_SERVER_ERROR));
+
+        let err = HFError::AuthRequired {
+            context: Box::new(ctx(401)),
+        };
+        assert_eq!(err.status_code(), Some(StatusCode::UNAUTHORIZED));
+
+        let err = HFError::Forbidden {
+            context: Box::new(ctx(403)),
+        };
+        assert_eq!(err.status_code(), Some(StatusCode::FORBIDDEN));
+
+        let err = HFError::Conflict {
+            context: Box::new(ctx(409)),
+        };
+        assert_eq!(err.status_code(), Some(StatusCode::CONFLICT));
+
+        let err = HFError::RateLimited {
+            retry_after: None,
+            context: Box::new(ctx(429)),
+        };
+        assert_eq!(err.status_code(), Some(StatusCode::TOO_MANY_REQUESTS));
+    }
+
+    #[test]
+    fn status_code_from_not_found_family_only_when_context_present() {
+        let err = HFError::RepoNotFound {
+            repo_id: "owner/name".to_string(),
+            context: Some(Box::new(ctx(404))),
+        };
+        assert_eq!(err.status_code(), Some(StatusCode::NOT_FOUND));
+
+        let err = HFError::RepoNotFound {
+            repo_id: "owner/name".to_string(),
+            context: None,
+        };
+        assert_eq!(err.status_code(), None);
+
+        let err = HFError::EntryNotFound {
+            path: "config.json".to_string(),
+            repo_id: "owner/name".to_string(),
+            context: Some(Box::new(ctx(404))),
+        };
+        assert_eq!(err.status_code(), Some(StatusCode::NOT_FOUND));
+    }
+
+    #[test]
+    fn status_code_none_for_local_errors() {
+        let err = HFError::LocalEntryNotFound {
+            path: "config.json".to_string(),
+        };
+        assert_eq!(err.status_code(), None);
+
+        let err = HFError::InvalidParameter("bad".to_string());
+        assert_eq!(err.status_code(), None);
+
+        let err = HFError::Io(std::io::Error::other("disk"));
+        assert_eq!(err.status_code(), None);
     }
 
     #[test]
