@@ -74,7 +74,14 @@ async fn fetch_xet_connection_info(
 }
 
 fn repo_xet_token_url(client: &HFClient, token_type: &str, repo_id: &str, api_segment: &str, revision: &str) -> String {
-    format!("{}/api/{}/{}/xet-{}-token/{}", client.endpoint(), api_segment, repo_id, token_type, revision)
+    format!(
+        "{}/api/{}/{}/xet-{}-token/{}",
+        client.endpoint(),
+        api_segment,
+        repo_id,
+        token_type,
+        crate::client::encode_path_segment(revision)
+    )
 }
 
 pub(crate) fn bucket_xet_token_url(client: &HFClient, token_type: &str, bucket_id: &str) -> String {

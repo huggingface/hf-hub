@@ -29,6 +29,19 @@ pub(crate) fn append_path_segments(url: &mut Url, path: &str) -> HFResult<()> {
     Ok(())
 }
 
+/// Percent-encode `value` as a single URL path segment.
+///
+/// Unlike [`append_path_segments`], slashes are escaped rather than treated as
+/// separators, so refs like `refs/pr/21` or `refs/convert/parquet` occupy
+/// exactly one segment (`refs%2Fpr%2F21`) — the Hub 404s on the unescaped
+/// form. Mirrors `huggingface_hub`'s `quote(value, safe="")`. Use for
+/// revisions, branch names, and tag names interpolated into URL paths.
+pub(crate) fn encode_path_segment(value: &str) -> String {
+    let mut url = Url::parse("https://hf.co").expect("static base URL parses");
+    url.path_segments_mut().expect("https URL can be a base").push(value);
+    url.path()[1..].to_string()
+}
+
 /// Async client for the Hugging Face Hub API.
 ///
 /// `HFClient` wraps an `Arc<HFClientInner>` so it is cheap to clone — all clones
@@ -345,7 +358,8 @@ impl HFClient {
     /// `url_prefix` is `""` for models or `"<plural>/"` for the other repo types. Pass
     /// [`crate::repository::RepoType::url_prefix`] for the concrete repo type at the call
     /// site. `filename` is percent-encoded path-segment by path-segment, so values like
-    /// `subdir/file name #1.bin` produce a correctly escaped URL.
+    /// `subdir/file name #1.bin` produce a correctly escaped URL. `revision` is encoded
+    /// as a single segment, so `refs/pr/21` becomes `refs%2Fpr%2F21`.
     pub(crate) fn download_url(
         &self,
         url_prefix: &str,
@@ -353,7 +367,7 @@ impl HFClient {
         revision: &str,
         filename: &str,
     ) -> HFResult<String> {
-        let base = format!("{}/{}{}/resolve/{}", self.endpoint(), url_prefix, repo_id, revision);
+        let base = format!("{}/{}{}/resolve/{}", self.endpoint(), url_prefix, repo_id, encode_path_segment(revision));
         let mut url = Url::parse(&base)?;
         append_path_segments(&mut url, filename)?;
         Ok(url.into())
@@ -519,7 +533,7 @@ mod tests {
     use serial_test::serial;
     use url::Url;
 
-    use super::{HFClientBuilder, append_path_segments};
+    use super::{HFClientBuilder, append_path_segments, encode_path_segment};
 
     #[test]
     fn append_path_segments_encodes_special_chars() {
@@ -570,6 +584,34 @@ mod tests {
         let client = HFClientBuilder::new().endpoint("https://huggingface.co").build().unwrap();
         let url = client.download_url("datasets/", "owner/ds", "v1.0", "data/train.csv").unwrap();
         assert_eq!(url, "https://huggingface.co/datasets/owner/ds/resolve/v1.0/data/train.csv");
+    }
+
+    #[test]
+    fn download_url_encodes_revision_as_single_segment() {
+        let client = HFClientBuilder::new().endpoint("https://huggingface.co").build().unwrap();
+        let url = client
+            .download_url("", "owner/repo", "refs/pr/21", "model.safetensors")
+            .unwrap();
+        assert_eq!(url, "https://huggingface.co/owner/repo/resolve/refs%2Fpr%2F21/model.safetensors");
+    }
+
+    #[test]
+    fn encode_path_segment_escapes_slashes() {
+        assert_eq!(encode_path_segment("refs/pr/21"), "refs%2Fpr%2F21");
+        assert_eq!(encode_path_segment("refs/convert/parquet"), "refs%2Fconvert%2Fparquet");
+    }
+
+    #[test]
+    fn encode_path_segment_plain_revisions_unchanged() {
+        assert_eq!(encode_path_segment("main"), "main");
+        assert_eq!(encode_path_segment("v1.0"), "v1.0");
+        assert_eq!(encode_path_segment("main..feature"), "main..feature");
+    }
+
+    #[test]
+    fn encode_path_segment_escapes_percent_and_special_chars() {
+        assert_eq!(encode_path_segment("a%2Fb"), "a%252Fb");
+        assert_eq!(encode_path_segment("with space#hash?q"), "with%20space%23hash%3Fq");
     }
 
     #[test]

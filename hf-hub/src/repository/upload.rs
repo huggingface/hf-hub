@@ -90,7 +90,11 @@ struct DeleteFolderParams {
 impl<T: RepoType> HFRepository<T> {
     async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!("{}/commit/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url = format!(
+            "{}/commit/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            crate::client::encode_path_segment(revision)
+        );
 
         let add_ops_count = params
             .operations
@@ -430,7 +434,11 @@ impl<T: RepoType> HFRepository<T> {
         revision: &str,
         files: &[(&str, u64, &[u8])],
     ) -> HFResult<HashMap<String, String>> {
-        let url = format!("{}/preupload/{}", self.hf_client.api_url(api_segment, repo_id), revision);
+        let url = format!(
+            "{}/preupload/{}",
+            self.hf_client.api_url(api_segment, repo_id),
+            crate::client::encode_path_segment(revision)
+        );
 
         let files_payload: Vec<serde_json::Value> = files
             .iter()
