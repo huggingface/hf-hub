@@ -197,6 +197,7 @@ pub(crate) mod constants;
 mod error;
 mod pagination;
 mod retry;
+pub(crate) mod util;
 
 #[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]

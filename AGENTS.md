@@ -182,6 +182,8 @@ hf-hub/
 │   │   ├── error.rs                # HFError enum, HFResult alias, NotFoundContext
 │   │   ├── pagination.rs           # Generic paginate<T>() with Link header parsing
 │   │   ├── retry.rs                # Retry logic for transient HTTP failures
+│   │   ├── util.rs                 # pub(crate) boxed_future: boxes heavyweight builder futures so
+│   │   │                           #   consumer future nesting stays shallow (Send native, !Send wasm)
 │   │   ├── progress.rs             # ProgressEvent, ProgressHandler, Upload/DownloadEvent, FileProgress
 │   │   ├── repository/             # Repo component: all HFRepository-bound APIs live here,
 │   │   │   │                       #   flat public surface via `hf_hub::repository::…`
@@ -209,6 +211,8 @@ hf-hub/
 │   │   └── cache/
 │   │       ├── mod.rs              # CachedFileInfo/CachedRepoInfo/HFCacheInfo + scan_cache API
 │   │       └── storage.rs          # pub(crate) on-disk plumbing: scan, locking, ref read/write, symlinks
+│   ├── tests/
+│   │   └── future_size.rs          # Regression tests: heavyweight builder send() futures stay boxed/small
 │   └── (unit tests live next to their modules in #[cfg(test)] blocks)
 ├── integration-tests/              # Integration tests crate (package: integration-tests)
 │   ├── Cargo.toml                  # Depends on hf-hub with "blocking" feature
