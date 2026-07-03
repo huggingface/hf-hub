@@ -42,6 +42,13 @@ pub(crate) fn encode_path_segment(value: &str) -> String {
     url.path()[1..].to_string()
 }
 
+/// Whether a `Location` header value is a relative reference (no scheme, no
+/// host), like `/Snowflake/repo/resolve/main/config.json`. Protocol-relative
+/// URLs (`//host/path`) carry a host and are treated as absolute.
+fn is_relative_location(location: &str) -> bool {
+    Url::parse(location) == Err(url::ParseError::RelativeUrlWithoutBase) && !location.starts_with("//")
+}
+
 /// Async client for the Hugging Face Hub API.
 ///
 /// `HFClient` wraps an `Arc<HFClientInner>` so it is cheap to clone — all clones
@@ -378,6 +385,41 @@ impl HFClient {
         format!("{}/api/buckets/{}", self.endpoint(), bucket_id)
     }
 
+    /// Issue a HEAD request via the no-redirect client, manually following
+    /// *relative* redirects (Location without a host).
+    ///
+    /// The Hub 307s to the canonical repo path when a repo id differs in
+    /// casing (e.g. `snowflake/…` → `Snowflake/…`); that response carries no
+    /// ETag, so metadata extraction must happen after following it. Absolute
+    /// redirects (e.g. to the CDN) are returned as-is — their headers already
+    /// carry the linked metadata. Mirrors `huggingface_hub`'s
+    /// `follow_relative_redirects` behavior.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) async fn head_with_relative_redirects(
+        &self,
+        url: &str,
+        headers: &HeaderMap,
+    ) -> HFResult<reqwest::Response> {
+        const MAX_RELATIVE_REDIRECTS: usize = 10;
+        let mut url = Url::parse(url)?;
+        for _ in 0..=MAX_RELATIVE_REDIRECTS {
+            let response = retry::retry(self.retry_config(), || {
+                self.no_redirect_client().head(url.clone()).headers(headers.clone()).send()
+            })
+            .await?;
+            if response.status().is_redirection()
+                && let Some(location) = response.headers().get(reqwest::header::LOCATION)
+                && let Ok(location) = location.to_str()
+                && is_relative_location(location)
+            {
+                url = url.join(location)?;
+                continue;
+            }
+            return Ok(response);
+        }
+        Err(HFError::malformed_response_at("too many relative redirects", url.to_string()))
+    }
+
     /// Check an HTTP response and map error status codes to HFError variants.
     /// Returns the response on success (2xx).
     ///
@@ -533,7 +575,7 @@ mod tests {
     use serial_test::serial;
     use url::Url;
 
-    use super::{HFClientBuilder, append_path_segments, encode_path_segment};
+    use super::{HFClientBuilder, append_path_segments, encode_path_segment, is_relative_location};
 
     #[test]
     fn append_path_segments_encodes_special_chars() {
@@ -606,6 +648,14 @@ mod tests {
         assert_eq!(encode_path_segment("main"), "main");
         assert_eq!(encode_path_segment("v1.0"), "v1.0");
         assert_eq!(encode_path_segment("main..feature"), "main..feature");
+    }
+
+    #[test]
+    fn is_relative_location_classification() {
+        assert!(is_relative_location("/Snowflake/repo/resolve/main/config.json"));
+        assert!(is_relative_location("relative/path"));
+        assert!(!is_relative_location("https://cdn-lfs.huggingface.co/repos/x"));
+        assert!(!is_relative_location("//cdn-lfs.huggingface.co/repos/x"));
     }
 
     #[test]
