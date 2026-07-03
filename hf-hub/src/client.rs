@@ -147,6 +147,7 @@ pub(crate) struct HFClientInner {
 pub struct HFClientBuilder {
     endpoint: Option<String>,
     token: Option<String>,
+    anonymous: bool,
     user_agent: Option<String>,
     headers: Option<HeaderMap>,
     client: Option<reqwest::Client>,
@@ -162,6 +163,7 @@ impl HFClientBuilder {
         Self {
             endpoint: None,
             token: None,
+            anonymous: false,
             user_agent: None,
             headers: None,
             client: None,
@@ -182,6 +184,28 @@ impl HFClientBuilder {
     /// var and the cached token file written by `huggingface-cli login`.
     pub fn token(mut self, token: impl Into<String>) -> Self {
         self.token = Some(token.into());
+        self
+    }
+
+    /// Builds an unauthenticated client, ignoring any ambient credentials.
+    ///
+    /// The ambient `HF_TOKEN` env var and cached token files (`HF_TOKEN_PATH`,
+    /// `$HF_HOME/token`) are skipped, so requests are sent without an
+    /// `Authorization` header even on a machine that is logged in. This is the
+    /// per-client equivalent of setting the `HF_HUB_DISABLE_IMPLICIT_TOKEN`
+    /// env var.
+    ///
+    /// Setting both [`token`](Self::token) and `anonymous` is contradictory and
+    /// makes [`build`](Self::build) fail with [`HFError::InvalidParameter`].
+    ///
+    /// ```rust,no_run
+    /// use hf_hub::HFClient;
+    ///
+    /// let client = HFClient::builder().anonymous().build()?;
+    /// # Ok::<(), hf_hub::HFError>(())
+    /// ```
+    pub fn anonymous(mut self) -> Self {
+        self.anonymous = true;
         self
     }
 
@@ -235,8 +259,9 @@ impl HFClientBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error if the endpoint URL is not a valid URL or if the `reqwest` client
-    /// cannot be constructed (e.g., an invalid `User-Agent` string was provided).
+    /// Returns an error if the endpoint URL is not a valid URL, if the `reqwest` client
+    /// cannot be constructed (e.g., an invalid `User-Agent` string was provided), or if
+    /// both [`token`](Self::token) and [`anonymous`](Self::anonymous) were set.
     pub fn build(self) -> HFResult<HFClient> {
         let endpoint = self
             .endpoint
@@ -245,7 +270,16 @@ impl HFClientBuilder {
 
         let _ = url::Url::parse(&endpoint)?;
 
-        let token = self.token.or_else(resolve_token);
+        let token = if self.anonymous {
+            if self.token.is_some() {
+                return Err(HFError::InvalidParameter(
+                    "both token(...) and anonymous() were set on HFClientBuilder — pick one".to_string(),
+                ));
+            }
+            None
+        } else {
+            self.token.or_else(resolve_token)
+        };
 
         let cache_dir = self.cache_dir.unwrap_or_else(constants::resolve_cache_dir);
 
@@ -977,6 +1011,38 @@ mod tests {
 
             let client = HFClientBuilder::new().token("explicit-token").build().unwrap();
             assert_eq!(client.inner.token.as_deref(), Some("explicit-token"));
+        }
+
+        #[test]
+        #[serial]
+        fn test_anonymous_ignores_env_token() {
+            let _g = EnvGuard::new();
+            unsafe { std::env::set_var(HF_TOKEN, "env-token") };
+
+            let client = HFClientBuilder::new().anonymous().build().unwrap();
+            assert!(client.inner.token.is_none());
+        }
+
+        #[test]
+        #[serial]
+        fn test_anonymous_ignores_token_path_file() {
+            let g = EnvGuard::new();
+            let dir = tempfile::tempdir().unwrap();
+            let token_file = write_token_file(dir.path(), "tok", "file-token");
+            unsafe { std::env::set_var(HF_TOKEN_PATH, &token_file) };
+
+            let client = HFClientBuilder::new().anonymous().build().unwrap();
+            assert!(client.inner.token.is_none());
+            drop(g);
+        }
+
+        #[test]
+        #[serial]
+        fn test_anonymous_conflicts_with_explicit_token() {
+            let _g = EnvGuard::new();
+
+            let err = HFClientBuilder::new().token("explicit-token").anonymous().build().unwrap_err();
+            assert!(matches!(err, crate::HFError::InvalidParameter(_)), "unexpected error: {err:?}");
         }
 
         #[test]
