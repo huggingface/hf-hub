@@ -467,6 +467,9 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     /// Compute SHA256, negotiate LFS batch transfer, and upload via xet.
+    // `params` (progress) is only consumed on the xet upload path; without the
+    // `xet` feature the function errors before using it.
+    #[cfg_attr(not(feature = "xet"), allow(unused_variables))]
     async fn upload_lfs_files_via_xet(
         &self,
         params: &CreateCommitParams,
@@ -504,19 +507,29 @@ impl<T: RepoType> HFRepository<T> {
             return Ok(HashMap::new());
         }
 
-        let xet_files: Vec<(String, AddSource)> = lfs_with_sha
-            .iter()
-            .map(|(path, _, _, source)| (path.clone(), (*source).clone()))
-            .collect();
+        // The Hub selected the xet transfer. With the `xet` feature off we do not
+        // advertise xet (see `post_lfs_batch_info`), so this only happens when a
+        // repo hard-requires xet — surface it as an explicit error rather than
+        // silently degrading.
+        #[cfg(not(feature = "xet"))]
+        return Err(crate::error::HFError::xet_feature_disabled(crate::error::XetOperation::Upload));
 
-        self.xet_upload(&xet_files, revision, &params.progress).await?;
+        #[cfg(feature = "xet")]
+        {
+            let xet_files: Vec<(String, AddSource)> = lfs_with_sha
+                .iter()
+                .map(|(path, _, _, source)| (path.clone(), (*source).clone()))
+                .collect();
 
-        let result: HashMap<String, (String, u64)> = lfs_with_sha
-            .into_iter()
-            .map(|(path, size, oid, _)| (path, (oid, size)))
-            .collect();
+            self.xet_upload(&xet_files, revision, &params.progress).await?;
 
-        Ok(result)
+            let result: HashMap<String, (String, u64)> = lfs_with_sha
+                .into_iter()
+                .map(|(path, size, oid, _)| (path, (oid, size)))
+                .collect();
+
+            Ok(result)
+        }
     }
 
     /// Call the LFS batch endpoint to negotiate the transfer method.
@@ -540,9 +553,18 @@ impl<T: RepoType> HFRepository<T> {
             })
             .collect();
 
+        // Only advertise the xet transfer when the feature is compiled in. This
+        // steers the Hub's LFS negotiation toward `basic`/`multipart` for
+        // xet-off builds; a repo that still requires xet then has that surfaced
+        // as an explicit error at the upload seam below.
+        #[cfg(feature = "xet")]
+        let transfers = serde_json::json!(["basic", "multipart", "xet"]);
+        #[cfg(not(feature = "xet"))]
+        let transfers = serde_json::json!(["basic", "multipart"]);
+
         let body = serde_json::json!({
             "operation": "upload",
-            "transfers": ["basic", "multipart", "xet"],
+            "transfers": transfers,
             "objects": objects_payload,
             "hash_algo": "sha256",
             "ref": { "name": revision },

@@ -16,7 +16,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 bytes = "1"
 reqwest = { version = "0.13", features = ["json", "stream", "multipart", "query"] }
 hyper = "1"
-tokio = { version = "1", features = ["io-util"] }
+# `time` (retry backoff sleeps) and `macros` (`try_join!` in the snapshot
+# download path) are needed on all targets. `rt` (spawn_blocking in the
+# upload/cache paths) is native-only — see the per-target table below. These
+# were previously pulled in transitively via `hf-xet`; declare them directly so
+# the crate still builds with the `xet` feature disabled.
+tokio = { version = "1", features = ["io-util", "time", "macros"] }
 tokio-retry = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -29,13 +34,23 @@ base64 = "0.22"
 pathdiff = "0.2"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
-hf-xet = { git = "https://github.com/huggingface/xet-core", branch = "main" }
+hf-xet = { git = "https://github.com/huggingface/xet-core", branch = "main", optional = true }
 sha2 = "0.11"
 
 [features]
-default = []
+# `xet` is on by default so upgrading from 1.0 is a no-op for existing users.
+# Consumers that need to avoid the `hf-xet` dependency (and its transitive
+# tokio floor) opt out with `default-features = false`; xet-backed transfers
+# then fail with a descriptive `HFError::XetFeatureDisabled` at runtime.
+default = ["xet"]
 blocking = ["tokio/rt"]
 rustls-tls = ["reqwest/rustls"]
+xet = ["dep:hf-xet"]
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# `spawn_blocking` in the upload and cache paths requires the multi-threaded-
+# capable runtime feature. Native only — wasm has no `spawn_blocking`.
+tokio = { version = "1", features = ["rt"] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 # `tokio-retry` -> `rand` 0.8 -> `rand_core` 0.6 -> `getrandom` 0.2 transitively

@@ -26,7 +26,9 @@ use url::Url;
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, NotFoundContext};
-use crate::progress::{DownloadEvent, EmitEvent, Progress, UploadEvent};
+#[cfg(feature = "xet")]
+use crate::progress::UploadEvent;
+use crate::progress::{DownloadEvent, EmitEvent, Progress};
 use crate::repository::download::{HFByteStream, wrap_stream_with_progress};
 use crate::retry;
 
@@ -256,16 +258,21 @@ impl HFBucket {
             })?;
 
         if !xet_hash.is_empty() {
-            let stream = self.xet_download_stream(&xet_hash, file_size).await?;
-            progress.emit(DownloadEvent::Start {
-                total_files: 1,
-                total_bytes: file_size,
-            });
-            let boxed: HFByteStream = Box::new(Box::pin(stream));
-            let wrapped = wrap_stream_with_progress(boxed, progress, remote_path, file_size);
-            #[cfg(target_family = "wasm")]
-            let wrapped = crate::repository::download::buffer_wasm_stream(wrapped);
-            return Ok((Some(file_size), wrapped));
+            #[cfg(not(feature = "xet"))]
+            return Err(HFError::xet_feature_disabled(crate::error::XetOperation::StreamDownload));
+            #[cfg(feature = "xet")]
+            {
+                let stream = self.xet_download_stream(&xet_hash, file_size).await?;
+                progress.emit(DownloadEvent::Start {
+                    total_files: 1,
+                    total_bytes: file_size,
+                });
+                let boxed: HFByteStream = Box::new(Box::pin(stream));
+                let wrapped = wrap_stream_with_progress(boxed, progress, remote_path, file_size);
+                #[cfg(target_family = "wasm")]
+                let wrapped = crate::repository::download::buffer_wasm_stream(wrapped);
+                return Ok((Some(file_size), wrapped));
+            }
         }
 
         let mut url = Url::parse(&format!("{}/buckets/{}/resolve", self.hf_client.endpoint(), bucket_id))?;
@@ -545,53 +552,66 @@ impl HFBucket {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<()> {
-        if files.is_empty() {
-            return Ok(());
+        #[cfg(not(feature = "xet"))]
+        {
+            let _ = &progress;
+            if files.is_empty() {
+                Ok(())
+            } else {
+                Err(HFError::xet_feature_disabled(crate::error::XetOperation::Upload))
+            }
         }
 
-        let total_bytes: u64 = files
-            .iter()
-            .filter_map(|f| std::fs::metadata(&f.local).ok())
-            .map(|m| m.len())
-            .sum();
-        progress.emit(UploadEvent::Start {
-            total_files: files.len(),
-            total_bytes,
-        });
+        #[cfg(feature = "xet")]
+        {
+            if files.is_empty() {
+                return Ok(());
+            }
 
-        let xet_files: Vec<(String, crate::repository::AddSource)> = files
-            .iter()
-            .map(|f| (f.remote.clone(), crate::repository::AddSource::file(f.local.clone())))
-            .collect();
+            let total_bytes: u64 = files
+                .iter()
+                .filter_map(|f| std::fs::metadata(&f.local).ok())
+                .map(|m| m.len())
+                .sum();
+            progress.emit(UploadEvent::Start {
+                total_files: files.len(),
+                total_bytes,
+            });
 
-        let xet_infos = self.xet_upload(&xet_files, &progress).await?;
+            let xet_files: Vec<(String, crate::repository::AddSource)> = files
+                .iter()
+                .map(|f| (f.remote.clone(), crate::repository::AddSource::file(f.local.clone())))
+                .collect();
 
-        let add_files: Vec<BucketAddFile> = files
-            .iter()
-            .zip(xet_infos.iter())
-            .map(|(f, xet_info)| {
-                let metadata = std::fs::metadata(&f.local).ok();
-                let size = metadata.as_ref().map(|m| m.len()).or(xet_info.file_size).unwrap_or(0);
-                let mtime = metadata
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs());
+            let xet_infos = self.xet_upload(&xet_files, &progress).await?;
 
-                BucketAddFile {
-                    path: f.remote.clone(),
-                    xet_hash: xet_info.hash.clone(),
-                    size,
-                    mtime,
-                    content_type: None,
-                }
-            })
-            .collect();
+            let add_files: Vec<BucketAddFile> = files
+                .iter()
+                .zip(xet_infos.iter())
+                .map(|(f, xet_info)| {
+                    let metadata = std::fs::metadata(&f.local).ok();
+                    let size = metadata.as_ref().map(|m| m.len()).or(xet_info.file_size).unwrap_or(0);
+                    let mtime = metadata
+                        .as_ref()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs());
 
-        self.batch_operations().add_files(add_files).send().await?;
+                    BucketAddFile {
+                        path: f.remote.clone(),
+                        xet_hash: xet_info.hash.clone(),
+                        size,
+                        mtime,
+                        content_type: None,
+                    }
+                })
+                .collect();
 
-        progress.emit(UploadEvent::Complete);
-        Ok(())
+            self.batch_operations().add_files(add_files).send().await?;
+
+            progress.emit(UploadEvent::Complete);
+            Ok(())
+        }
     }
 
     /// Download files from the bucket to local paths.
@@ -615,60 +635,73 @@ impl HFBucket {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<()> {
-        if files.is_empty() {
-            return Ok(());
-        }
-
-        let remote_paths: Vec<String> = files.iter().map(|f| f.remote.clone()).collect();
-        let entries = self.get_paths_info().paths(remote_paths).send().await?;
-
-        let entry_map: std::collections::HashMap<String, BucketTreeEntry> = entries
-            .into_iter()
-            .map(|e| {
-                let path = match &e {
-                    BucketTreeEntry::File { path, .. } => path.clone(),
-                    BucketTreeEntry::Directory { path, .. } => path.clone(),
-                };
-                (path, e)
-            })
-            .collect();
-
-        let mut xet_batch_files = Vec::new();
-        let mut total_bytes: u64 = 0;
-
-        for f in &files {
-            match entry_map.get(&f.remote) {
-                Some(BucketTreeEntry::File { xet_hash, size, .. }) => {
-                    total_bytes += size;
-                    xet_batch_files.push(crate::xet::XetBatchFile {
-                        hash: xet_hash.clone(),
-                        file_size: *size,
-                        path: f.local.clone(),
-                        filename: f.remote.clone(),
-                    });
-                },
-                Some(BucketTreeEntry::Directory { path, .. }) => {
-                    return Err(HFError::InvalidParameter(format!("Cannot download directory entry: {path}")));
-                },
-                None => {
-                    return Err(HFError::EntryNotFound {
-                        path: f.remote.clone(),
-                        repo_id: self.bucket_id(),
-                        context: None,
-                    });
-                },
+        #[cfg(not(feature = "xet"))]
+        {
+            let _ = &progress;
+            if files.is_empty() {
+                Ok(())
+            } else {
+                Err(HFError::xet_feature_disabled(crate::error::XetOperation::BucketBatchDownload))
             }
         }
 
-        progress.emit(DownloadEvent::Start {
-            total_files: xet_batch_files.len(),
-            total_bytes,
-        });
+        #[cfg(feature = "xet")]
+        {
+            if files.is_empty() {
+                return Ok(());
+            }
 
-        self.xet_download_batch(&xet_batch_files, &progress).await?;
+            let remote_paths: Vec<String> = files.iter().map(|f| f.remote.clone()).collect();
+            let entries = self.get_paths_info().paths(remote_paths).send().await?;
 
-        progress.emit(DownloadEvent::Complete);
-        Ok(())
+            let entry_map: std::collections::HashMap<String, BucketTreeEntry> = entries
+                .into_iter()
+                .map(|e| {
+                    let path = match &e {
+                        BucketTreeEntry::File { path, .. } => path.clone(),
+                        BucketTreeEntry::Directory { path, .. } => path.clone(),
+                    };
+                    (path, e)
+                })
+                .collect();
+
+            let mut xet_batch_files = Vec::new();
+            let mut total_bytes: u64 = 0;
+
+            for f in &files {
+                match entry_map.get(&f.remote) {
+                    Some(BucketTreeEntry::File { xet_hash, size, .. }) => {
+                        total_bytes += size;
+                        xet_batch_files.push(crate::xet::XetBatchFile {
+                            hash: xet_hash.clone(),
+                            file_size: *size,
+                            path: f.local.clone(),
+                            filename: f.remote.clone(),
+                        });
+                    },
+                    Some(BucketTreeEntry::Directory { path, .. }) => {
+                        return Err(HFError::InvalidParameter(format!("Cannot download directory entry: {path}")));
+                    },
+                    None => {
+                        return Err(HFError::EntryNotFound {
+                            path: f.remote.clone(),
+                            repo_id: self.bucket_id(),
+                            context: None,
+                        });
+                    },
+                }
+            }
+
+            progress.emit(DownloadEvent::Start {
+                total_files: xet_batch_files.len(),
+                total_bytes,
+            });
+
+            self.xet_download_batch(&xet_batch_files, &progress).await?;
+
+            progress.emit(DownloadEvent::Complete);
+            Ok(())
+        }
     }
 }
 
@@ -680,42 +713,55 @@ impl HFBucket {
         uploads: Vec<(String, crate::repository::AddSource)>,
         progress: Option<Progress>,
     ) -> HFResult<()> {
-        if uploads.is_empty() {
-            return Ok(());
+        #[cfg(not(feature = "xet"))]
+        {
+            let _ = &progress;
+            if uploads.is_empty() {
+                Ok(())
+            } else {
+                Err(HFError::xet_feature_disabled(crate::error::XetOperation::Upload))
+            }
         }
 
-        let total_bytes: u64 = uploads
-            .iter()
-            .map(|(_, source)| match source {
-                crate::repository::AddSource::Bytes(b) => b.len() as u64,
-                crate::repository::AddSource::Stream(s) => s.size(),
-                #[cfg(not(target_family = "wasm"))]
-                crate::repository::AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
-            })
-            .sum();
-        progress.emit(UploadEvent::Start {
-            total_files: uploads.len(),
-            total_bytes,
-        });
+        #[cfg(feature = "xet")]
+        {
+            if uploads.is_empty() {
+                return Ok(());
+            }
 
-        let xet_infos = self.xet_upload(&uploads, &progress).await?;
+            let total_bytes: u64 = uploads
+                .iter()
+                .map(|(_, source)| match source {
+                    crate::repository::AddSource::Bytes(b) => b.len() as u64,
+                    crate::repository::AddSource::Stream(s) => s.size(),
+                    #[cfg(not(target_family = "wasm"))]
+                    crate::repository::AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+                })
+                .sum();
+            progress.emit(UploadEvent::Start {
+                total_files: uploads.len(),
+                total_bytes,
+            });
 
-        let add_files: Vec<BucketAddFile> = uploads
-            .iter()
-            .zip(xet_infos.iter())
-            .map(|((remote, _source), xet_info)| BucketAddFile {
-                path: remote.clone(),
-                xet_hash: xet_info.hash.clone(),
-                size: xet_info.file_size.unwrap_or(0),
-                mtime: None,
-                content_type: None,
-            })
-            .collect();
+            let xet_infos = self.xet_upload(&uploads, &progress).await?;
 
-        self.batch_operations().add_files(add_files).send().await?;
+            let add_files: Vec<BucketAddFile> = uploads
+                .iter()
+                .zip(xet_infos.iter())
+                .map(|((remote, _source), xet_info)| BucketAddFile {
+                    path: remote.clone(),
+                    xet_hash: xet_info.hash.clone(),
+                    size: xet_info.file_size.unwrap_or(0),
+                    mtime: None,
+                    content_type: None,
+                })
+                .collect();
 
-        progress.emit(UploadEvent::Complete);
-        Ok(())
+            self.batch_operations().add_files(add_files).send().await?;
+
+            progress.emit(UploadEvent::Complete);
+            Ok(())
+        }
     }
 }
 

@@ -26,7 +26,9 @@ use globset::{Glob, GlobMatcher};
 
 use crate::buckets::{BucketTreeEntry, BucketUpload, HFBucket};
 use crate::error::{HFError, HFResult};
-use crate::progress::{DownloadEvent, EmitEvent, Progress};
+use crate::progress::Progress;
+#[cfg(feature = "xet")]
+use crate::progress::{DownloadEvent, EmitEvent};
 
 /// Direction for a bucket sync operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +94,8 @@ pub struct BucketSyncPlan {
     pub operations: Vec<BucketSyncOperation>,
     /// Bucket tree entries for download operations, keyed by relative path.
     /// Used internally during execution to avoid re-fetching metadata.
+    /// Only read on the xet download path (bucket downloads require xet).
+    #[cfg_attr(not(feature = "xet"), allow(dead_code))]
     pub(crate) download_entries: HashMap<String, BucketTreeEntry>,
 }
 
@@ -643,48 +647,58 @@ impl HFBucket {
     }
 
     async fn execute_download_plan(&self, plan: &BucketSyncPlan, params: &BucketSyncParams) -> HFResult<()> {
-        let mut xet_batch_files = Vec::new();
-        let mut total_bytes: u64 = 0;
-
-        for op in plan.operations.iter().filter(|op| op.action == BucketSyncAction::Download) {
-            let entry = plan.download_entries.get(&op.path).ok_or_else(|| HFError::EntryNotFound {
-                path: op.path.clone(),
-                repo_id: self.bucket_id(),
-                context: None,
-            })?;
-
-            let local_path = params.local_path.join(&op.path);
-            if let Some(parent) = local_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            match entry {
-                BucketTreeEntry::File { xet_hash, size, .. } => {
-                    let remote_path = match &params.prefix {
-                        Some(prefix) => format!("{prefix}/{}", op.path),
-                        None => op.path.clone(),
-                    };
-                    total_bytes += size;
-                    xet_batch_files.push(crate::xet::XetBatchFile {
-                        hash: xet_hash.clone(),
-                        file_size: *size,
-                        path: local_path,
-                        filename: remote_path,
-                    });
-                },
-                BucketTreeEntry::Directory { path, .. } => {
-                    return Err(HFError::InvalidParameter(format!("Cannot download directory entry: {path}")));
-                },
+        #[cfg(not(feature = "xet"))]
+        {
+            if plan.operations.iter().any(|op| op.action == BucketSyncAction::Download) {
+                return Err(HFError::xet_feature_disabled(crate::error::XetOperation::BucketBatchDownload));
             }
         }
 
-        if !xet_batch_files.is_empty() {
-            params.progress.emit(DownloadEvent::Start {
-                total_files: xet_batch_files.len(),
-                total_bytes,
-            });
-            self.xet_download_batch(&xet_batch_files, &params.progress).await?;
-            params.progress.emit(DownloadEvent::Complete);
+        #[cfg(feature = "xet")]
+        {
+            let mut xet_batch_files = Vec::new();
+            let mut total_bytes: u64 = 0;
+
+            for op in plan.operations.iter().filter(|op| op.action == BucketSyncAction::Download) {
+                let entry = plan.download_entries.get(&op.path).ok_or_else(|| HFError::EntryNotFound {
+                    path: op.path.clone(),
+                    repo_id: self.bucket_id(),
+                    context: None,
+                })?;
+
+                let local_path = params.local_path.join(&op.path);
+                if let Some(parent) = local_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+
+                match entry {
+                    BucketTreeEntry::File { xet_hash, size, .. } => {
+                        let remote_path = match &params.prefix {
+                            Some(prefix) => format!("{prefix}/{}", op.path),
+                            None => op.path.clone(),
+                        };
+                        total_bytes += size;
+                        xet_batch_files.push(crate::xet::XetBatchFile {
+                            hash: xet_hash.clone(),
+                            file_size: *size,
+                            path: local_path,
+                            filename: remote_path,
+                        });
+                    },
+                    BucketTreeEntry::Directory { path, .. } => {
+                        return Err(HFError::InvalidParameter(format!("Cannot download directory entry: {path}")));
+                    },
+                }
+            }
+
+            if !xet_batch_files.is_empty() {
+                params.progress.emit(DownloadEvent::Start {
+                    total_files: xet_batch_files.len(),
+                    total_bytes,
+                });
+                self.xet_download_batch(&xet_batch_files, &params.progress).await?;
+                params.progress.emit(DownloadEvent::Complete);
+            }
         }
 
         let delete_paths: Vec<&str> = plan

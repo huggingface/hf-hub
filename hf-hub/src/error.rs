@@ -224,6 +224,23 @@ pub enum HFError {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
+    /// A transfer required the xet protocol, but this build of `hf-hub` was
+    /// compiled without the `xet` feature.
+    ///
+    /// The [`operation`](Self::XetFeatureDisabled::operation) field identifies
+    /// which xet step was requested. Enable the `xet` feature (on by default) to
+    /// perform xet-backed transfers, or use `default-features = false` builds
+    /// only against repositories/files that are not xet-backed.
+    #[error(
+        "This operation requires xet transfers, but hf-hub was built without the `xet` feature \
+         (operation: {operation}). Rebuild hf-hub with the `xet` feature enabled — it is on by \
+         default; if you set `default-features = false`, add `features = [\"xet\"]`."
+    )]
+    XetFeatureDisabled {
+        /// Which xet operation was requested but is unavailable.
+        operation: XetOperation,
+    },
+
     /// Hub responded with success but the response is missing data the client
     /// needs to proceed (e.g., an `ETag` or `X-Repo-Commit` header that should
     /// always be present, or a `304 Not Modified` without a corresponding
@@ -303,6 +320,14 @@ impl HFError {
             operation,
             source: Box::new(source),
         }
+    }
+
+    /// Construct an [`HFError::XetFeatureDisabled`] for the given operation.
+    ///
+    /// Used at the seams where a xet-backed transfer would otherwise be
+    /// dispatched, when the crate was built without the `xet` feature.
+    pub fn xet_feature_disabled(operation: XetOperation) -> Self {
+        HFError::XetFeatureDisabled { operation }
     }
 
     /// Construct a [`HFError::MalformedResponse`] without a known URL.

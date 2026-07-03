@@ -194,27 +194,39 @@ impl<T: RepoType> HFRepository<T> {
         let (xet_hash, file_size_hint) = self.resolve_xet_hash_and_size(revision, &params.filename).await?;
 
         if let Some(xet_hash) = xet_hash {
-            let file_size: u64 = file_size_hint.unwrap_or_else(|| {
-                tracing::warn!(url = %url, "missing file size for xet file, defaulting to 0");
-                0
-            });
+            #[cfg(not(feature = "xet"))]
+            {
+                let _ = (&xet_hash, &file_size_hint);
+                return Err(HFError::xet_feature_disabled(crate::error::XetOperation::StreamDownload));
+            }
+            #[cfg(feature = "xet")]
+            {
+                let file_size: u64 = file_size_hint.unwrap_or_else(|| {
+                    tracing::warn!(url = %url, "missing file size for xet file, defaulting to 0");
+                    0
+                });
 
-            let content_length = params.range.as_ref().map(|r| r.end.saturating_sub(r.start)).or(Some(file_size));
+                let content_length = params.range.as_ref().map(|r| r.end.saturating_sub(r.start)).or(Some(file_size));
 
-            let stream = self
-                .xet_download_stream(revision, &xet_hash, file_size, params.range.clone())
-                .await?;
+                let stream = self
+                    .xet_download_stream(revision, &xet_hash, file_size, params.range.clone())
+                    .await?;
 
-            let total_bytes = content_length.unwrap_or(0);
-            params.progress.emit(DownloadEvent::Start {
-                total_files: 1,
-                total_bytes,
-            });
-            let wrapped =
-                wrap_stream_with_progress(Box::new(Box::pin(stream)), params.progress, params.filename, total_bytes);
-            #[cfg(target_family = "wasm")]
-            let wrapped = buffer_wasm_stream(wrapped);
-            return Ok((content_length, wrapped));
+                let total_bytes = content_length.unwrap_or(0);
+                params.progress.emit(DownloadEvent::Start {
+                    total_files: 1,
+                    total_bytes,
+                });
+                let wrapped = wrap_stream_with_progress(
+                    Box::new(Box::pin(stream)),
+                    params.progress,
+                    params.filename,
+                    total_bytes,
+                );
+                #[cfg(target_family = "wasm")]
+                let wrapped = buffer_wasm_stream(wrapped);
+                return Ok((content_length, wrapped));
+            }
         }
 
         let range_header = params
@@ -300,10 +312,15 @@ impl<T: RepoType> HFRepository<T> {
         });
 
         if has_xet_hash {
-            let local_dir = params.local_dir.as_ref().unwrap();
-            return self
-                .xet_download_to_local_dir(revision, &params.filename, local_dir, &head_response, &params.progress)
-                .await;
+            #[cfg(not(feature = "xet"))]
+            return Err(HFError::xet_feature_disabled(crate::error::XetOperation::Download));
+            #[cfg(feature = "xet")]
+            {
+                let local_dir = params.local_dir.as_ref().unwrap();
+                return self
+                    .xet_download_to_local_dir(revision, &params.filename, local_dir, &head_response, &params.progress)
+                    .await;
+            }
         }
 
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -527,20 +544,33 @@ impl<T: RepoType> HFRepository<T> {
         });
 
         if has_xet_hash {
-            let xet_hash =
-                xet_hash.ok_or_else(|| HFError::malformed_response_at("missing X-Xet-Hash header", url.clone()))?;
-            let blob = cache::blob_path(cache_dir, repo_folder, &etag);
-            if !blob.exists() || force_download {
-                if let Some(parent) = blob.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
+            #[cfg(not(feature = "xet"))]
+            return Err(HFError::xet_feature_disabled(crate::error::XetOperation::Download));
+            #[cfg(feature = "xet")]
+            {
+                let xet_hash =
+                    xet_hash.ok_or_else(|| HFError::malformed_response_at("missing X-Xet-Hash header", url.clone()))?;
+                let blob = cache::blob_path(cache_dir, repo_folder, &etag);
+                if !blob.exists() || force_download {
+                    if let Some(parent) = blob.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
 
-                self.xet_download_to_blob(revision, &params.filename, &xet_hash, file_size, &blob, &params.progress)
+                    self.xet_download_to_blob(
+                        revision,
+                        &params.filename,
+                        &xet_hash,
+                        file_size,
+                        &blob,
+                        &params.progress,
+                    )
                     .await?;
-            }
+                }
 
-            return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await;
+                return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag)
+                    .await;
+            }
         }
 
         let blob = cache::blob_path(cache_dir, repo_folder, &etag);
@@ -800,17 +830,22 @@ impl<T: RepoType> HFRepository<T> {
                 if xet_metas.is_empty() {
                     return Ok::<_, HFError>(());
                 }
-                let batch_files: Vec<crate::xet::XetBatchFile> = xet_metas
-                    .iter()
-                    .map(|m| crate::xet::XetBatchFile {
-                        hash: m.xet_hash.as_ref().unwrap().clone(),
-                        file_size: m.file_size,
-                        path: local_dir.join(&m.filename),
-                        filename: m.filename.clone(),
-                    })
-                    .collect();
-                self.xet_download_batch(&commit_hash, &batch_files, &params.progress).await?;
-                Ok(())
+                #[cfg(not(feature = "xet"))]
+                return Err(HFError::xet_feature_disabled(crate::error::XetOperation::BatchDownload));
+                #[cfg(feature = "xet")]
+                {
+                    let batch_files: Vec<crate::xet::XetBatchFile> = xet_metas
+                        .iter()
+                        .map(|m| crate::xet::XetBatchFile {
+                            hash: m.xet_hash.as_ref().unwrap().clone(),
+                            file_size: m.file_size,
+                            path: local_dir.join(&m.filename),
+                            filename: m.filename.clone(),
+                        })
+                        .collect();
+                    self.xet_download_batch(&commit_hash, &batch_files, &params.progress).await?;
+                    Ok(())
+                }
             };
 
             let non_xet_dl_params = build_download_params(
@@ -860,25 +895,31 @@ impl<T: RepoType> HFRepository<T> {
             if xet_metas.is_empty() {
                 return Ok::<_, HFError>(());
             }
-            let mut locks = Vec::with_capacity(xet_metas.len());
-            for m in &xet_metas {
-                locks.push(cache::acquire_lock(cache_dir, &repo_folder, &m.etag).await?);
+            #[cfg(not(feature = "xet"))]
+            return Err(HFError::xet_feature_disabled(crate::error::XetOperation::BatchDownload));
+            #[cfg(feature = "xet")]
+            {
+                let mut locks = Vec::with_capacity(xet_metas.len());
+                for m in &xet_metas {
+                    locks.push(cache::acquire_lock(cache_dir, &repo_folder, &m.etag).await?);
+                }
+                let batch_files: Vec<crate::xet::XetBatchFile> = xet_metas
+                    .iter()
+                    .map(|m| crate::xet::XetBatchFile {
+                        hash: m.xet_hash.as_ref().unwrap().clone(),
+                        file_size: m.file_size,
+                        path: cache::blob_path(cache_dir, &repo_folder, &m.etag),
+                        filename: m.filename.clone(),
+                    })
+                    .collect();
+                self.xet_download_batch(&commit_hash, &batch_files, &params.progress).await?;
+                for m in &xet_metas {
+                    cache::create_pointer_symlink(cache_dir, &repo_folder, &m.commit_hash, &m.filename, &m.etag)
+                        .await?;
+                }
+                drop(locks);
+                Ok(())
             }
-            let batch_files: Vec<crate::xet::XetBatchFile> = xet_metas
-                .iter()
-                .map(|m| crate::xet::XetBatchFile {
-                    hash: m.xet_hash.as_ref().unwrap().clone(),
-                    file_size: m.file_size,
-                    path: cache::blob_path(cache_dir, &repo_folder, &m.etag),
-                    filename: m.filename.clone(),
-                })
-                .collect();
-            self.xet_download_batch(&commit_hash, &batch_files, &params.progress).await?;
-            for m in &xet_metas {
-                cache::create_pointer_symlink(cache_dir, &repo_folder, &m.commit_hash, &m.filename, &m.etag).await?;
-            }
-            drop(locks);
-            Ok(())
         };
 
         let non_xet_dl_params = build_download_params(

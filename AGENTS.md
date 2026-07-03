@@ -80,9 +80,12 @@ browser tests and runtime build flags live under `wasm/`.
 
 | Feature | Default? | Notes |
 |---------|----------|-------|
+| `xet` | **on** | Enables Xet high-performance transfers via the optional `hf-xet` dependency. Gates `src/xet.rs`, `HFClient::xet_session`/`xet_state`, and every xet call site. With it off, xet-backed transfers fail with `HFError::XetFeatureDisabled` (no silent HTTP fallback), the `hf-xet` dep is dropped, and upload negotiation advertises only `basic`/`multipart`. Consumers that need to avoid `hf-xet` (e.g. to escape its `tokio` floor) build with `default-features = false`. |
 | `blocking` | off | Synchronous `*Sync` wrappers in `blocking.rs`. Pulls in `tokio/rt`. Native only. |
 | `rustls-tls` | off | Force the rustls TLS backend on reqwest's native build. No effect on wasm. |
-| `default` | (empty) | No features by default. |
+| `default` | `["xet"]` | Xet on by default so upgrading from 1.0 is non-breaking. |
+
+When adding code that dispatches into `src/xet.rs`, gate the seam with `#[cfg(feature = "xet")]` and add a `#[cfg(not(feature = "xet"))]` arm returning `HFError::xet_feature_disabled(XetOperation::…)`. Any tokio runtime feature relied on by non-xet code must be declared directly in `hf-hub/Cargo.toml` (it must not be assumed to leak in transitively via `hf-xet`).
 
 ### Method builders (bon)
 
@@ -200,9 +203,10 @@ hf-hub/
 │   │   │                           #   runtime/hardware/secrets/variables/duplicate
 │   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
 │   │   │                           #   user+org lookup, followers/following
-│   │   ├── xet.rs                  # Xet component (pub(crate)): XetConnectionInfo + xet transfer
-│   │   │                           #   plumbing. Most methods are native-only (cached session, fs);
-│   │   │                           #   the wasm `xet_download_stream` builds a fresh session per call
+│   │   ├── xet.rs                  # Xet component (pub(crate), gated on `feature = "xet"`):
+│   │   │                           #   XetConnectionInfo + xet transfer plumbing. Most methods are
+│   │   │                           #   native-only (cached session, fs); the wasm `xet_download_stream`
+│   │   │                           #   builds a fresh session per call
 │   │   ├── buckets/
 │   │   │   ├── mod.rs              # HFBucket handle, bucket types, create/list/tree/batch/download
 │   │   │   └── sync.rs             # BucketSync* types, HFBucket::sync — plan computation and execution

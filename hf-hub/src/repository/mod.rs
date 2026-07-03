@@ -38,6 +38,7 @@ pub use files::{
     RepoTreeEntry, SourceByteStream, StreamFactory, StreamSource,
 };
 #[cfg(not(target_family = "wasm"))]
+#[cfg(feature = "xet")]
 pub(crate) use files::{extract_file_size, extract_xet_hash};
 use futures::Stream;
 pub use repo_type::{RepoType, RepoTypeAny, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};

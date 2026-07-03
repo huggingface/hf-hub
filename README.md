@@ -15,7 +15,7 @@ Both an **async** interface (`HFClient`, on by default) and a **synchronous** in
 - **User and organization info** — whoami, user profiles, organization details, followers
 - **Streaming pagination** — async list endpoints return `impl Stream<Item = Result<T>>` for lazy, memory-efficient iteration; blocking counterparts collect into `Vec<T>`
 - **Bucket operations** — create, delete, list, and move buckets; upload, download, and delete files within buckets
-- **Xet high-performance transfers** — support for Hugging Face's Xet storage backend
+- **Xet high-performance transfers** — support for Hugging Face's Xet storage backend (via the default-on `xet` feature)
 - **Async or blocking** — use `HFClient` with your own tokio runtime, or `HFClientSync` for synchronous callers (requires the `blocking` feature)
 
 ## Installation
@@ -33,6 +33,28 @@ To use the synchronous interface, enable the `blocking` feature:
 [dependencies]
 hf-hub = { version = "1.0.0", features = ["blocking"] }
 ```
+
+### Cargo features
+
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `xet` | ✅ | [Xet](https://huggingface.co/docs/hub/storage-backends) high-performance, chunk-deduplicated transfers via the `hf-xet` dependency. |
+| `blocking` | | Synchronous `*Sync` handles backed by an internal tokio runtime. |
+| `rustls-tls` | | Force the rustls TLS backend for reqwest's native build. |
+
+The `xet` feature is on by default. If you only download metadata or small,
+git-stored files (e.g. `config.json`, `tokenizer.json`), you can drop the
+`hf-xet` dependency — and its heavier transitive requirements — by disabling
+default features:
+
+```toml
+[dependencies]
+hf-hub = { version = "1.0.0", default-features = false }
+```
+
+With `xet` disabled, any transfer that would use Xet fails with
+`HFError::XetFeatureDisabled` rather than silently falling back to a slower
+path; non-xet-backed files continue to download over plain HTTP.
 
 ## CLI Installation
 

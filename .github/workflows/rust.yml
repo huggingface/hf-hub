@@ -53,6 +53,12 @@ jobs:
       - name: Clippy (all features)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Clippy (no default features — xet disabled)
+        run: cargo clippy -p hf-hub --all-targets --no-default-features -- -D warnings
+
+      - name: Clippy (blocking without xet)
+        run: cargo clippy -p hf-hub --all-targets --no-default-features --features blocking -- -D warnings
+
   build-and-test:
     name: Build & Test
     runs-on: ${{ matrix.runs-on }}

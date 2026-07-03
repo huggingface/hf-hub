@@ -36,7 +36,7 @@
 //! - **Spaces** — runtime, hardware, secrets, variables, pause/restart.
 //! - **Buckets** — namespaced storage buckets, tree listings, and bucket sync plans.
 //! - **Xet transfers** — high-performance chunk-deduplicated uploads and downloads integrated transparently into the
-//!   file APIs.
+//!   file APIs (behind the default-on `xet` feature).
 //! - **Optional blocking API** — synchronous counterparts to every async handle when the `blocking` feature is enabled.
 //!
 //! ## Creating a client
@@ -184,6 +184,11 @@
 //!
 //! ## Cargo features
 //!
+//! - `xet` — **on by default.** Enables [Xet](https://huggingface.co/docs/hub/storage-backends) high-performance,
+//!   chunk-deduplicated transfers via the `hf-xet` dependency. Disable with `default-features = false` to drop `hf-xet`
+//!   (and its transitive requirements, such as a newer `tokio` floor) when you only touch metadata or non-xet-backed
+//!   files. With the feature off, any transfer that would use xet fails with [`HFError::XetFeatureDisabled`] rather
+//!   than silently falling back to a slower path.
 //! - `blocking` — enables the synchronous `*Sync` handles.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -211,6 +216,7 @@ pub mod progress;
 pub mod repository;
 pub mod spaces;
 pub mod users;
+#[cfg(feature = "xet")]
 pub(crate) mod xet;
 
 #[cfg(all(feature = "blocking", not(target_family = "wasm")))]
