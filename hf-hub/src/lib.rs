@@ -38,6 +38,8 @@
 //! - **Xet transfers** — high-performance chunk-deduplicated uploads and downloads integrated transparently into the
 //!   file APIs.
 //! - **Optional blocking API** — synchronous counterparts to every async handle when the `blocking` feature is enabled.
+//! - **Optional progress bars** — a ready-made terminal progress renderer
+//!   ([`IndicatifProgress`](crate::progress::IndicatifProgress)) when the `indicatif` feature is enabled.
 //!
 //! ## Creating a client
 //!
@@ -185,6 +187,8 @@
 //! ## Cargo features
 //!
 //! - `blocking` — enables the synchronous `*Sync` handles.
+//! - `indicatif` — ships the built-in [`IndicatifProgress`](crate::progress::IndicatifProgress) terminal progress
+//!   handler. Off by default; native only (no effect on wasm).
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // With the fs/tokio-dependent modules cfg-gated out on wasm, many shared

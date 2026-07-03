@@ -4,10 +4,9 @@ use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
 use hf_hub::buckets::sync::{BucketSyncAction, BucketSyncDirection};
-use hf_hub::progress::Progress;
+use hf_hub::progress::{IndicatifProgress, Progress};
 
 use crate::output::CommandResult;
-use crate::progress::CliProgressHandler;
 
 #[derive(ClapArgs)]
 pub struct Args {
@@ -113,7 +112,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
     let handler: Option<Progress> = if args.quiet {
         None
     } else {
-        multi.map(|multi| CliProgressHandler::new(multi).into())
+        multi.map(|multi| IndicatifProgress::with_multi(multi).into())
     };
 
     let bucket = client.bucket(&bucket_ref.namespace, &bucket_ref.bucket_name);

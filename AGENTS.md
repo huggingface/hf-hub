@@ -82,6 +82,7 @@ browser tests and runtime build flags live under `wasm/`.
 |---------|----------|-------|
 | `blocking` | off | Synchronous `*Sync` wrappers in `blocking.rs`. Pulls in `tokio/rt`. Native only. |
 | `rustls-tls` | off | Force the rustls TLS backend on reqwest's native build. No effect on wasm. |
+| `indicatif` | off | Built-in `IndicatifProgress` terminal progress handler in `progress/indicatif_handler.rs`. Optional `indicatif` dep, declared under the non-wasm target table; native only (enabling on wasm is a no-op). |
 | `default` | (empty) | No features by default. |
 
 ### Method builders (bon)

@@ -36,6 +36,12 @@ sha2 = "0.11"
 default = []
 blocking = ["tokio/rt"]
 rustls-tls = ["reqwest/rustls"]
+# `indicatif` is an optional dependency; its implicit feature ships the built-in
+# `IndicatifProgress` handler. Native only — the dependency is declared under the
+# non-wasm target table below, so enabling the feature on wasm is a no-op.
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+indicatif = { version = "0.18", optional = true }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 # `tokio-retry` -> `rand` 0.8 -> `rand_core` 0.6 -> `getrandom` 0.2 transitively

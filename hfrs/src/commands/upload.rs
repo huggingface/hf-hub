@@ -2,14 +2,13 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::Args as ClapArgs;
-use hf_hub::progress::Progress;
+use hf_hub::progress::{IndicatifProgress, Progress};
 use hf_hub::repository::AddSource;
 use hf_hub::{HFClient, HFRepository, RepoTypeAny};
 use tracing::info;
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
-use crate::progress::CliProgressHandler;
 
 /// Upload files to the Hub
 #[derive(ClapArgs)]
@@ -70,7 +69,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
     let handler: Option<Progress> = if args.quiet {
         None
     } else {
-        multi.map(|multi| CliProgressHandler::new(multi).into())
+        multi.map(|multi| IndicatifProgress::with_multi(multi).into())
     };
 
     let (owner, name) = match args.repo_id.split_once('/') {

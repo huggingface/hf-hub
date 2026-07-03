@@ -3,11 +3,10 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Args as ClapArgs;
 use hf_hub::HFClient;
-use hf_hub::progress::Progress;
+use hf_hub::progress::{IndicatifProgress, Progress};
 
 use crate::cli::RepoTypeArg;
 use crate::output::CommandResult;
-use crate::progress::CliProgressHandler;
 
 /// Download files from the Hub
 #[derive(ClapArgs)]
@@ -55,7 +54,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
     let handler: Option<Progress> = if args.quiet {
         None
     } else {
-        multi.map(|multi| CliProgressHandler::new(multi).into())
+        multi.map(|multi| IndicatifProgress::with_multi(multi).into())
     };
 
     let (owner, name) = match args.repo_id.split_once('/') {

@@ -6,7 +6,7 @@ description = "Command-line interface for the Hugging Face Hub"
 license = "Apache-2.0"
 
 [dependencies]
-hf-hub = { path = "../hf-hub" }
+hf-hub = { path = "../hf-hub", features = ["indicatif"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 clap = { version = "4", features = ["derive", "env", "color"] }
 indicatif = "0.18"

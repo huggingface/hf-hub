@@ -95,6 +95,13 @@
 
 use std::sync::Arc;
 
+#[cfg(all(feature = "indicatif", not(target_family = "wasm")))]
+#[cfg_attr(docsrs, doc(cfg(feature = "indicatif")))]
+mod indicatif_handler;
+#[cfg(all(feature = "indicatif", not(target_family = "wasm")))]
+#[cfg_attr(docsrs, doc(cfg(feature = "indicatif")))]
+pub use indicatif_handler::IndicatifProgress;
+
 /// Receives progress updates from long-running upload and download operations.
 ///
 /// Register a handler by wrapping it in [`Progress`] and passing it to the

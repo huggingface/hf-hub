@@ -1130,6 +1130,7 @@ dependencies = [
  "globset",
  "hf-xet",
  "hyper",
+ "indicatif",
  "pathdiff",
  "reqwest",
  "serde",
