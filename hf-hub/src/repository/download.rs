@@ -686,11 +686,12 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let repo_path_ref = &repo_path;
         let commit_hash_ref = &commit_hash;
-        let head_futs = filenames.iter().map(|filename| {
-                let auth = self.hf_client.auth_headers();
-                let filename = filename.clone();
-                let repo_folder_ref = &repo_folder;
-                async move {
+        let mut head_futs = Vec::with_capacity(filenames.len());
+        for filename in &filenames {
+            let auth = self.hf_client.auth_headers();
+            let filename = filename.clone();
+            let repo_folder_ref = &repo_folder;
+            head_futs.push(async move {
                     let url = self
                         .hf_client
                         .download_url(self.repo_type.url_prefix(), repo_path_ref, commit_hash_ref, &filename)?;
@@ -735,8 +736,8 @@ impl<T: RepoType> HFRepository<T> {
                         file_size,
                         location,
                     }))
-                }
             });
+        }
 
         let file_metas: Vec<FileMetadataInfo> = futures::stream::iter(head_futs)
             .buffer_unordered(max_workers)
@@ -975,7 +976,11 @@ async fn download_concurrently<T: RepoType>(
     params: &[DownloadFileParams],
     max_workers: usize,
 ) -> HFResult<Vec<PathBuf>> {
-    futures::stream::iter(params.iter().map(|p| api.download_file_inner(p)))
+    let mut download_futs = Vec::with_capacity(params.len());
+    for file_params in params {
+        download_futs.push(api.download_file_inner(file_params));
+    }
+    futures::stream::iter(download_futs)
         .buffer_unordered(max_workers)
         .try_collect()
         .await
@@ -1147,14 +1152,14 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        self.download_file_impl(DownloadFileParams {
+        Box::pin(self.download_file_impl(DownloadFileParams {
             filename,
             local_dir,
             revision,
             force_download,
             local_files_only,
             progress,
-        })
+        }))
         .await
     }
 
@@ -1194,12 +1199,12 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<(Option<u64>, HFByteStream)> {
-        self.download_file_stream_impl(DownloadFileStreamParams {
+        Box::pin(self.download_file_stream_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
             progress,
-        })
+        }))
         .await
     }
 
@@ -1238,12 +1243,12 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
-        self.download_file_to_bytes_impl(DownloadFileStreamParams {
+        Box::pin(self.download_file_to_bytes_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
             progress,
-        })
+        }))
         .await
     }
 
@@ -1296,7 +1301,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        self.snapshot_download_impl(SnapshotDownloadParams {
+        Box::pin(self.snapshot_download_impl(SnapshotDownloadParams {
             revision,
             allow_patterns,
             ignore_patterns,
@@ -1305,7 +1310,7 @@ impl<T: RepoType> HFRepository<T> {
             local_files_only,
             max_workers,
             progress,
-        })
+        }))
         .await
     }
 }
