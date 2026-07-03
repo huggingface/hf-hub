@@ -882,8 +882,9 @@ impl crate::blocking::HFBucketSync {
         #[builder(default)] verbose: bool,
         #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<BucketSyncPlan> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .sync()
                 .local_path(local_path)
                 .direction(direction)
@@ -897,8 +898,9 @@ impl crate::blocking::HFBucketSync {
                 .exclude(exclude)
                 .verbose(verbose)
                 .maybe_progress(progress)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 }
 

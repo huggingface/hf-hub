@@ -1444,9 +1444,9 @@ impl crate::blocking::HFClientSync {
         limit: Option<usize>,
     ) -> HFResult<Vec<ModelInfo>> {
         use futures::StreamExt;
-        self.runtime.block_on(async move {
-            let stream = self
-                .inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            let stream = inner
                 .list_models()
                 .maybe_search(search)
                 .maybe_author(author)
@@ -1480,9 +1480,9 @@ impl crate::blocking::HFClientSync {
         limit: Option<usize>,
     ) -> HFResult<Vec<DatasetInfo>> {
         use futures::StreamExt;
-        self.runtime.block_on(async move {
-            let stream = self
-                .inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            let stream = inner
                 .list_datasets()
                 .maybe_search(search)
                 .maybe_author(author)
@@ -1513,9 +1513,9 @@ impl crate::blocking::HFClientSync {
         limit: Option<usize>,
     ) -> HFResult<Vec<SpaceInfo>> {
         use futures::StreamExt;
-        self.runtime.block_on(async move {
-            let stream = self
-                .inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            let stream = inner
                 .list_spaces()
                 .maybe_search(search)
                 .maybe_author(author)
@@ -1544,16 +1544,18 @@ impl crate::blocking::HFClientSync {
         #[builder(default)] exist_ok: bool,
         #[builder(into)] space_sdk: Option<String>,
     ) -> HFResult<RepoUrl> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .create_repository()
                 .repo_id(repo_id)
                 .repo_type(repo_type)
                 .maybe_private(private)
                 .exist_ok(exist_ok)
                 .maybe_space_sdk(space_sdk)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFClient::delete_repository`]. See the async method for parameters and
@@ -1565,14 +1567,16 @@ impl crate::blocking::HFClientSync {
         repo_type: impl RepoType,
         #[builder(default)] missing_ok: bool,
     ) -> HFResult<()> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .delete_repository()
                 .repo_id(repo_id)
                 .repo_type(repo_type)
                 .missing_ok(missing_ok)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFClient::move_repository`]. See the async method for parameters and
@@ -1584,14 +1588,16 @@ impl crate::blocking::HFClientSync {
         #[builder(into)] to_id: String,
         repo_type: impl RepoType,
     ) -> HFResult<RepoUrl> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .move_repository()
                 .from_id(from_id)
                 .to_id(to_id)
                 .repo_type(repo_type)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 }
 
@@ -1601,14 +1607,17 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::exists`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn exists(&self) -> HFResult<bool> {
-        self.runtime.block_on(self.inner.exists().send())
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move { inner.exists().send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::revision_exists`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn revision_exists(&self, #[builder(into)] revision: String) -> HFResult<bool> {
-        self.runtime.block_on(self.inner.revision_exists().revision(revision).send())
+        let inner = self.inner.clone();
+        self.runtime
+            .run_future(async move { inner.revision_exists().revision(revision).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::file_exists`]. See the async method for parameters
@@ -1619,8 +1628,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] filename: String,
         #[builder(into)] revision: Option<String>,
     ) -> HFResult<bool> {
+        let inner = self.inner.clone();
         self.runtime
-            .block_on(self.inner.file_exists().filename(filename).maybe_revision(revision).send())
+            .run_future(async move { inner.file_exists().filename(filename).maybe_revision(revision).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::update_settings`]. See the async method for
@@ -1634,16 +1644,18 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         discussions_disabled: Option<bool>,
         gated_notifications: Option<GatedNotifications>,
     ) -> HFResult<()> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .update_settings()
                 .maybe_private(private)
                 .maybe_gated(gated)
                 .maybe_description(description)
                 .maybe_discussions_disabled(discussions_disabled)
                 .maybe_gated_notifications(gated_notifications)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 }
 
@@ -1664,8 +1676,9 @@ impl crate::blocking::HFRepositorySync<RepoTypeModel> {
         derive(Debug, Clone),
     )]
     pub fn info(&self, #[builder(into)] revision: Option<String>, expand: Option<Vec<String>>) -> HFResult<ModelInfo> {
+        let inner = self.inner.clone();
         self.runtime
-            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
+            .run_future(async move { inner.info().maybe_revision(revision).maybe_expand(expand).send().await })
     }
 }
 
@@ -1684,8 +1697,9 @@ impl crate::blocking::HFRepositorySync<RepoTypeDataset> {
         #[builder(into)] revision: Option<String>,
         expand: Option<Vec<String>>,
     ) -> HFResult<DatasetInfo> {
+        let inner = self.inner.clone();
         self.runtime
-            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
+            .run_future(async move { inner.info().maybe_revision(revision).maybe_expand(expand).send().await })
     }
 }
 
@@ -1700,8 +1714,9 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
         derive(Debug, Clone),
     )]
     pub fn info(&self, #[builder(into)] revision: Option<String>, expand: Option<Vec<String>>) -> HFResult<SpaceInfo> {
+        let inner = self.inner.clone();
         self.runtime
-            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
+            .run_future(async move { inner.info().maybe_revision(revision).maybe_expand(expand).send().await })
     }
 }
 
@@ -1716,8 +1731,9 @@ impl crate::blocking::HFRepositorySync<RepoTypeKernel> {
         derive(Debug, Clone),
     )]
     pub fn info(&self, #[builder(into)] revision: Option<String>, expand: Option<Vec<String>>) -> HFResult<KernelInfo> {
+        let inner = self.inner.clone();
         self.runtime
-            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
+            .run_future(async move { inner.info().maybe_revision(revision).maybe_expand(expand).send().await })
     }
 }
 

@@ -268,22 +268,26 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::whoami`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn whoami(&self) -> HFResult<User> {
-        self.runtime.block_on(self.inner.whoami().send())
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move { inner.whoami().send().await })
     }
 
     /// Blocking counterpart of [`HFClient::user_overview`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn user_overview(&self, #[builder(into)] username: String) -> HFResult<User> {
-        self.runtime.block_on(self.inner.user_overview().username(username).send())
+        let inner = self.inner.clone();
+        self.runtime
+            .run_future(async move { inner.user_overview().username(username).send().await })
     }
 
     /// Blocking counterpart of [`HFClient::organization_overview`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn organization_overview(&self, #[builder(into)] organization: String) -> HFResult<Organization> {
+        let inner = self.inner.clone();
         self.runtime
-            .block_on(self.inner.organization_overview().organization(organization).send())
+            .run_future(async move { inner.organization_overview().organization(organization).send().await })
     }
 
     /// Blocking counterpart of [`HFClient::list_user_followers`]. Collects the stream into a
@@ -291,8 +295,9 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_user_followers(&self, #[builder(into)] username: String, limit: Option<usize>) -> HFResult<Vec<User>> {
         use futures::StreamExt;
-        self.runtime.block_on(async move {
-            let stream = self.inner.list_user_followers().username(username).maybe_limit(limit).send()?;
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            let stream = inner.list_user_followers().username(username).maybe_limit(limit).send()?;
             futures::pin_mut!(stream);
             let mut items = Vec::new();
             while let Some(item) = stream.next().await {
@@ -307,8 +312,9 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_user_following(&self, #[builder(into)] username: String, limit: Option<usize>) -> HFResult<Vec<User>> {
         use futures::StreamExt;
-        self.runtime.block_on(async move {
-            let stream = self.inner.list_user_following().username(username).maybe_limit(limit).send()?;
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            let stream = inner.list_user_following().username(username).maybe_limit(limit).send()?;
             futures::pin_mut!(stream);
             let mut items = Vec::new();
             while let Some(item) = stream.next().await {
@@ -327,9 +333,9 @@ impl crate::blocking::HFClientSync {
         limit: Option<usize>,
     ) -> HFResult<Vec<User>> {
         use futures::StreamExt;
-        self.runtime.block_on(async move {
-            let stream = self
-                .inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            let stream = inner
                 .list_organization_members()
                 .organization(organization)
                 .maybe_limit(limit)

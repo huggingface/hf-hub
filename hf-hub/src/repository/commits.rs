@@ -470,8 +470,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] revision: Option<String>,
         limit: Option<usize>,
     ) -> HFResult<Vec<GitCommitInfo>> {
-        self.runtime.block_on(async move {
-            let stream = self.inner.list_commits().maybe_revision(revision).maybe_limit(limit).send()?;
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            let stream = inner.list_commits().maybe_revision(revision).maybe_limit(limit).send()?;
             futures::pin_mut!(stream);
             let mut items = Vec::new();
             while let Some(item) = stream.next().await {
@@ -485,30 +486,36 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_refs(&self, #[builder(default)] include_pull_requests: bool) -> HFResult<GitRefs> {
+        let inner = self.inner.clone();
         self.runtime
-            .block_on(self.inner.list_refs().include_pull_requests(include_pull_requests).send())
+            .run_future(async move { inner.list_refs().include_pull_requests(include_pull_requests).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::get_commit_diff`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn get_commit_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
-        self.runtime.block_on(self.inner.get_commit_diff().compare(compare).send())
+        let inner = self.inner.clone();
+        self.runtime
+            .run_future(async move { inner.get_commit_diff().compare(compare).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::get_raw_diff`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn get_raw_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
-        self.runtime.block_on(self.inner.get_raw_diff().compare(compare).send())
+        let inner = self.inner.clone();
+        self.runtime
+            .run_future(async move { inner.get_raw_diff().compare(compare).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::get_raw_diff_stream`]. Collects the parsed stream
     /// into a `Vec<HFFileDiff>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn get_raw_diff_stream(&self, #[builder(into)] compare: String) -> HFResult<Vec<HFFileDiff>> {
-        self.runtime.block_on(async move {
-            let stream = self.inner.get_raw_diff_stream().compare(compare).send().await?;
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            let stream = inner.get_raw_diff_stream().compare(compare).send().await?;
             futures::pin_mut!(stream);
             let mut items = Vec::new();
             while let Some(item) = stream.next().await {
@@ -526,15 +533,18 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] branch: String,
         #[builder(into)] revision: Option<String>,
     ) -> HFResult<()> {
+        let inner = self.inner.clone();
         self.runtime
-            .block_on(self.inner.create_branch().branch(branch).maybe_revision(revision).send())
+            .run_future(async move { inner.create_branch().branch(branch).maybe_revision(revision).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::delete_branch`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_branch(&self, #[builder(into)] branch: String) -> HFResult<()> {
-        self.runtime.block_on(self.inner.delete_branch().branch(branch).send())
+        let inner = self.inner.clone();
+        self.runtime
+            .run_future(async move { inner.delete_branch().branch(branch).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::create_tag`]. See the async method for parameters
@@ -546,21 +556,24 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] revision: Option<String>,
         #[builder(into)] message: Option<String>,
     ) -> HFResult<()> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .create_tag()
                 .tag(tag)
                 .maybe_revision(revision)
                 .maybe_message(message)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::delete_tag`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_tag(&self, #[builder(into)] tag: String) -> HFResult<()> {
-        self.runtime.block_on(self.inner.delete_tag().tag(tag).send())
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move { inner.delete_tag().tag(tag).send().await })
     }
 }
 

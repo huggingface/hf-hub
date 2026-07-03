@@ -129,6 +129,7 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::scan_cache`].
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn scan_cache(&self) -> HFResult<HFCacheInfo> {
-        self.runtime.block_on(self.inner.scan_cache().send())
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move { inner.scan_cache().send().await })
     }
 }

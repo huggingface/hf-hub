@@ -200,9 +200,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(default)] expand: bool,
         limit: Option<usize>,
     ) -> HFResult<Vec<RepoTreeEntry>> {
-        self.runtime.block_on(async move {
-            let stream = self
-                .inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            let stream = inner
                 .list_tree()
                 .maybe_revision(revision)
                 .maybe_path_in_repo(path_in_repo)
@@ -227,8 +227,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         paths: Vec<String>,
         #[builder(into)] revision: Option<String>,
     ) -> HFResult<Vec<RepoTreeEntry>> {
+        let inner = self.inner.clone();
         self.runtime
-            .block_on(self.inner.get_paths_info().paths(paths).maybe_revision(revision).send())
+            .run_future(async move { inner.get_paths_info().paths(paths).maybe_revision(revision).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::get_file_metadata`]. See the async method for
@@ -239,12 +240,14 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] filepath: String,
         #[builder(into)] revision: Option<String>,
     ) -> HFResult<FileMetadataInfo> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .get_file_metadata()
                 .filepath(filepath)
                 .maybe_revision(revision)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 }

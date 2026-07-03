@@ -34,7 +34,7 @@ sha2 = "0.11"
 
 [features]
 default = []
-blocking = ["tokio/rt"]
+blocking = ["tokio/rt", "tokio/sync"]
 rustls-tls = ["reqwest/rustls"]
 
 [target.'cfg(target_family = "wasm")'.dependencies]

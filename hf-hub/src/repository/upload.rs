@@ -982,8 +982,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] parent_commit: Option<String>,
         #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .create_commit()
                 .operations(operations)
                 .commit_message(commit_message)
@@ -992,8 +993,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .create_pr(create_pr)
                 .maybe_parent_commit(parent_commit)
                 .maybe_progress(progress)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::upload_file`]. See the async method for parameters
@@ -1010,8 +1012,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] parent_commit: Option<String>,
         #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .upload_file()
                 .source(source)
                 .path_in_repo(path_in_repo)
@@ -1021,8 +1024,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .create_pr(create_pr)
                 .maybe_parent_commit(parent_commit)
                 .maybe_progress(progress)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::upload_folder`]. See the async method for
@@ -1042,8 +1046,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         delete_patterns: Option<Vec<String>>,
         #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .upload_folder()
                 .folder_path(folder_path)
                 .maybe_path_in_repo(path_in_repo)
@@ -1055,8 +1060,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .maybe_ignore_patterns(ignore_patterns)
                 .maybe_delete_patterns(delete_patterns)
                 .maybe_progress(progress)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::delete_file`]. See the async method for parameters
@@ -1069,15 +1075,17 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] commit_message: Option<String>,
         #[builder(default)] create_pr: bool,
     ) -> HFResult<CommitInfo> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .delete_file()
                 .path_in_repo(path_in_repo)
                 .maybe_revision(revision)
                 .maybe_commit_message(commit_message)
                 .create_pr(create_pr)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::delete_folder`]. See the async method for
@@ -1090,14 +1098,16 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] commit_message: Option<String>,
         #[builder(default)] create_pr: bool,
     ) -> HFResult<CommitInfo> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .delete_folder()
                 .path_in_repo(path_in_repo)
                 .maybe_revision(revision)
                 .maybe_commit_message(commit_message)
                 .create_pr(create_pr)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 }

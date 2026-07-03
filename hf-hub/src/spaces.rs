@@ -509,7 +509,8 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn runtime(&self) -> HFResult<SpaceRuntime> {
-        self.runtime.block_on(self.inner.runtime().send())
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move { inner.runtime().send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::request_hardware`]. See the async method for parameters
@@ -520,34 +521,40 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
         #[builder(into)] hardware: String,
         sleep_time: Option<u64>,
     ) -> HFResult<SpaceRuntime> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .request_hardware()
                 .hardware(hardware)
                 .maybe_sleep_time(sleep_time)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::set_sleep_time`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn set_sleep_time(&self, sleep_time: u64) -> HFResult<()> {
-        self.runtime.block_on(self.inner.set_sleep_time().sleep_time(sleep_time).send())
+        let inner = self.inner.clone();
+        self.runtime
+            .run_future(async move { inner.set_sleep_time().sleep_time(sleep_time).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::pause`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn pause(&self) -> HFResult<SpaceRuntime> {
-        self.runtime.block_on(self.inner.pause().send())
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move { inner.pause().send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::restart`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn restart(&self) -> HFResult<SpaceRuntime> {
-        self.runtime.block_on(self.inner.restart().send())
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move { inner.restart().send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::add_secret`]. See the async method for parameters and
@@ -559,21 +566,25 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
         #[builder(into)] value: String,
         #[builder(into)] description: Option<String>,
     ) -> HFResult<()> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .add_secret()
                 .key(key)
                 .value(value)
                 .maybe_description(description)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::delete_secret`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_secret(&self, #[builder(into)] key: String) -> HFResult<()> {
-        self.runtime.block_on(self.inner.delete_secret().key(key).send())
+        let inner = self.inner.clone();
+        self.runtime
+            .run_future(async move { inner.delete_secret().key(key).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::add_variable`]. See the async method for parameters and
@@ -585,21 +596,25 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
         #[builder(into)] value: String,
         #[builder(into)] description: Option<String>,
     ) -> HFResult<()> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .add_variable()
                 .key(key)
                 .value(value)
                 .maybe_description(description)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::delete_variable`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_variable(&self, #[builder(into)] key: String) -> HFResult<()> {
-        self.runtime.block_on(self.inner.delete_variable().key(key).send())
+        let inner = self.inner.clone();
+        self.runtime
+            .run_future(async move { inner.delete_variable().key(key).send().await })
     }
 
     /// Blocking counterpart of [`HFRepository::duplicate`]. See the async method for parameters and
@@ -615,8 +630,9 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
         secrets: Option<Vec<serde_json::Value>>,
         variables: Option<Vec<serde_json::Value>>,
     ) -> HFResult<RepoUrl> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .duplicate()
                 .maybe_to_id(to_id)
                 .maybe_private(private)
@@ -625,8 +641,9 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
                 .maybe_sleep_time(sleep_time)
                 .maybe_secrets(secrets)
                 .maybe_variables(variables)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 }
 

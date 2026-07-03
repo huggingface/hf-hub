@@ -686,7 +686,11 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let repo_path_ref = &repo_path;
         let commit_hash_ref = &commit_hash;
-        let head_futs = filenames.iter().map(|filename| {
+        // Collected eagerly: keeping the borrowing closure inside a lazy
+        // `stream::iter(iter.map(..))` makes the enclosing future fail the
+        // `Send + 'static` bound required by the blocking wrappers with
+        // "implementation of `FnOnce` is not general enough".
+        let head_futs: Vec<_> = filenames.iter().map(|filename| {
                 let auth = self.hf_client.auth_headers();
                 let filename = filename.clone();
                 let repo_folder_ref = &repo_folder;
@@ -736,7 +740,7 @@ impl<T: RepoType> HFRepository<T> {
                         location,
                     }))
                 }
-            });
+            }).collect();
 
         let file_metas: Vec<FileMetadataInfo> = futures::stream::iter(head_futs)
             .buffer_unordered(max_workers)
@@ -975,7 +979,11 @@ async fn download_concurrently<T: RepoType>(
     params: &[DownloadFileParams],
     max_workers: usize,
 ) -> HFResult<Vec<PathBuf>> {
-    futures::stream::iter(params.iter().map(|p| api.download_file_inner(p)))
+    // Collected eagerly for the same reason as `head_futs` in
+    // `snapshot_download_impl`: a lazy borrowing closure inside the stream
+    // breaks the `Send + 'static` bound required by the blocking wrappers.
+    let download_futs: Vec<_> = params.iter().map(|p| api.download_file_inner(p)).collect();
+    futures::stream::iter(download_futs)
         .buffer_unordered(max_workers)
         .try_collect()
         .await
@@ -1325,8 +1333,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(default)] local_files_only: bool,
         #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .download_file()
                 .filename(filename)
                 .maybe_local_dir(local_dir)
@@ -1334,8 +1343,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .force_download(force_download)
                 .local_files_only(local_files_only)
                 .maybe_progress(progress)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::download_file_to_bytes`]. See the async method for
@@ -1348,15 +1358,17 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         range: Option<std::ops::Range<u64>>,
         #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .download_file_to_bytes()
                 .filename(filename)
                 .maybe_revision(revision)
                 .maybe_range(range)
                 .maybe_progress(progress)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 
     /// Blocking counterpart of [`HFRepository::snapshot_download`]. See the async method for
@@ -1373,8 +1385,9 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         max_workers: Option<usize>,
         #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        self.runtime.block_on(
-            self.inner
+        let inner = self.inner.clone();
+        self.runtime.run_future(async move {
+            inner
                 .snapshot_download()
                 .maybe_revision(revision)
                 .maybe_allow_patterns(allow_patterns)
@@ -1384,7 +1397,8 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .local_files_only(local_files_only)
                 .maybe_max_workers(max_workers)
                 .maybe_progress(progress)
-                .send(),
-        )
+                .send()
+                .await
+        })
     }
 }

@@ -80,7 +80,7 @@ browser tests and runtime build flags live under `wasm/`.
 
 | Feature | Default? | Notes |
 |---------|----------|-------|
-| `blocking` | off | Synchronous `*Sync` wrappers in `blocking.rs`. Pulls in `tokio/rt`. Native only. |
+| `blocking` | off | Synchronous `*Sync` wrappers in `blocking.rs`. Pulls in `tokio/rt` + `tokio/sync`. Native only. |
 | `rustls-tls` | off | Force the rustls TLS backend on reqwest's native build. No effect on wasm. |
 | `default` | (empty) | No features by default. |
 
@@ -124,7 +124,9 @@ helper that already has the field as an `Option<T>` local).
 
 Every async method MUST have a manually-written blocking counterpart on the corresponding
 `*Sync` struct under `#[cfg(feature = "blocking")]`. Mirror the same `#[builder]` parameter list
-verbatim. The body calls the inner async builder and blocks on the runtime:
+verbatim. The body clones the inner handle into a `'static + Send` future and hands it to the
+client's dedicated runtime thread via `run_future` — never call `Runtime::block_on` on a caller
+thread, since that panics when the caller is already inside a tokio runtime:
 
 ```rust
 #[cfg(feature = "blocking")]
@@ -136,21 +138,16 @@ impl crate::blocking::HFRepositorySync {
         #[builder(into)] name: String,
         revision: Option<String>,
     ) -> HFResult<MyOutput> {
-        self.runtime.block_on(
-            self.inner
-                .my_method()
-                .name(name)
-                .maybe_revision(revision)
-                .send(),
-        )
+        let inner = self.inner.clone();
+        self.runtime
+            .run_future(async move { inner.my_method().name(name).maybe_revision(revision).send().await })
     }
 }
 ```
 
-For stream-returning methods, the sync counterpart collects into `Vec<T>`: pin the stream and
-drain with `while let Some` (see existing examples in `repository/listing.rs` and
-`repository/mod.rs`). On `HFSpaceSync`, the runtime is reached via `&self.repo_sync.runtime`
-because the struct has no direct `runtime` field. Do NOT reintroduce the legacy `sync_api!` /
+For stream-returning methods, the sync counterpart collects into `Vec<T>` inside the future
+handed to `run_future`: pin the stream and drain with `while let Some` (see existing examples in
+`repository/listing.rs` and `repository/mod.rs`). Do NOT reintroduce the legacy `sync_api!` /
 `sync_api_stream!` / `sync_api_async_stream!` macros — they were removed deliberately when the
 crate moved to bon.
 
