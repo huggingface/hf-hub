@@ -58,11 +58,6 @@ pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     raw.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
-/// Render the human-readable tail shared by every HTTP-derived [`HFError`] variant.
-///
-/// Leads with the server's explanation (`server_message`) when present, then appends a
-/// parenthetical of `url`, `request_id`, and `error_code`. Each piece is omitted when absent,
-/// so a context carrying only a URL renders as ` (url=…)` with no dangling separators.
 fn format_http_detail(ctx: &HttpErrorContext) -> String {
     let mut detail = String::new();
 
