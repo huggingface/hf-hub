@@ -263,6 +263,21 @@ pub struct EvalResultSource {
 /// Returned by [`HFClient::list_models`] and by
 /// [`HFRepository::info`] when the repo is a model.
 /// Most fields are optional because they depend on the `expand` parameter and the repo's state.
+///
+/// Because fields like `siblings` and `sha` are `Option`, treat "absent" as
+/// empty rather than unwrapping. Iterate files with `.iter().flatten()` and take
+/// an owned list with `.unwrap_or_default()`:
+///
+/// ```no_run
+/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+/// # let info = hf_hub::HFClient::new()?.model("openai-community", "gpt2").info().send().await?;
+/// for sibling in info.siblings.iter().flatten() {
+///     println!("{}", sibling.rfilename);
+/// }
+/// let files = info.siblings.clone().unwrap_or_default();
+/// let sha = info.sha.as_deref().unwrap_or("main");
+/// # let _ = (files, sha); Ok(()) }
+/// ```
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
