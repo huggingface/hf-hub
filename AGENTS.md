@@ -182,8 +182,6 @@ hf-hub/
 │   │   ├── error.rs                # HFError enum, HFResult alias, NotFoundContext
 │   │   ├── pagination.rs           # Generic paginate<T>() with Link header parsing
 │   │   ├── retry.rs                # Retry logic for transient HTTP failures
-│   │   ├── util.rs                 # pub(crate) boxed_future: boxes heavyweight builder futures so
-│   │   │                           #   consumer future nesting stays shallow (Send native, !Send wasm)
 │   │   ├── progress.rs             # ProgressEvent, ProgressHandler, Upload/DownloadEvent, FileProgress
 │   │   ├── repository/             # Repo component: all HFRepository-bound APIs live here,
 │   │   │   │                       #   flat public surface via `hf_hub::repository::…`

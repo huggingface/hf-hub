@@ -686,9 +686,6 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let repo_path_ref = &repo_path;
         let commit_hash_ref = &commit_hash;
-        // Built with a plain loop rather than `.iter().map(|f| async move { … })`: a closure
-        // returning an async block trips rustc's "implementation of `FnOnce` is not general
-        // enough" HRTB limitation once the enclosing future is boxed with a `Send` bound.
         let mut head_futs = Vec::with_capacity(filenames.len());
         for filename in &filenames {
             let auth = self.hf_client.auth_headers();
@@ -979,9 +976,6 @@ async fn download_concurrently<T: RepoType>(
     params: &[DownloadFileParams],
     max_workers: usize,
 ) -> HFResult<Vec<PathBuf>> {
-    // A plain loop instead of `.map(|p| api.download_file_inner(p))`: the closure form trips
-    // rustc's "implementation of `FnOnce` is not general enough" HRTB limitation once the
-    // enclosing snapshot-download future is boxed with a `Send` bound.
     let mut download_futs = Vec::with_capacity(params.len());
     for file_params in params {
         download_futs.push(api.download_file_inner(file_params));
@@ -1158,7 +1152,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        crate::util::boxed_future(self.download_file_impl(DownloadFileParams {
+        Box::pin(self.download_file_impl(DownloadFileParams {
             filename,
             local_dir,
             revision,
@@ -1205,7 +1199,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<(Option<u64>, HFByteStream)> {
-        crate::util::boxed_future(self.download_file_stream_impl(DownloadFileStreamParams {
+        Box::pin(self.download_file_stream_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
@@ -1249,7 +1243,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
-        crate::util::boxed_future(self.download_file_to_bytes_impl(DownloadFileStreamParams {
+        Box::pin(self.download_file_to_bytes_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
@@ -1307,7 +1301,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        crate::util::boxed_future(self.snapshot_download_impl(SnapshotDownloadParams {
+        Box::pin(self.snapshot_download_impl(SnapshotDownloadParams {
             revision,
             allow_patterns,
             ignore_patterns,

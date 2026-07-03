@@ -843,7 +843,7 @@ impl HFBucket {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<BucketSyncPlan> {
-        crate::util::boxed_future(self.sync_impl(BucketSyncParams {
+        Box::pin(self.sync_impl(BucketSyncParams {
             local_path,
             direction,
             prefix,

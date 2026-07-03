@@ -751,7 +751,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        crate::util::boxed_future(self.create_commit_impl(CreateCommitParams {
+        Box::pin(self.create_commit_impl(CreateCommitParams {
             operations,
             commit_message,
             commit_description,
@@ -802,7 +802,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        crate::util::boxed_future(self.upload_file_impl(UploadFileParams {
+        Box::pin(self.upload_file_impl(UploadFileParams {
             source,
             path_in_repo,
             revision,
@@ -878,7 +878,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        crate::util::boxed_future(self.upload_folder_impl(UploadFolderParams {
+        Box::pin(self.upload_folder_impl(UploadFolderParams {
             folder_path,
             path_in_repo,
             revision,
@@ -920,7 +920,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(default)]
         create_pr: bool,
     ) -> HFResult<CommitInfo> {
-        crate::util::boxed_future(self.delete_file_impl(DeleteFileParams {
+        Box::pin(self.delete_file_impl(DeleteFileParams {
             path_in_repo,
             revision,
             commit_message,
@@ -956,7 +956,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(default)]
         create_pr: bool,
     ) -> HFResult<CommitInfo> {
-        crate::util::boxed_future(self.delete_folder_impl(DeleteFolderParams {
+        Box::pin(self.delete_folder_impl(DeleteFolderParams {
             path_in_repo,
             revision,
             commit_message,
