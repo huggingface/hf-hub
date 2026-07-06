@@ -41,4 +41,5 @@ rustls-tls = ["reqwest/rustls"]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
 serial_test = "3"
+http = "1"
 
