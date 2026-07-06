@@ -11,7 +11,7 @@
 //! Range parameters use Rust `std::ops::Range<u64>` semantics (start-inclusive, end-exclusive).
 //! See each builder's docs for the exact path / range / glob format rules.
 
-use std::io::Write;
+use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
 use bon::bon;
@@ -220,21 +220,6 @@ impl<T: RepoType> HFRepository<T> {
                 .await;
         }
 
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().get(&url).headers(headers.clone()).send()
-        })
-        .await?;
-        let response = self
-            .hf_client
-            .check_response(
-                response,
-                Some(&repo_path),
-                crate::error::NotFoundContext::Entry {
-                    path: params.filename.clone(),
-                },
-            )
-            .await?;
-
         let local_dir = params.local_dir.as_ref().unwrap();
         std::fs::create_dir_all(local_dir)?;
 
@@ -243,12 +228,31 @@ impl<T: RepoType> HFRepository<T> {
             std::fs::create_dir_all(parent)?;
         }
 
+        let resume_offset = match cache::partial_download_state(&dest_path, file_size, params.force_download)? {
+            cache::PartialDownloadState::Complete => {
+                params.progress.emit(DownloadEvent::Progress {
+                    files: vec![FileProgress {
+                        filename: params.filename.clone(),
+                        bytes_completed: file_size,
+                        total_bytes: file_size,
+                        status: FileStatus::Complete,
+                    }],
+                });
+                return Ok(dest_path);
+            },
+            cache::PartialDownloadState::Resume(offset) => offset,
+            cache::PartialDownloadState::Restart => 0,
+        };
+        let (response, write_offset) = self
+            .http_download_response(&url, &repo_path, &params.filename, headers, resume_offset, file_size)
+            .await?;
         stream_response_to_file_with_progress(
             response,
             &dest_path,
             &params.progress,
             Some(&params.filename),
             file_size,
+            write_offset,
         )
         .await?;
         params.progress.emit(DownloadEvent::Progress {
@@ -446,8 +450,18 @@ impl<T: RepoType> HFRepository<T> {
                 }
                 let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
 
-                self.xet_download_to_blob(revision, &params.filename, &xet_hash, file_size, &blob, &params.progress)
-                    .await?;
+                self.xet_download_to_blob(
+                    revision,
+                    crate::xet::XetBlobFile {
+                        filename: &params.filename,
+                        file_hash: &xet_hash,
+                        file_size,
+                        path: &blob,
+                        force_download,
+                    },
+                    &params.progress,
+                )
+                .await?;
             }
 
             return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await;
@@ -468,22 +482,40 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
-        let incomplete_path = PathBuf::from(format!("{}.incomplete", blob.display()));
+        let incomplete_path = cache::incomplete_path(&blob);
         if let Some(parent) = incomplete_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
+        let resume_offset = match cache::partial_download_state(&incomplete_path, file_size, force_download)? {
+            cache::PartialDownloadState::Complete => {
+                std::fs::rename(&incomplete_path, &blob)?;
+                params.progress.emit(DownloadEvent::Progress {
+                    files: vec![FileProgress {
+                        filename: params.filename.clone(),
+                        bytes_completed: file_size,
+                        total_bytes: file_size,
+                        status: FileStatus::Complete,
+                    }],
+                });
+                return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag)
+                    .await;
+            },
+            cache::PartialDownloadState::Resume(offset) => offset,
+            cache::PartialDownloadState::Restart => 0,
+        };
+
         let dl_headers = self.hf_client.auth_headers();
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().get(&url).headers(dl_headers.clone()).send()
-        })
-        .await?;
+        let (response, write_offset) = self
+            .http_download_response(&url, &repo_path, &params.filename, dl_headers, resume_offset, file_size)
+            .await?;
         stream_response_to_file_with_progress(
             response,
             &incomplete_path,
             &params.progress,
             Some(&params.filename),
             file_size,
+            write_offset,
         )
         .await?;
         params.progress.emit(DownloadEvent::Progress {
@@ -497,6 +529,58 @@ impl<T: RepoType> HFRepository<T> {
         std::fs::rename(&incomplete_path, &blob)?;
 
         finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await
+    }
+
+    async fn http_download_response(
+        &self,
+        url: &str,
+        repo_path: &str,
+        filename: &str,
+        headers: reqwest::header::HeaderMap,
+        resume_offset: u64,
+        file_size: u64,
+    ) -> HFResult<(reqwest::Response, u64)> {
+        let response = self
+            .http_download_response_once(url, repo_path, filename, headers.clone(), resume_offset)
+            .await?;
+        if resume_offset == 0 {
+            return Ok((response, 0));
+        }
+        if response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+            && content_range_matches(response.headers(), resume_offset, file_size)
+        {
+            return Ok((response, resume_offset));
+        }
+        tracing::warn!(url, resume_offset, "server did not return a valid partial response; restarting download");
+        let response = self.http_download_response_once(url, repo_path, filename, headers, 0).await?;
+        Ok((response, 0))
+    }
+
+    async fn http_download_response_once(
+        &self,
+        url: &str,
+        repo_path: &str,
+        filename: &str,
+        headers: reqwest::header::HeaderMap,
+        resume_offset: u64,
+    ) -> HFResult<reqwest::Response> {
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            let mut request = self.hf_client.http_client().get(url).headers(headers.clone());
+            if resume_offset > 0 {
+                request = request.header(reqwest::header::RANGE, format!("bytes={resume_offset}-"));
+            }
+            request.send()
+        })
+        .await?;
+        self.hf_client
+            .check_response(
+                response,
+                Some(repo_path),
+                crate::error::NotFoundContext::Entry {
+                    path: filename.to_string(),
+                },
+            )
+            .await
     }
 
     async fn resolve_commit_hash(&self, revision: &str) -> HFResult<String> {
@@ -714,7 +798,8 @@ impl<T: RepoType> HFRepository<T> {
                         filename: m.filename.clone(),
                     })
                     .collect();
-                self.xet_download_batch(&commit_hash, &batch_files, &params.progress).await?;
+                self.xet_download_batch(&commit_hash, &batch_files, params.force_download, &params.progress)
+                    .await?;
                 Ok(())
             };
 
@@ -778,7 +863,8 @@ impl<T: RepoType> HFRepository<T> {
                     filename: m.filename.clone(),
                 })
                 .collect();
-            self.xet_download_batch(&commit_hash, &batch_files, &params.progress).await?;
+            self.xet_download_batch(&commit_hash, &batch_files, params.force_download, &params.progress)
+                .await?;
             for m in &xet_metas {
                 cache::create_pointer_symlink(cache_dir, &repo_folder, &m.commit_hash, &m.filename, &m.etag).await?;
             }
@@ -888,16 +974,23 @@ async fn stream_response_to_file_with_progress(
     handler: &Option<Progress>,
     filename: Option<&str>,
     total_bytes: u64,
+    initial_bytes: u64,
 ) -> HFResult<()> {
-    let mut file = std::fs::File::create(dest)?;
+    let mut file = if initial_bytes > 0 {
+        let mut file = std::fs::OpenOptions::new().append(true).create(true).open(dest)?;
+        file.seek(std::io::SeekFrom::End(0))?;
+        file
+    } else {
+        std::fs::File::create(dest)?
+    };
     let mut stream = response.bytes_stream();
-    let mut bytes_read: u64 = 0;
+    let mut bytes_read = initial_bytes;
 
     if let (Some(h), Some(filename)) = (handler, filename) {
         h.emit(DownloadEvent::Progress {
             files: vec![FileProgress {
                 filename: filename.to_string(),
-                bytes_completed: 0,
+                bytes_completed: initial_bytes,
                 total_bytes,
                 status: FileStatus::Started,
             }],
@@ -921,7 +1014,41 @@ async fn stream_response_to_file_with_progress(
         }
     }
     file.flush()?;
+    if total_bytes > 0 && bytes_read != total_bytes {
+        return Err(HFError::Other(format!(
+            "downloaded {} bytes but expected {} bytes for {}",
+            bytes_read,
+            total_bytes,
+            filename.unwrap_or("<unknown>")
+        )));
+    }
     Ok(())
+}
+
+fn content_range_matches(headers: &reqwest::header::HeaderMap, expected_start: u64, expected_total: u64) -> bool {
+    let Some(raw) = headers
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let Some(range) = raw.strip_prefix("bytes ") else {
+        return false;
+    };
+    let Some((bounds, total)) = range.split_once('/') else {
+        return false;
+    };
+    let Some((start, end)) = bounds.split_once('-') else {
+        return false;
+    };
+    let Ok(start) = start.parse::<u64>() else {
+        return false;
+    };
+    let Ok(end) = end.parse::<u64>() else {
+        return false;
+    };
+    let total_matches = total == "*" || total.parse::<u64>().is_ok_and(|total| total == expected_total);
+    start == expected_start && end.saturating_add(1) <= expected_total && total_matches
 }
 
 fn wrap_stream_with_progress(
@@ -1169,6 +1296,187 @@ impl<T: RepoType> HFRepository<T> {
             progress,
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::sync::{Arc, Mutex};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::content_range_matches;
+    use crate::HFClientBuilder;
+    use crate::cache::storage as cache;
+
+    const TEST_COMMIT: &str = "0123456789012345678901234567890123456789";
+    const TEST_ETAG: &str = "etag-http";
+
+    #[test]
+    fn content_range_validation_accepts_expected_range() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::CONTENT_RANGE, reqwest::header::HeaderValue::from_static("bytes 4-9/10"));
+        assert!(content_range_matches(&headers, 4, 10));
+    }
+
+    #[test]
+    fn content_range_validation_rejects_wrong_start() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::CONTENT_RANGE, reqwest::header::HeaderValue::from_static("bytes 0-5/10"));
+        assert!(!content_range_matches(&headers, 4, 10));
+    }
+
+    #[tokio::test]
+    async fn cache_download_resumes_http_incomplete_blob() {
+        let body = Arc::new(b"abcdefghij".to_vec());
+        let ranges = Arc::new(Mutex::new(Vec::new()));
+        let endpoint = start_http_resume_server(Arc::clone(&body), Arc::clone(&ranges), false).await;
+
+        let dir = tempfile::tempdir().unwrap();
+        write_incomplete_blob(dir.path(), b"abcd");
+
+        let client = HFClientBuilder::new().endpoint(endpoint).cache_dir(dir.path()).build().unwrap();
+        let path = client
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .revision("main")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), body.as_slice());
+        assert!(ranges.lock().unwrap().iter().any(|range| range.as_deref() == Some("bytes=4-")));
+    }
+
+    #[tokio::test]
+    async fn cache_download_restarts_when_partial_response_is_invalid() {
+        let body = Arc::new(b"abcdefghij".to_vec());
+        let ranges = Arc::new(Mutex::new(Vec::new()));
+        let endpoint = start_http_resume_server(Arc::clone(&body), Arc::clone(&ranges), true).await;
+
+        let dir = tempfile::tempdir().unwrap();
+        write_incomplete_blob(dir.path(), b"abcd");
+
+        let client = HFClientBuilder::new().endpoint(endpoint).cache_dir(dir.path()).build().unwrap();
+        let path = client
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .revision("main")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), body.as_slice());
+        let ranges = ranges.lock().unwrap();
+        assert!(ranges.iter().any(|range| range.as_deref() == Some("bytes=4-")));
+        assert!(ranges.iter().any(Option::is_none));
+    }
+
+    #[tokio::test]
+    async fn local_dir_download_resumes_http_partial_file() {
+        let body = Arc::new(b"abcdefghij".to_vec());
+        let ranges = Arc::new(Mutex::new(Vec::new()));
+        let endpoint = start_http_resume_server(Arc::clone(&body), Arc::clone(&ranges), false).await;
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let local_dir = tempfile::tempdir().unwrap();
+        std::fs::write(local_dir.path().join("model.bin"), b"abcd").unwrap();
+
+        let client = HFClientBuilder::new()
+            .endpoint(endpoint)
+            .cache_dir(cache_dir.path())
+            .build()
+            .unwrap();
+        let path = client
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .revision("main")
+            .local_dir(local_dir.path())
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), body.as_slice());
+        assert!(ranges.lock().unwrap().iter().any(|range| range.as_deref() == Some("bytes=4-")));
+    }
+
+    fn write_incomplete_blob(cache_dir: &Path, bytes: &[u8]) {
+        let blob = cache::blob_path(cache_dir, "models--owner--repo", TEST_ETAG);
+        let incomplete = cache::incomplete_path(&blob);
+        std::fs::create_dir_all(incomplete.parent().unwrap()).unwrap();
+        std::fs::write(incomplete, bytes).unwrap();
+    }
+
+    async fn start_http_resume_server(
+        body: Arc<Vec<u8>>,
+        ranges: Arc<Mutex<Vec<Option<String>>>>,
+        invalid_partial: bool,
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let body = Arc::clone(&body);
+                let ranges = Arc::clone(&ranges);
+                tokio::spawn(async move {
+                    let mut request = vec![0; 4096];
+                    let Ok(read) = socket.read(&mut request).await else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&request[..read]);
+                    let range = request
+                        .lines()
+                        .find_map(|line| line.strip_prefix("range: ").or_else(|| line.strip_prefix("Range: ")))
+                        .map(str::to_string);
+                    let is_head = request.starts_with("HEAD ");
+                    if !is_head {
+                        ranges.lock().unwrap().push(range.clone());
+                    }
+                    let response = http_response(&body, is_head, range.as_deref(), invalid_partial);
+                    let _ = socket.write_all(&response).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn http_response(body: &[u8], is_head: bool, range: Option<&str>, invalid_partial: bool) -> Vec<u8> {
+        if is_head {
+            return response_bytes("200 OK", body.len(), None, &[]);
+        }
+        if range == Some("bytes=4-") && !invalid_partial {
+            return response_bytes("206 Partial Content", body.len() - 4, Some("bytes 4-9/10"), &body[4..]);
+        }
+        if range == Some("bytes=4-") {
+            return response_bytes("206 Partial Content", 6, Some("bytes 0-5/10"), b"xxxxxx");
+        }
+        response_bytes("200 OK", body.len(), None, body)
+    }
+
+    fn response_bytes(status: &str, content_length: usize, content_range: Option<&str>, body: &[u8]) -> Vec<u8> {
+        let content_range = content_range
+            .map(|value| format!("Content-Range: {value}\r\n"))
+            .unwrap_or_default();
+        format!(
+            "HTTP/1.1 {status}\r\n\
+             ETag: \"{TEST_ETAG}\"\r\n\
+             X-Repo-Commit: {TEST_COMMIT}\r\n\
+             Content-Length: {content_length}\r\n\
+             {content_range}\
+             Connection: close\r\n\
+             \r\n"
+        )
+        .into_bytes()
+        .into_iter()
+        .chain(body.iter().copied())
+        .collect()
     }
 }
 
