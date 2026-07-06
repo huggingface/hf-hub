@@ -34,15 +34,6 @@ To use the synchronous interface, enable the `blocking` feature:
 hf-hub = { version = "1.0.0", features = ["blocking"] }
 ```
 
-To route traffic through a SOCKS proxy (e.g. via the `HTTPS_PROXY` environment
-variable), enable the `socks` feature, which forwards to reqwest's `socks`
-feature:
-
-```toml
-[dependencies]
-hf-hub = { version = "1.0.0", features = ["socks"] }
-```
-
 ## CLI Installation
 
 The `hfrs` command-line tool provides a terminal interface to the Hub. Install it with:
