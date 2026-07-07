@@ -70,7 +70,7 @@ async fn create_test_bucket(client: &HFClient, suffix: &str) -> (String, String)
 
 async fn delete_test_bucket(client: &HFClient, namespace: &str, name: &str) {
     let bucket_id = format!("{namespace}/{name}");
-    let _ = client.delete_bucket().bucket_id(bucket_id).missing_ok(true).send().await;
+    let _ = client.delete_bucket().bucket_id(&bucket_id).missing_ok(true).send().await;
 }
 
 /// Poll the bucket tree until `path` is visible — the batch endpoint can

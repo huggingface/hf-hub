@@ -67,7 +67,7 @@ async fn create(client: &HFClient, args: BranchCreateArgs) -> Result<CommandResu
     };
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     repo.create_branch()
-        .branch(args.branch)
+        .branch(&args.branch)
         .maybe_revision(args.revision)
         .send()
         .await?;
@@ -80,6 +80,6 @@ async fn delete(client: &HFClient, args: BranchDeleteArgs) -> Result<CommandResu
         None => ("", args.repo_id.as_str()),
     };
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
-    repo.delete_branch().branch(args.branch).send().await?;
+    repo.delete_branch().branch(&args.branch).send().await?;
     Ok(CommandResult::Silent)
 }

@@ -32,7 +32,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let result = client
         .create_repository()
         .repo_type(RepoTypeAny::from(args.r#type))
-        .repo_id(args.repo_id)
+        .repo_id(&args.repo_id)
         .maybe_private(if args.private { Some(true) } else { None })
         .exist_ok(args.exist_ok)
         .maybe_space_sdk(args.space_sdk)
