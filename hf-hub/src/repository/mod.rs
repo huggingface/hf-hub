@@ -264,9 +264,9 @@ pub struct EvalResultSource {
 /// [`HFRepository::info`] when the repo is a model.
 /// Most fields are optional because they depend on the `expand` parameter and the repo's state.
 ///
-/// Because fields like `siblings` and `sha` are `Option`, treat "absent" as
-/// empty rather than unwrapping. Iterate files with `.iter().flatten()` and take
-/// an owned list with `.unwrap_or_default()`:
+/// `siblings` and `sha` are `Option` — treat "absent" as empty rather than
+/// unwrapping. Iterate files with `.iter().flatten()`, or take an owned list
+/// with `.unwrap_or_default()`:
 ///
 /// ```no_run
 /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {

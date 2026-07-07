@@ -1106,12 +1106,10 @@ impl<T: RepoType> HFRepository<T> {
     /// # Offline / cache-only lookups
     ///
     /// Set `.local_files_only(true)` to resolve strictly from the local cache
-    /// without any network request — this is the replacement for the 0.x
-    /// `Cache::get` API. A cache miss returns
-    /// [`HFError::LocalEntryNotFound`](crate::HFError::LocalEntryNotFound), which
-    /// is distinct from a real failure: match it to tell "not cached" apart from
-    /// a genuinely missing file ([`HFError::EntryNotFound`](crate::HFError::EntryNotFound))
-    /// or any transport error.
+    /// with no network request (the replacement for the 0.x `Cache::get`). A
+    /// cache miss returns [`HFError::LocalEntryNotFound`](crate::HFError::LocalEntryNotFound),
+    /// distinct from a genuinely missing file
+    /// ([`HFError::EntryNotFound`](crate::HFError::EntryNotFound)) or a transport error.
     ///
     /// ```no_run
     /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {

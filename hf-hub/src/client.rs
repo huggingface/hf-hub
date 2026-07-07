@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use tracing::debug;
 use url::Url;
@@ -34,40 +35,28 @@ pub(crate) fn append_path_segments(url: &mut Url, path: &str) -> HFResult<()> {
 /// Unlike [`append_path_segments`], slashes are escaped rather than treated as
 /// separators, so refs like `refs/pr/21` or `refs/convert/parquet` occupy
 /// exactly one segment (`refs%2Fpr%2F21`) — the Hub 404s on the unescaped
-/// form. Mirrors `huggingface_hub`'s `quote(value, safe="")`. Use for
-/// revisions, branch names, and tag names interpolated into URL paths.
+/// form. Every byte outside the RFC 3986 unreserved set (`ALPHA`, `DIGIT`, and
+/// `-._~`) is encoded, mirroring `huggingface_hub`'s `quote(value, safe="")`.
+/// Use for revisions, branch names, and tag names interpolated into URL paths.
 pub(crate) fn encode_path_segment(value: &str) -> String {
-    let mut url = Url::parse("https://hf.co").expect("static base URL parses");
-    url.path_segments_mut().expect("https URL can be a base").push(value);
-    url.path()[1..].to_string()
+    /// `NON_ALPHANUMERIC` minus the four unreserved punctuation characters.
+    const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
+    utf8_percent_encode(value, SEGMENT).to_string()
 }
 
-/// Split a repo or bucket id into its `(owner, name)` parts.
+/// Split a repo or bucket id into the `(owner, name)` pair taken by
+/// [`HFClient::model`], [`HFClient::dataset`], [`HFClient::space`], and
+/// [`HFClient::repository`].
 ///
-/// A fully-qualified id (`"owner/name"`) splits on the first `/`. A short-form
-/// id with no owner (`"gpt2"`) yields an empty owner, matching the `owner, name`
-/// argument pair taken by [`HFClient::model`], [`HFClient::dataset`],
-/// [`HFClient::space`], and [`HFClient::repository`]. Only the first `/` is a
-/// separator, so nested names (`"owner/sub/name"`) keep their tail intact
-/// (`("owner", "sub/name")`).
+/// Splits on the first `/` only, so nested names keep their tail. A short-form
+/// id with no owner yields an empty owner.
 ///
 /// ```
 /// use hf_hub::split_id;
 ///
 /// assert_eq!(split_id("openai-community/gpt2"), ("openai-community", "gpt2"));
 /// assert_eq!(split_id("gpt2"), ("", "gpt2"));
-/// ```
-///
-/// Handy for turning a user-supplied id straight into a repo handle:
-///
-/// ```no_run
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// use hf_hub::{HFClient, split_id};
-///
-/// let client = HFClient::new()?;
-/// let (owner, name) = split_id("openai-community/gpt2");
-/// let info = client.model(owner, name).info().send().await?;
-/// # let _ = info; Ok(()) }
+/// assert_eq!(split_id("owner/sub/name"), ("owner", "sub/name"));
 /// ```
 pub fn split_id(id: &str) -> (&str, &str) {
     match id.split_once('/') {
@@ -187,16 +176,12 @@ impl HFClientBuilder {
         self
     }
 
-    /// Builds an unauthenticated client, ignoring any ambient credentials.
+    /// Builds an unauthenticated client, skipping the ambient `HF_TOKEN` and
+    /// cached token files so requests carry no `Authorization` header even on a
+    /// logged-in machine. Per-client equivalent of `HF_HUB_DISABLE_IMPLICIT_TOKEN`.
     ///
-    /// The ambient `HF_TOKEN` env var and cached token files (`HF_TOKEN_PATH`,
-    /// `$HF_HOME/token`) are skipped, so requests are sent without an
-    /// `Authorization` header even on a machine that is logged in. This is the
-    /// per-client equivalent of setting the `HF_HUB_DISABLE_IMPLICIT_TOKEN`
-    /// env var.
-    ///
-    /// Setting both [`token`](Self::token) and `anonymous` is contradictory and
-    /// makes [`build`](Self::build) fail with [`HFError::InvalidParameter`].
+    /// Setting both [`token`](Self::token) and `anonymous` makes
+    /// [`build`](Self::build) fail with [`HFError::InvalidParameter`].
     ///
     /// ```rust,no_run
     /// use hf_hub::HFClient;
@@ -453,15 +438,13 @@ impl HFClient {
         format!("{}/api/buckets/{}", self.endpoint(), bucket_id)
     }
 
-    /// Issue a HEAD request via the no-redirect client, manually following
-    /// *relative* redirects (Location without a host).
+    /// Issue a HEAD request, manually following *relative* redirects (a
+    /// `Location` without a host).
     ///
-    /// The Hub 307s to the canonical repo path when a repo id differs in
-    /// casing (e.g. `snowflake/…` → `Snowflake/…`); that response carries no
-    /// ETag, so metadata extraction must happen after following it. Absolute
-    /// redirects (e.g. to the CDN) are returned as-is — their headers already
-    /// carry the linked metadata. Mirrors `huggingface_hub`'s
-    /// `follow_relative_redirects` behavior.
+    /// The Hub 307s to the canonically-cased repo path (e.g. `snowflake/…` →
+    /// `Snowflake/…`) with no ETag, so metadata must be read after following.
+    /// Absolute redirects (e.g. to the CDN) are returned as-is. Mirrors
+    /// `huggingface_hub`'s `follow_relative_redirects`.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) async fn head_with_relative_redirects(
         &self,

@@ -321,18 +321,12 @@ impl HFError {
         }
     }
 
-    /// Returns the HTTP status code the server actually returned, when this
-    /// error carries one.
+    /// Returns the HTTP status the server actually returned, when this error
+    /// carries one.
     ///
-    /// Covers every variant holding an [`HttpErrorContext`] ([`Http`](Self::Http),
-    /// [`AuthRequired`](Self::AuthRequired), [`Forbidden`](Self::Forbidden),
-    /// [`Conflict`](Self::Conflict), [`RateLimited`](Self::RateLimited), and the
-    /// not-found family when their optional context was captured) plus
-    /// [`Request`](Self::Request) errors whose underlying `reqwest` error knows
-    /// a status. No status is ever synthesized: a
-    /// [`RepoNotFound`](Self::RepoNotFound) constructed without a response
+    /// Nothing is synthesized: a not-found variant built without a response
     /// context returns `None` rather than a canonical 404, and purely local
-    /// errors (I/O, JSON, cache) always return `None`.
+    /// errors (I/O, JSON, cache) return `None`.
     ///
     /// ```no_run
     /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {

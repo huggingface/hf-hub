@@ -65,9 +65,8 @@
 //! # Ok::<(), hf_hub::HFError>(())
 //! ```
 //!
-//! To send requests unauthenticated even on a machine that is logged in (i.e.,
-//! ignoring the ambient `HF_TOKEN` and token files), build an anonymous client —
-//! the per-client equivalent of `HF_HUB_DISABLE_IMPLICIT_TOKEN`:
+//! To send requests unauthenticated even on a logged-in machine (ignoring the
+//! ambient `HF_TOKEN` and token files), build an anonymous client:
 //!
 //! ```rust,no_run
 //! use hf_hub::HFClient;
