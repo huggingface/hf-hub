@@ -236,13 +236,7 @@ impl HFBucket {
 
         let response = self
             .hf_client
-            .check_response(
-                response,
-                Some(&bucket_id),
-                NotFoundContext::Entry {
-                    path: remote_path.to_string(),
-                },
-            )
+            .check_response(response, Some(&bucket_id), NotFoundContext::Entry { path: remote_path })
             .await?;
 
         let size = response
@@ -767,11 +761,9 @@ impl HFClient {
     pub async fn create_bucket(
         &self,
         /// Namespace (user or organization) that owns the bucket.
-        #[builder(into)]
-        namespace: String,
+        namespace: &str,
         /// Bucket name within the namespace.
-        #[builder(into)]
-        name: String,
+        name: &str,
         /// Whether the bucket should be private.
         #[builder(default)]
         private: bool,
@@ -788,8 +780,8 @@ impl HFClient {
         if private {
             body["private"] = serde_json::Value::Bool(true);
         }
-        if let Some(ref rg) = resource_group_id {
-            body["resourceGroupId"] = serde_json::Value::String(rg.clone());
+        if let Some(rg) = resource_group_id {
+            body["resourceGroupId"] = serde_json::Value::String(rg);
         }
 
         let headers = self.auth_headers();
@@ -822,13 +814,12 @@ impl HFClient {
     pub async fn delete_bucket(
         &self,
         /// Bucket ID in `"owner/name"` format.
-        #[builder(into)]
-        bucket_id: String,
+        bucket_id: &str,
         /// If `true`, do not error when the bucket does not exist.
         #[builder(default)]
         missing_ok: bool,
     ) -> HFResult<()> {
-        let url = self.bucket_api_url(&bucket_id);
+        let url = self.bucket_api_url(bucket_id);
 
         let headers = self.auth_headers();
         let response =
@@ -839,7 +830,7 @@ impl HFClient {
             return Ok(());
         }
 
-        self.check_response(response, Some(&bucket_id), NotFoundContext::Bucket).await?;
+        self.check_response(response, Some(bucket_id), NotFoundContext::Bucket).await?;
         Ok(())
     }
 
@@ -875,11 +866,9 @@ impl HFClient {
     pub async fn move_bucket(
         &self,
         /// Current bucket ID in `"owner/name"` format.
-        #[builder(into)]
-        from_id: String,
+        from_id: &str,
         /// New bucket ID in `"owner/name"` format.
-        #[builder(into)]
-        to_id: String,
+        to_id: &str,
     ) -> HFResult<()> {
         let url = format!("{}/api/repos/move", self.endpoint());
         let body = serde_json::json!({
@@ -907,8 +896,8 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_bucket(
         &self,
-        #[builder(into)] namespace: String,
-        #[builder(into)] name: String,
+        namespace: &str,
+        name: &str,
         #[builder(default)] private: bool,
         #[builder(into)] resource_group_id: Option<String>,
         #[builder(default)] exist_ok: bool,
@@ -928,11 +917,7 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::delete_bucket`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_bucket(
-        &self,
-        #[builder(into)] bucket_id: String,
-        #[builder(default)] missing_ok: bool,
-    ) -> HFResult<()> {
+    pub fn delete_bucket(&self, bucket_id: &str, #[builder(default)] missing_ok: bool) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.delete_bucket().bucket_id(bucket_id).missing_ok(missing_ok).send())
     }
@@ -955,7 +940,7 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::move_bucket`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn move_bucket(&self, #[builder(into)] from_id: String, #[builder(into)] to_id: String) -> HFResult<()> {
+    pub fn move_bucket(&self, from_id: &str, to_id: &str) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.move_bucket().from_id(from_id).to_id(to_id).send())
     }

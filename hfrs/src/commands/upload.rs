@@ -94,7 +94,7 @@ async fn do_upload(
         client
             .create_repository()
             .repo_type(*repo.repo_type())
-            .repo_id(args.repo_id.clone())
+            .repo_id(&args.repo_id)
             .maybe_private(if args.private { Some(true) } else { None })
             .exist_ok(true)
             .send()

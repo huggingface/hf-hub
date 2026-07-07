@@ -161,8 +161,7 @@ impl HFClient {
     pub async fn user_overview(
         &self,
         /// Hub handle (slug) of the user.
-        #[builder(into)]
-        username: String,
+        username: &str,
     ) -> HFResult<User> {
         let url = format!("{}/api/users/{}/overview", self.endpoint(), username);
         let headers = self.auth_headers();
@@ -185,8 +184,7 @@ impl HFClient {
     pub async fn organization_overview(
         &self,
         /// Hub handle (slug) of the organization.
-        #[builder(into)]
-        organization: String,
+        organization: &str,
     ) -> HFResult<Organization> {
         let url = format!("{}/api/organizations/{}/overview", self.endpoint(), organization);
         let headers = self.auth_headers();
@@ -274,14 +272,14 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::user_overview`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn user_overview(&self, #[builder(into)] username: String) -> HFResult<User> {
+    pub fn user_overview(&self, username: &str) -> HFResult<User> {
         self.runtime.block_on(self.inner.user_overview().username(username).send())
     }
 
     /// Blocking counterpart of [`HFClient::organization_overview`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn organization_overview(&self, #[builder(into)] organization: String) -> HFResult<Organization> {
+    pub fn organization_overview(&self, organization: &str) -> HFResult<Organization> {
         self.runtime
             .block_on(self.inner.organization_overview().organization(organization).send())
     }

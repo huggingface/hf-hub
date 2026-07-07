@@ -126,11 +126,10 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         filepath: String,
         /// Git revision. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
+        revision: Option<&str>,
     ) -> HFResult<FileMetadataInfo> {
-        let filename = filepath.clone();
-        let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
+        let filename = filepath;
+        let revision = revision.unwrap_or(constants::DEFAULT_REVISION);
         let repo_path = self.repo_path();
         let url = self
             .hf_client
@@ -225,7 +224,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     pub fn get_file_metadata(
         &self,
         #[builder(into)] filepath: String,
-        #[builder(into)] revision: Option<String>,
+        revision: Option<&str>,
     ) -> HFResult<FileMetadataInfo> {
         self.runtime.block_on(
             self.inner

@@ -90,8 +90,8 @@ async fn create(client: &HFClient, args: TagCreateArgs) -> Result<CommandResult>
     };
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     repo.create_tag()
-        .tag(args.tag)
-        .maybe_revision(args.revision)
+        .tag(&args.tag)
+        .maybe_revision(args.revision.as_deref())
         .maybe_message(args.message)
         .send()
         .await?;
@@ -104,7 +104,7 @@ async fn delete(client: &HFClient, args: TagDeleteArgs) -> Result<CommandResult>
         None => ("", args.repo_id.as_str()),
     };
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
-    repo.delete_tag().tag(args.tag).send().await?;
+    repo.delete_tag().tag(&args.tag).send().await?;
     Ok(CommandResult::Silent)
 }
 

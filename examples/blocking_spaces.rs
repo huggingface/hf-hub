@@ -26,7 +26,7 @@ fn main() -> hf_hub::HFResult<()> {
     client
         .create_repository()
         .repo_type(RepoTypeSpace)
-        .repo_id(space.repo_path())
+        .repo_id(&space.repo_path())
         .private(true)
         .space_sdk("static")
         .exist_ok(true)
@@ -54,7 +54,7 @@ fn main() -> hf_hub::HFResult<()> {
     client
         .delete_repository()
         .repo_type(RepoTypeSpace)
-        .repo_id(space.repo_path())
+        .repo_id(&space.repo_path())
         .missing_ok(true)
         .send()?;
     println!("Cleaned up test space");
