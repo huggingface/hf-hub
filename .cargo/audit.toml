@@ -22,4 +22,13 @@ ignore = [
     # `cargo audit` flags it from the lockfile regardless. Revisit if/when we
     # adopt HTTP/3.
     "RUSTSEC-2026-0185",
+    # Invalid pointer dereference in `crossbeam-epoch`'s `fmt::Pointer` impl.
+    # `crossbeam-epoch` is a dev-dependency-only path (`criterion` -> `rayon`
+    # -> `crossbeam-deque` in the benches crate) and is never part of the
+    # shipped library. The patched 0.9.20 (published 2026-07-06) has not yet
+    # synced to the internal registry mirror that local dev and CI resolve
+    # through, so we cannot bump the lockfile without breaking builds.
+    # TEMPORARY: remove this entry and `cargo update -p crossbeam-epoch` once
+    # the mirror serves >= 0.9.20.
+    "RUSTSEC-2026-0204",
 ]
