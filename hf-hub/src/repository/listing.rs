@@ -14,6 +14,7 @@ use reqwest::Url;
 
 use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash};
 use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
+use crate::client::encode_ref;
 use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
 
@@ -55,8 +56,11 @@ impl<T: RepoType> HFRepository<T> {
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<RepoTreeEntry>> + '_> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url_str =
-            format!("{}/tree/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url_str = format!(
+            "{}/tree/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
         let mut url = Url::parse(&url_str)?;
         if let Some(path) = path_in_repo.as_deref() {
             crate::client::append_path_segments(&mut url, path)?;
@@ -94,8 +98,11 @@ impl<T: RepoType> HFRepository<T> {
         revision: Option<String>,
     ) -> HFResult<Vec<RepoTreeEntry>> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url =
-            format!("{}/paths-info/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url = format!(
+            "{}/paths-info/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
 
         let body = serde_json::json!({ "paths": paths });
 

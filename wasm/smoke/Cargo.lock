@@ -936,6 +936,7 @@ dependencies = [
  "hf-xet",
  "hyper",
  "pathdiff",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",

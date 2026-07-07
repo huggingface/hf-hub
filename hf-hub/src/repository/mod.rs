@@ -1118,7 +1118,7 @@ impl<T: RepoType> HFRepository<T> {
     ) -> HFResult<I> {
         let mut url = self.hf_client.api_url(self.repo_type.plural(), &self.repo_path());
         if let Some(ref revision) = revision {
-            url = format!("{url}/revision/{revision}");
+            url = format!("{url}/revision/{}", crate::client::encode_ref(revision));
         }
         let headers = self.hf_client.auth_headers();
         let expand_params: Option<Vec<(&str, &str)>> =
@@ -1181,8 +1181,11 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         revision: String,
     ) -> HFResult<bool> {
-        let url =
-            format!("{}/revision/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url = format!(
+            "{}/revision/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            crate::client::encode_ref(&revision)
+        );
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()

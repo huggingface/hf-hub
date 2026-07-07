@@ -213,7 +213,7 @@ impl HFBucket {
 
     /// Stream the bytes of a single file in this bucket without writing to disk.
     ///
-    /// Wasm-compatible parallel of
+    /// Parallel of
     /// [`HFRepository::download_file_stream`](crate::repository::HFRepository::download_file_stream) for buckets.
     /// Returns `(content_length, stream)` — `content_length` reflects the file size reported by `paths-info`.
     /// Xet-backed files dispatch through xet streaming; non-xet files fall back to a direct GET on the bucket's
@@ -434,11 +434,11 @@ impl HFBucket {
 
     /// Upload an arbitrary set of [`AddSource`](crate::repository::AddSource)-backed files to the bucket.
     ///
-    /// Wasm-safe analog of [`HFBucket::upload_files`] (which is native-only because it
-    /// reads from local paths): each pair can use any [`AddSource`](crate::repository::AddSource)
+    /// More general analog of [`HFBucket::upload_files`] (which only reads from local
+    /// paths): each pair can use any [`AddSource`](crate::repository::AddSource)
     /// variant — `Bytes` for in-memory content, `File` for a local path, or `Stream`
-    /// for sources too large to materialize at once (typical wasm case for `Blob`-backed
-    /// uploads). For the common in-memory case, build entries with
+    /// for sources too large to materialize at once. For the common in-memory case,
+    /// build entries with
     /// [`AddSource::bytes`](crate::repository::AddSource::bytes):
     ///
     /// ```rust,no_run

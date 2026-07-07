@@ -27,6 +27,7 @@ bon = "3"
 globset = "0.4"
 base64 = "0.22"
 pathdiff = "0.2"
+percent-encoding = "2"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
 hf-xet = { git = "https://github.com/huggingface/xet-core", branch = "main" }

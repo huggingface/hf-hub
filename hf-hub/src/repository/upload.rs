@@ -26,9 +26,8 @@ use sha2::{Digest, Sha256};
 #[cfg(not(target_family = "wasm"))]
 use super::files::matches_any_glob;
 use super::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoTreeEntry, RepoType};
-#[cfg(not(target_family = "wasm"))]
-use crate::error::HFError;
-use crate::error::HFResult;
+use crate::client::encode_ref;
+use crate::error::{HFError, HFResult};
 use crate::progress::{EmitEvent, Progress, UploadEvent};
 use crate::{constants, retry};
 
@@ -90,7 +89,11 @@ struct DeleteFolderParams {
 impl<T: RepoType> HFRepository<T> {
     async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!("{}/commit/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url = format!(
+            "{}/commit/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
 
         let add_ops_count = params
             .operations
@@ -430,7 +433,7 @@ impl<T: RepoType> HFRepository<T> {
         revision: &str,
         files: &[(&str, u64, &[u8])],
     ) -> HFResult<HashMap<String, String>> {
-        let url = format!("{}/preupload/{}", self.hf_client.api_url(api_segment, repo_id), revision);
+        let url = format!("{}/preupload/{}", self.hf_client.api_url(api_segment, repo_id), encode_ref(revision));
 
         let files_payload: Vec<serde_json::Value> = files
             .iter()

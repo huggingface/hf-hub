@@ -1,6 +1,8 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use tracing::debug;
 use url::Url;
@@ -27,6 +29,28 @@ pub(crate) fn append_path_segments(url: &mut Url, path: &str) -> HFResult<()> {
         segments.push(seg);
     }
     Ok(())
+}
+
+/// Everything except RFC 3986 unreserved characters (`A-Za-z0-9-._~`), mirroring
+/// Python's `urllib.parse.quote(s, safe="")` as used by `huggingface_hub`.
+const REF_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
+
+/// Percent-encode a git revision (branch, tag, or commit SHA) for use as a single
+/// URL path segment.
+///
+/// Unlike [`append_path_segments`], `/` is encoded too (`feature/x` → `feature%2Fx`)
+/// so the revision occupies exactly one segment — the Hub API expects revisions
+/// fully encoded. Also safe for `<base>..<head>` compare specs: `.` is unreserved,
+/// so the `..` separator stays literal while each side is encoded.
+pub(crate) fn encode_ref(revision: &str) -> Cow<'_, str> {
+    utf8_percent_encode(revision, REF_ENCODE_SET).into()
+}
+
+/// Whether a `Location` header value is a relative reference (no scheme, no
+/// host), like `/Snowflake/repo/resolve/main/config.json`. Protocol-relative
+/// URLs (`//host/path`) carry a host and are treated as absolute.
+fn is_relative_location(location: &str) -> bool {
+    Url::parse(location) == Err(url::ParseError::RelativeUrlWithoutBase) && !location.starts_with("//")
 }
 
 /// Async client for the Hugging Face Hub API.
@@ -344,8 +368,9 @@ impl HFClient {
     ///
     /// `url_prefix` is `""` for models or `"<plural>/"` for the other repo types. Pass
     /// [`crate::repository::RepoType::url_prefix`] for the concrete repo type at the call
-    /// site. `filename` is percent-encoded path-segment by path-segment, so values like
-    /// `subdir/file name #1.bin` produce a correctly escaped URL.
+    /// site. `revision` is fully percent-encoded (including `/`) so it occupies exactly one
+    /// path segment; `filename` is percent-encoded path-segment by path-segment, so values
+    /// like `subdir/file name #1.bin` produce a correctly escaped URL.
     pub(crate) fn download_url(
         &self,
         url_prefix: &str,
@@ -353,7 +378,7 @@ impl HFClient {
         revision: &str,
         filename: &str,
     ) -> HFResult<String> {
-        let base = format!("{}/{}{}/resolve/{}", self.endpoint(), url_prefix, repo_id, revision);
+        let base = format!("{}/{}{}/resolve/{}", self.endpoint(), url_prefix, repo_id, encode_ref(revision));
         let mut url = Url::parse(&base)?;
         append_path_segments(&mut url, filename)?;
         Ok(url.into())
@@ -362,6 +387,41 @@ impl HFClient {
     /// Build a bucket API URL: `{endpoint}/api/buckets/{bucket_id}`
     pub(crate) fn bucket_api_url(&self, bucket_id: &str) -> String {
         format!("{}/api/buckets/{}", self.endpoint(), bucket_id)
+    }
+
+    /// Issue a HEAD request via the no-redirect client, manually following
+    /// *relative* redirects (Location without a host).
+    ///
+    /// The Hub 307s to the canonical repo path when a repo id differs in
+    /// casing (e.g. `snowflake/…` → `Snowflake/…`); that response carries no
+    /// ETag, so metadata extraction must happen after following it. Absolute
+    /// redirects (e.g. to the CDN) are returned as-is — their headers already
+    /// carry the linked metadata. Mirrors `huggingface_hub`'s
+    /// `follow_relative_redirects` behavior.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) async fn head_with_relative_redirects(
+        &self,
+        url: &str,
+        headers: &HeaderMap,
+    ) -> HFResult<reqwest::Response> {
+        const MAX_RELATIVE_REDIRECTS: usize = 10;
+        let mut url = Url::parse(url)?;
+        for _ in 0..=MAX_RELATIVE_REDIRECTS {
+            let response = retry::retry(self.retry_config(), || {
+                self.no_redirect_client().head(url.clone()).headers(headers.clone()).send()
+            })
+            .await?;
+            if response.status().is_redirection()
+                && let Some(location) = response.headers().get(reqwest::header::LOCATION)
+                && let Ok(location) = location.to_str()
+                && is_relative_location(location)
+            {
+                url = url.join(location)?;
+                continue;
+            }
+            return Ok(response);
+        }
+        Err(HFError::malformed_response_at("too many relative redirects", url.to_string()))
     }
 
     /// Check an HTTP response and map error status codes to HFError variants.
@@ -519,7 +579,7 @@ mod tests {
     use serial_test::serial;
     use url::Url;
 
-    use super::{HFClientBuilder, append_path_segments};
+    use super::{HFClientBuilder, append_path_segments, encode_ref, is_relative_location};
 
     #[test]
     fn append_path_segments_encodes_special_chars() {
@@ -554,6 +614,52 @@ mod tests {
         let mut url = Url::parse("https://example.com/base").unwrap();
         append_path_segments(&mut url, "").unwrap();
         assert_eq!(url.as_str(), "https://example.com/base");
+    }
+
+    #[test]
+    fn encode_ref_encodes_slash_and_reserved_chars() {
+        assert_eq!(encode_ref("feature/x"), "feature%2Fx");
+        assert_eq!(encode_ref("fix#123"), "fix%23123");
+        assert_eq!(encode_ref("wip?draft"), "wip%3Fdraft");
+        assert_eq!(encode_ref("v1.0+beta"), "v1.0%2Bbeta");
+        assert_eq!(encode_ref("with space"), "with%20space");
+        assert_eq!(encode_ref("100%done"), "100%25done");
+    }
+
+    #[test]
+    fn encode_ref_preserves_unreserved_chars() {
+        assert_eq!(encode_ref("main"), "main");
+        assert_eq!(encode_ref("v1.0-rc.2_final~ok"), "v1.0-rc.2_final~ok");
+        assert_eq!(encode_ref("abc123def456"), "abc123def456");
+    }
+
+    #[test]
+    fn encode_ref_keeps_compare_dots_literal() {
+        assert_eq!(encode_ref("main..feature/x"), "main..feature%2Fx");
+        assert_eq!(encode_ref("v1.0...v2.0"), "v1.0...v2.0");
+    }
+
+    #[test]
+    fn encode_ref_encodes_unicode() {
+        assert_eq!(encode_ref("ветка"), "%D0%B2%D0%B5%D1%82%D0%BA%D0%B0");
+    }
+
+    #[test]
+    fn is_relative_location_classification() {
+        assert!(is_relative_location("/Snowflake/repo/resolve/main/config.json"));
+        assert!(is_relative_location("relative/path"));
+        assert!(!is_relative_location("https://cdn-lfs.huggingface.co/repos/x"));
+        assert!(!is_relative_location("//cdn-lfs.huggingface.co/repos/x"));
+    }
+
+    #[test]
+    fn download_url_encodes_revision() {
+        let client = HFClientBuilder::new().endpoint("https://huggingface.co").build().unwrap();
+        let url = client.download_url("", "owner/repo", "feature/x", "file.bin").unwrap();
+        assert_eq!(url, "https://huggingface.co/owner/repo/resolve/feature%2Fx/file.bin");
+
+        let url = client.download_url("", "owner/repo", "fix#123", "file.bin").unwrap();
+        assert_eq!(url, "https://huggingface.co/owner/repo/resolve/fix%23123/file.bin");
     }
 
     #[test]
