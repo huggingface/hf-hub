@@ -24,7 +24,7 @@ pub(crate) struct RuntimeThread {
 impl RuntimeThread {
     /// Spawns the background thread and waits for its runtime to come up.
     fn spawn() -> HFResult<Arc<Self>> {
-        let (handle_tx, handle_rx) = std::sync::mpsc::channel();
+        let (handle_tx, handle_rx) = std::sync::mpsc::sync_channel(1);
         let (shutdown_tx, shutdown_rx) = futures::channel::oneshot::channel::<()>();
         std::thread::Builder::new()
             .name("hf-hub-blocking-runtime".to_string())
