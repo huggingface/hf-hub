@@ -111,6 +111,17 @@ async fn collect_file_paths<T: RepoType>(test_repo: &HFRepository<T>) -> std::co
     files
 }
 
+async fn count_commits<T: RepoType>(test_repo: &HFRepository<T>) -> usize {
+    let stream = test_repo.list_commits().send().unwrap();
+    futures::pin_mut!(stream);
+    let mut n = 0;
+    while let Some(c) = stream.next().await {
+        c.unwrap();
+        n += 1;
+    }
+    n
+}
+
 #[tokio::test]
 async fn test_model_info() {
     let Some(client) = prod_api() else { return };
@@ -912,6 +923,87 @@ async fn test_upload_folder() {
     let files = collect_file_paths(&test_repo).await;
     assert!(files.contains("hello.txt"));
     assert!(files.contains("subdir/nested.txt"));
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+#[tokio::test]
+async fn test_upload_folder_multi_commit() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+    let test_repo = repo(&client, &repo_id);
+
+    // 300 tiny files force >= 2 commits (initial adaptive batch is 250 files).
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..300 {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), format!("content {i}")).unwrap();
+    }
+
+    let commits_before = count_commits(&test_repo).await;
+
+    let commit = test_repo
+        .upload_folder()
+        .folder_path(dir.path().to_path_buf())
+        .commit_message("multi-commit upload")
+        .send()
+        .await
+        .unwrap();
+    assert!(commit.commit_oid.is_some());
+
+    let commits_after = count_commits(&test_repo).await;
+    assert!(
+        commits_after >= commits_before + 2,
+        "expected multiple commits (before={commits_before}, after={commits_after})"
+    );
+
+    let files = collect_file_paths(&test_repo).await;
+    let txt_count = files.iter().filter(|p| p.ends_with(".txt")).count();
+    assert_eq!(txt_count, 300, "all 300 files should be present");
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+#[tokio::test]
+async fn test_upload_folder_multi_commit_create_pr() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+    let test_repo = repo(&client, &repo_id);
+
+    // Enough files to force >= 2 commits, all landing on the PR ref.
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..300 {
+        std::fs::write(dir.path().join(format!("f{i}.txt")), format!("c{i}")).unwrap();
+    }
+
+    let commit = test_repo
+        .upload_folder()
+        .folder_path(dir.path().to_path_buf())
+        .commit_message("pr multi-commit")
+        .create_pr(true)
+        .send()
+        .await
+        .expect("multi-commit PR upload");
+    assert!(commit.pr_num.is_some(), "a PR should have been opened");
+
+    // Files should be listable on the PR ref (validates the refs/pr/N commit path).
+    let pr_rev = format!("refs/pr/{}", commit.pr_num.unwrap());
+    let stream = test_repo.list_tree().revision(pr_rev).recursive(true).send().unwrap();
+    futures::pin_mut!(stream);
+    let mut txt = 0;
+    while let Some(entry) = stream.next().await {
+        if let RepoTreeEntry::File { path, .. } = entry.unwrap()
+            && path.ends_with(".txt")
+        {
+            txt += 1;
+        }
+    }
+    assert_eq!(txt, 300, "all 300 files should be present on the PR ref");
 
     delete_test_repo(&client, &repo_id).await;
 }

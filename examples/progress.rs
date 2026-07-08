@@ -75,6 +75,12 @@ impl ProgressHandler for PrintProgressHandler {
                         println!("    {}: {pct}% ({}/{}) [{status}]", f.filename, f.bytes_completed, f.total_bytes);
                     }
                 },
+                UploadEvent::CommitCompleted {
+                    commit_index,
+                    commit_oid,
+                } => {
+                    println!("  Committed batch {} ({:?})", commit_index + 1, commit_oid);
+                },
                 UploadEvent::Committing => {
                     println!("  Phase: committing");
                 },

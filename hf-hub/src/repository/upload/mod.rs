@@ -11,6 +11,11 @@
 //!
 //! See each builder's docs for the exact path / glob format rules.
 
+// The streamed multi-commit pipeline backs `upload_folder`, which reads local files
+// and is unavailable on wasm; gate the module to match.
+#[cfg(not(target_family = "wasm"))]
+pub mod pipeline;
+
 use std::collections::HashMap;
 use std::fmt::Write as _;
 #[cfg(not(target_family = "wasm"))]
@@ -89,11 +94,6 @@ struct DeleteFolderParams {
 impl<T: RepoType> HFRepository<T> {
     async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!(
-            "{}/commit/{}",
-            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
-            encode_ref(revision)
-        );
 
         let add_ops_count = params
             .operations
@@ -126,19 +126,55 @@ impl<T: RepoType> HFRepository<T> {
         let lfs_uploaded: HashMap<String, (String, u64)> =
             self.preupload_and_upload_lfs_files(&params, revision).await?;
 
+        params.progress.emit(UploadEvent::Committing);
+        let commit_info = self
+            .post_commit(
+                &params.operations,
+                &lfs_uploaded,
+                &params.commit_message,
+                params.commit_description.as_deref(),
+                params.parent_commit.as_deref(),
+                revision,
+                params.create_pr,
+            )
+            .await?;
+        params.progress.emit(UploadEvent::Complete);
+        Ok(commit_info)
+    }
+
+    /// Build the commit NDJSON body and POST it. `lfs_uploaded` maps `path_in_repo`
+    /// to `(sha256_oid, size)` for files already uploaded via xet; every other `Add`
+    /// is inlined as base64. Emits no progress events — callers own the lifecycle.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn post_commit(
+        &self,
+        operations: &[CommitOperation],
+        lfs_uploaded: &HashMap<String, (String, u64)>,
+        commit_message: &str,
+        commit_description: Option<&str>,
+        parent_commit: Option<&str>,
+        revision: &str,
+        create_pr: bool,
+    ) -> HFResult<CommitInfo> {
+        let url = format!(
+            "{}/commit/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
+
         let mut ndjson_lines: Vec<Vec<u8>> = Vec::new();
 
         let mut header_value = serde_json::json!({
-            "summary": params.commit_message,
-            "description": params.commit_description.as_deref().unwrap_or(""),
+            "summary": commit_message,
+            "description": commit_description.unwrap_or(""),
         });
-        if let Some(ref parent) = params.parent_commit {
-            header_value["parentCommit"] = serde_json::Value::String(parent.clone());
+        if let Some(parent) = parent_commit {
+            header_value["parentCommit"] = serde_json::Value::String(parent.to_string());
         }
         let header_line = serde_json::json!({"key": "header", "value": header_value});
         ndjson_lines.push(serde_json::to_vec(&header_line)?);
 
-        for op in &params.operations {
+        for op in operations {
             let line = match op {
                 CommitOperation::Add { path_in_repo, source } => {
                     if let Some((oid, size)) = lfs_uploaded.get(path_in_repo) {
@@ -180,12 +216,9 @@ impl<T: RepoType> HFRepository<T> {
             })
             .collect();
 
-        params.progress.emit(UploadEvent::Committing);
-
         let mut headers = self.hf_client.auth_headers();
         headers.insert(reqwest::header::CONTENT_TYPE, "application/x-ndjson".parse().unwrap());
 
-        let create_pr = params.create_pr;
         let response = retry::retry(self.hf_client.retry_config(), || {
             let mut req = self
                 .hf_client
@@ -205,11 +238,10 @@ impl<T: RepoType> HFRepository<T> {
             .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Repo)
             .await?;
 
-        params.progress.emit(UploadEvent::Complete);
         Ok(response.json().await?)
     }
 
-    async fn inline_base64_entry(path_in_repo: &str, source: &AddSource) -> HFResult<serde_json::Value> {
+    pub(super) async fn inline_base64_entry(path_in_repo: &str, source: &AddSource) -> HFResult<serde_json::Value> {
         let content: bytes::Bytes = match source {
             #[cfg(not(target_family = "wasm"))]
             AddSource::File(path) => bytes::Bytes::from(std::fs::read(path)?),
@@ -257,46 +289,10 @@ impl<T: RepoType> HFRepository<T> {
 
     #[cfg(not(target_family = "wasm"))]
     async fn upload_folder_impl(&self, params: UploadFolderParams) -> HFResult<CommitInfo> {
-        let mut operations = Vec::new();
-
-        let folder = &params.folder_path;
-        let base_repo_path = params.path_in_repo.as_deref().unwrap_or("");
-
-        collect_files_recursive(
-            folder,
-            folder,
-            base_repo_path,
-            &params.allow_patterns,
-            &params.ignore_patterns,
-            &mut operations,
-        )?;
-
-        if let Some(ref delete_patterns) = params.delete_patterns {
-            let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-            let stream = self.list_tree().revision(revision.to_string()).recursive(true).send()?;
-            futures::pin_mut!(stream);
-            while let Some(entry) = stream.next().await {
-                let entry = entry?;
-                if let RepoTreeEntry::File { path, .. } = entry
-                    && matches_any_glob(delete_patterns, &path)
-                {
-                    operations.push(CommitOperation::delete(path));
-                }
-            }
-        }
-
-        let commit_message = params.commit_message.clone().unwrap_or_else(|| "Upload folder".to_string());
-
-        self.create_commit_impl(CreateCommitParams {
-            operations,
-            commit_message,
-            commit_description: params.commit_description.clone(),
-            revision: params.revision.clone(),
-            create_pr: params.create_pr,
-            parent_commit: None,
-            progress: params.progress.clone(),
-        })
-        .await
+        // `upload_folder` always streams through the multi-commit pipeline: a small folder
+        // fits in one batch (one commit), a large one is split across several. This mirrors
+        // huggingface_hub, which routes `upload_folder` through its xet upload pipeline.
+        self.run_multi_commit_pipeline(params).await
     }
 
     async fn delete_file_impl(&self, params: DeleteFileParams) -> HFResult<CommitInfo> {
@@ -426,7 +422,7 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Call the Hub preupload endpoint to determine the upload mode per file.
     /// Returns a map of path -> upload mode ("lfs" or "regular").
-    async fn fetch_upload_modes(
+    pub(super) async fn fetch_upload_modes(
         &self,
         repo_id: &str,
         api_segment: &str,
@@ -606,7 +602,7 @@ const PREUPLOAD_SAMPLE_SIZE: usize = 512;
 
 // Compute size, preupload sample, and SHA-256 in a single pass so a stream
 // source is only read twice total: the metadata pass here and the xet upload.
-async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>, String)> {
+pub(super) async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>, String)> {
     match source {
         AddSource::Bytes(bytes) => {
             let sample = bytes[..std::cmp::min(bytes.len(), PREUPLOAD_SAMPLE_SIZE)].to_vec();
@@ -658,7 +654,7 @@ async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>, String)> 
 /// Recursively collect files from a directory into CommitOperation::Add entries.
 /// Respects allow_patterns and ignore_patterns (glob-style).
 #[cfg(not(target_family = "wasm"))]
-fn collect_files_recursive(
+pub(super) fn collect_files_recursive(
     root: &Path,
     current: &Path,
     base_repo_path: &str,
