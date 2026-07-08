@@ -826,8 +826,6 @@ impl<T: RepoType> HFRepository<T> {
     /// All pattern arguments use [`globset`](https://docs.rs/globset) syntax (`*`, `?`, `**`,
     /// character classes, etc.). Path strings are forward-slash-joined regardless of platform.
     ///
-    /// Not available on `wasm32-unknown-unknown`; folder walking requires filesystem access.
-    ///
     /// # Parameters
     ///
     /// - `folder_path` (required): local folder path to upload.

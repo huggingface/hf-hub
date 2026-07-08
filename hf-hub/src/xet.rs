@@ -309,11 +309,9 @@ async fn xet_upload_inner(
             },
             AddSource::Bytes(bytes) => {
                 item_name_to_target_path.insert(target_path.clone(), target_path.clone());
-                // Native xet still uses upload_bytes for the per-file XetFileUpload
-                // handle (needed by the progress-polling loop below). xet's
-                // upload_bytes signature wants `Vec<u8>` so we materialize one
-                // here — a one-shot copy that's fine on native, where memory
-                // isn't a 4 GiB-capped resource the way it is on wasm.
+                // upload_bytes yields the per-file XetFileUpload handle needed by
+                // the progress-polling loop below; its signature wants `Vec<u8>`,
+                // so we pay a one-shot copy here.
                 let h = commit
                     .upload_bytes(bytes.to_vec(), Sha256Policy::Compute, Some(target_path.clone()))
                     .await

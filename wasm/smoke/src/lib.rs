@@ -134,14 +134,11 @@ pub async fn download_file_bytes(
 /// per-file lists (`files`) are arrays of `{ filename, bytes_completed,
 /// total_bytes, status }` objects.
 ///
-/// This function only drives `download_file_stream`, so the callback only
-/// observes `download.*` variants in this demo. Upload variants are exposed
-/// in the JS shape for parity with native — the wasm-compatible upload
-/// surface (`create_commit`, `upload_file`, `delete_file`, `delete_folder`
-/// with `AddSource::Bytes`) does emit `upload.start` / `upload.committing` /
-/// `upload.complete`, but per-byte `upload.progress` events are not wired
-/// through the wasm xet upload path today (see `hf-hub/src/xet.rs`'s
-/// `#[cfg(target_family = "wasm")] async fn xet_upload_inner`).
+/// This function only drives `download_file_stream`, so only `download.*`
+/// variants fire in this demo. The `upload.*` kinds exist in the JS shape for
+/// parity with native: hf-hub's wasm-compatible upload calls emit
+/// `upload.start` / `upload.committing` / `upload.complete`, but per-byte
+/// `upload.progress` is not wired through the wasm xet upload path today.
 ///
 /// Returns the total number of bytes streamed.
 #[wasm_bindgen]
@@ -175,18 +172,13 @@ pub async fn download_with_progress(
 /// Bridges hf-hub's [`ProgressHandler`] (which requires `Send + Sync`) to a
 /// `js_sys::Function`.
 ///
-/// `js_sys::Function` is `!Send + !Sync` because each JS value is bound to its
-/// host thread. The hf-hub progress pipeline for `download_file_stream` invokes
-/// the handler on the stream-poll path (`wrap_stream_with_progress`), which on
-/// wasm runs on the same JS thread that called `download_with_progress`, so in
-/// practice the callback is only ever fired on its original thread.
-///
-/// We wrap the `js_sys::Function` in a [`send_wrapper::SendWrapper`] to satisfy
-/// the trait's `Send + Sync` bound without manual `unsafe impl`s: `SendWrapper`
-/// is `Send + Sync` unconditionally, but `Deref` / `Drop` panic if the wrapper
-/// is accessed from a different thread than the one that constructed it.
-/// That converts what would otherwise be undefined behaviour (if hf-hub ever
-/// dispatched progress events across worker threads) into a clean panic.
+/// `js_sys::Function` is `!Send + !Sync` because JS values are bound to their
+/// host thread. In practice the handler only fires on the stream-poll path, on
+/// the same JS thread that called `download_with_progress`, so we satisfy the
+/// bound with a [`send_wrapper::SendWrapper`] instead of an `unsafe impl`:
+/// `SendWrapper` is `Send + Sync` unconditionally but panics on cross-thread
+/// access — a clean panic instead of undefined behavior if hf-hub ever
+/// dispatched progress events across worker threads.
 struct JsProgressHandler {
     callback: send_wrapper::SendWrapper<js_sys::Function>,
 }

@@ -41,9 +41,8 @@ use crate::{constants, retry};
 
 /// Boxed byte stream returned by [`HFRepository::download_file_stream`].
 ///
-/// Includes `+ Send` on native targets; on `wasm32-unknown-unknown` the
-/// browser `reqwest` backend produces `!Send` streams, so the `Send` bound
-/// is dropped there. The `+ Unpin` bound is uniform.
+/// `Send + Unpin` on native targets; on wasm the browser `reqwest` backend
+/// produces `!Send` streams, so the `Send` bound is dropped.
 #[cfg(not(target_family = "wasm"))]
 pub type HFByteStream = Box<dyn Stream<Item = HFResult<bytes::Bytes>> + Send + Unpin>;
 #[cfg(target_family = "wasm")]
@@ -108,15 +107,12 @@ impl<T: RepoType> HFRepository<T> {
     // Native: HEAD the resolve URL and read `X-Xet-Hash` /
     // `Content-Length` / `X-Linked-Size` from the response headers.
     //
-    // Wasm: the resolve URL 302-redirects to a CAS blob URL, and
-    // browsers do not surface intermediate-response headers when
-    // following redirects (this is the Fetch spec, not server-side
-    // CORS — the headers ARE in `Access-Control-Expose-Headers` on the
-    // 302, but JS only ever sees the final response's headers). Using
-    // `redirect: 'manual'` doesn't help either: that produces an
-    // opaque-redirect response with no readable headers. So on wasm we
-    // dispatch via `paths-info`, a non-redirecting JSON endpoint that
-    // returns the same metadata in a body that isn't header-filtered.
+    // Wasm: the resolve URL 302-redirects to a CAS blob URL, and the Fetch
+    // spec only surfaces the final response's headers when following
+    // redirects (`redirect: 'manual'` doesn't help — it yields an opaque
+    // response with no readable headers). So on wasm we dispatch via
+    // `paths-info`, a non-redirecting JSON endpoint that returns the same
+    // metadata in the body.
     #[cfg(not(target_family = "wasm"))]
     async fn resolve_xet_hash_and_size(
         &self,

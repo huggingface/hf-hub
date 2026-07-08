@@ -38,21 +38,14 @@ export function download_file_bytes(
   filename: string,
 ): Promise<Uint8Array>;
 
-// Streams the file and invokes `onProgress` for every ProgressEvent the
-// underlying hf-hub ProgressHandler receives. Resolves with the total
-// number of bytes streamed. The callback is fed plain objects shaped like
-// `{ kind: "download.start", total_files, total_bytes }`,
+// Streams the file and invokes `onProgress` with a plain object for every
+// ProgressEvent, e.g. `{ kind: "download.start", total_files, total_bytes }`,
 // `{ kind: "download.progress", files: [...] }`,
 // `{ kind: "download.aggregate_progress", bytes_completed, total_bytes, bytes_per_sec }`,
-// `{ kind: "download.complete" }`, etc. This entry point only drives
-// downloads, so only `download.*` variants fire here. Upload variants
-// (`upload.start` / `upload.progress` / `upload.committing` /
-// `upload.complete`) are part of the JS shape for parity with native —
-// wasm-compatible upload calls (`create_commit`, `upload_file`,
-// `delete_file`, `delete_folder` with `AddSource::Bytes`) do emit
-// `upload.start` / `upload.committing` / `upload.complete`, but per-byte
-// `upload.progress` events aren't wired through the wasm xet upload path
-// today.
+// `{ kind: "download.complete" }`. Resolves with the total number of bytes
+// streamed. This entry point only drives downloads, so only `download.*`
+// variants fire here (`upload.*` kinds exist in the JS shape for parity —
+// see `download_with_progress` in `src/lib.rs`).
 export function download_with_progress(
   endpoint: string,
   token: string | undefined,

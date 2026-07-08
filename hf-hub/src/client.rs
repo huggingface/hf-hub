@@ -61,18 +61,6 @@ pub(crate) fn encode_ref(revision: &str) -> Cow<'_, str> {
 /// assert_eq!(split_id("openai-community/gpt2"), ("openai-community", "gpt2"));
 /// assert_eq!(split_id("gpt2"), ("", "gpt2"));
 /// ```
-///
-/// Handy for turning a user-supplied id straight into a repo handle:
-///
-/// ```no_run
-/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
-/// use hf_hub::{HFClient, split_id};
-///
-/// let client = HFClient::new()?;
-/// let (owner, name) = split_id("openai-community/gpt2");
-/// let info = client.model(owner, name).info().send().await?;
-/// # let _ = info; Ok(()) }
-/// ```
 pub fn split_id(id: &str) -> (&str, &str) {
     match id.split_once('/') {
         Some((owner, name)) => (owner, name),

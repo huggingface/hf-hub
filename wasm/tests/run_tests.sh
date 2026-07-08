@@ -6,17 +6,11 @@
 # atomics, bulk-memory, mutable-globals, shared memory, and a rebuilt std (via
 # `-Z build-std`) — hence the nightly toolchain and the rustflags below.
 #
-# Browser only: the test crate compiles in
-# `wasm_bindgen_test_configure!(run_in_browser)` unconditionally, so
-# `wasm-bindgen-test-runner` always drives a headless browser. Node is not
-# supported — `hf-xet`'s upload path spawns Web Workers that only function in a
+# Browser only: `hf-xet`'s upload path spawns Web Workers in a
 # `crossOriginIsolated` context, which Node's wasm-bindgen-test runner can't
-# provide (Node has `SharedArrayBuffer` but no Web `Worker`). `wasm-bindgen-
-# test-runner` (>= 0.2.121) serves the required
-# `Cross-Origin-Opener-Policy: same-origin` and
-# `Cross-Origin-Embedder-Policy: require-corp` headers automatically, so
-# `SharedArrayBuffer` and workers are available on the test page. Node
-# consumers should use a native addon instead of the wasm build.
+# provide. `wasm-bindgen-test-runner` >= 0.2.121 serves the required COOP/COEP
+# headers automatically, so `SharedArrayBuffer` and workers are available on
+# the test page.
 #
 # Requirements:
 #   - Nightly Rust toolchain with `rust-src` (`rustup component add

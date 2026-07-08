@@ -220,10 +220,8 @@ impl CommitOperation {
 
 /// Stream of byte chunks produced by a [`StreamSource`].
 ///
-/// On native targets the stream is `Send`. On `wasm32-unknown-unknown` the
-/// `Send` bound is dropped because the most common wasm implementations
-/// (e.g., adapters around `web_sys::Blob::stream`) wrap JS values that
-/// are inherently thread-bound.
+/// `Send` on native targets; the bound is dropped on wasm, where streams
+/// typically wrap thread-bound JS values.
 #[cfg(not(target_family = "wasm"))]
 pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>> + Send>>;
 #[cfg(target_family = "wasm")]
@@ -231,19 +229,14 @@ pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>>>>;
 
 /// Factory that produces a fresh [`SourceByteStream`] each time `open` is called.
 ///
-/// hf-hub's upload pipeline reads a source up to three times — a small "sample"
+/// The upload pipeline reads a source up to three times — a small "sample"
 /// prefix for the preupload classification, the full content for the LFS SHA-256
 /// hash, and the full content for the xet upload — so a one-shot stream isn't
-/// enough. Implementations should be cheap to re-open (e.g., re-slice a
-/// `web_sys::Blob` or re-open a file handle) and must produce identical bytes
+/// enough. Implementations must be cheap to re-open and produce identical bytes
 /// across opens.
 ///
 /// The trait requires `Send + Sync` so that [`AddSource`] (and therefore
-/// `CommitOperation::Add { source }`) can be moved between tasks. JS-backed
-/// implementations on `wasm32-unknown-unknown` typically wrap a non-`Send`
-/// value (a `Blob`) in a newtype with an `unsafe impl Send + Sync` justified
-/// by wasm's effective single-threadedness — see the `hf-hub-wasm-upload`
-/// Space for the pattern.
+/// `CommitOperation::Add { source }`) can be moved between tasks.
 pub trait StreamFactory: Send + Sync {
     /// Produce a fresh stream over the source's bytes.
     fn open(&self) -> SourceByteStream;
@@ -251,8 +244,7 @@ pub trait StreamFactory: Send + Sync {
 
 /// Source backed by a re-readable stream of byte chunks of known length.
 ///
-/// Use this when the bytes are too large to materialize in memory at once —
-/// for example, when uploading a multi-GiB browser `File` from a wasm Space.
+/// Use this when the bytes are too large to materialize in memory at once.
 /// The upload pipeline only ever holds one chunk in flight at a time.
 #[derive(Clone)]
 pub struct StreamSource {
@@ -301,11 +293,9 @@ pub enum AddSource {
     #[cfg(not(target_family = "wasm"))]
     File(PathBuf),
 
-    /// In-memory contents used as the file body. Stored as [`bytes::Bytes`] so that
-    /// the internal `.clone()` calls along the upload path (e.g., building the
-    /// xet batch from operations) are cheap refcount bumps rather than full
-    /// memory copies — critical on `wasm32-unknown-unknown` where every extra
-    /// 100s of MB of working set risks exhausting the wasm linear memory.
+    /// In-memory contents used as the file body. Stored as [`bytes::Bytes`] so the
+    /// internal `.clone()` calls along the upload path are cheap refcount bumps
+    /// rather than full memory copies.
     Bytes(Bytes),
 
     /// Lazily-read byte stream of known total length. Lets the upload pipeline
