@@ -205,14 +205,6 @@ struct CommitJob {
     upload: tokio::task::JoinHandle<HFResult<HashMap<String, (String, u64)>>>,
 }
 
-fn source_size(source: &AddSource) -> u64 {
-    match source {
-        AddSource::Bytes(b) => b.len() as u64,
-        AddSource::Stream(s) => s.size(),
-        AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
-    }
-}
-
 impl<T: RepoType> HFRepository<T> {
     /// Streamed multi-commit upload backing [`HFRepository::upload_folder`].
     ///
@@ -229,10 +221,11 @@ impl<T: RepoType> HFRepository<T> {
             .unwrap_or_else(|| constants::DEFAULT_REVISION.to_string());
         let commit_message = params.commit_message.clone().unwrap_or_else(|| "Upload folder".to_string());
 
-        // 1. Walk the folder into add operations.
+        // 1. Walk the folder into add operations. The walk also returns the file count and total byte size (from the
+        //    same metadata it already reads), so we don't re-stat every file to compute progress totals below.
         let mut add_operations = Vec::new();
         let base_repo_path = params.path_in_repo.as_deref().unwrap_or("");
-        collect_files_recursive(
+        let (total_files, total_bytes) = collect_files_recursive(
             &params.folder_path,
             &params.folder_path,
             base_repo_path,
@@ -267,15 +260,7 @@ impl<T: RepoType> HFRepository<T> {
             (revision.clone(), None, None)
         };
 
-        // 4. Grand totals for progress (the full file list is known upfront).
-        let total_files = add_operations.len();
-        let total_bytes: u64 = add_operations
-            .iter()
-            .filter_map(|op| match op {
-                CommitOperation::Add { source, .. } => Some(source_size(source)),
-                _ => None,
-            })
-            .sum();
+        // 4. Emit the up-front progress totals computed during the walk.
         params.progress.emit(UploadEvent::Start {
             total_files,
             total_bytes,

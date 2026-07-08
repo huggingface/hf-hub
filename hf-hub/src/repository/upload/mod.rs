@@ -646,6 +646,9 @@ pub(super) async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>
 /// Recursively collect files from a directory into CommitOperation::Add entries.
 /// Respects allow_patterns and ignore_patterns (glob-style).
 #[cfg(not(target_family = "wasm"))]
+/// Recursively collect files under `current` into add operations, returning the number
+/// of files added and their total byte size. The size is taken from the same directory
+/// walk's metadata, so callers don't need to re-stat each file for progress totals.
 pub(super) fn collect_files_recursive(
     root: &Path,
     current: &Path,
@@ -653,14 +656,19 @@ pub(super) fn collect_files_recursive(
     allow_patterns: &Option<Vec<String>>,
     ignore_patterns: &Option<Vec<String>>,
     operations: &mut Vec<CommitOperation>,
-) -> HFResult<()> {
+) -> HFResult<(usize, u64)> {
+    let mut num_files = 0usize;
+    let mut total_bytes = 0u64;
     for entry in std::fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
         let metadata = entry.metadata()?;
 
         if metadata.is_dir() {
-            collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations)?;
+            let (n, b) =
+                collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations)?;
+            num_files += n;
+            total_bytes += b;
         } else if metadata.is_file() {
             let relative = path.strip_prefix(root).map_err(|e| {
                 HFError::InvalidParameter(format!("path {} is not under {}: {e}", path.display(), root.display()))
@@ -692,10 +700,12 @@ pub(super) fn collect_files_recursive(
             };
 
             operations.push(CommitOperation::add_file(repo_path, path));
+            num_files += 1;
+            total_bytes += metadata.len();
         }
     }
 
-    Ok(())
+    Ok((num_files, total_bytes))
 }
 
 #[bon]
