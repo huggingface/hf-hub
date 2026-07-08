@@ -154,7 +154,8 @@
 //! ## Blocking API
 //!
 //! Enable the `blocking` feature for synchronous wrappers that manage a dedicated
-//! tokio runtime internally:
+//! tokio runtime internally. The runtime lives on a background thread, so the
+//! blocking methods are safe to call even from inside another tokio runtime:
 //!
 //! ```toml
 //! [dependencies]

@@ -124,7 +124,9 @@ helper that already has the field as an `Option<T>` local).
 
 Every async method MUST have a manually-written blocking counterpart on the corresponding
 `*Sync` struct under `#[cfg(feature = "blocking")]`. Mirror the same `#[builder]` parameter list
-verbatim. The body calls the inner async builder and blocks on the runtime:
+verbatim. The body calls the inner async builder and blocks on the runtime. (`self.runtime` is a
+`RuntimeThread`: the runtime lives on a background thread so sync methods are safe from inside
+another tokio runtime, and its `block_on` takes any `Send` future — no `'static` bound.)
 
 ```rust
 #[cfg(feature = "blocking")]
@@ -149,8 +151,7 @@ impl crate::blocking::HFRepositorySync {
 
 For stream-returning methods, the sync counterpart collects into `Vec<T>`: pin the stream and
 drain with `while let Some` (see existing examples in `repository/listing.rs` and
-`repository/mod.rs`). On `HFSpaceSync`, the runtime is reached via `&self.repo_sync.runtime`
-because the struct has no direct `runtime` field. Do NOT reintroduce the legacy `sync_api!` /
+`repository/mod.rs`). Do NOT reintroduce the legacy `sync_api!` /
 `sync_api_stream!` / `sync_api_async_stream!` macros — they were removed deliberately when the
 crate moved to bon.
 
