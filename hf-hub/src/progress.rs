@@ -253,6 +253,15 @@ pub enum UploadEvent {
         files: Vec<FileProgress>,
     },
 
+    /// Emitted after each individual commit in a multi-commit `upload_folder`.
+    /// `commit_index` is 0-based. Not emitted by single-commit uploads.
+    CommitCompleted {
+        /// 0-based index of the commit that just landed.
+        commit_index: usize,
+        /// The landed commit's SHA, when the API returned one.
+        commit_oid: Option<String>,
+    },
+
     /// Emitted once, immediately before the commit API call. Signals that all byte
     /// transfer is done; the call itself is silent until `Complete`.
     Committing,
