@@ -46,6 +46,40 @@ pub(crate) fn encode_ref(revision: &str) -> Cow<'_, str> {
     utf8_percent_encode(revision, REF_ENCODE_SET).into()
 }
 
+/// Split a repo or bucket id into its `(owner, name)` parts.
+///
+/// A fully-qualified id (`"owner/name"`) splits on the first `/`. A short-form
+/// id with no owner (`"gpt2"`) yields an empty owner, matching the `owner, name`
+/// argument pair taken by [`HFClient::model`], [`HFClient::dataset`],
+/// [`HFClient::space`], and [`HFClient::repository`]. Only the first `/` is a
+/// separator, so nested names (`"owner/sub/name"`) keep their tail intact
+/// (`("owner", "sub/name")`).
+///
+/// ```
+/// use hf_hub::split_id;
+///
+/// assert_eq!(split_id("openai-community/gpt2"), ("openai-community", "gpt2"));
+/// assert_eq!(split_id("gpt2"), ("", "gpt2"));
+/// ```
+///
+/// Handy for turning a user-supplied id straight into a repo handle:
+///
+/// ```no_run
+/// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+/// use hf_hub::{HFClient, split_id};
+///
+/// let client = HFClient::new()?;
+/// let (owner, name) = split_id("openai-community/gpt2");
+/// let info = client.model(owner, name).info().send().await?;
+/// # let _ = info; Ok(()) }
+/// ```
+pub fn split_id(id: &str) -> (&str, &str) {
+    match id.split_once('/') {
+        Some((owner, name)) => (owner, name),
+        None => ("", id),
+    }
+}
+
 /// Whether a `Location` header value is a relative reference (no scheme, no
 /// host), like `/Snowflake/repo/resolve/main/config.json`. Protocol-relative
 /// URLs (`//host/path`) carry a host and are treated as absolute.
@@ -579,7 +613,7 @@ mod tests {
     use serial_test::serial;
     use url::Url;
 
-    use super::{HFClientBuilder, append_path_segments, encode_ref, is_relative_location};
+    use super::{HFClientBuilder, append_path_segments, encode_ref, is_relative_location, split_id};
 
     #[test]
     fn append_path_segments_encodes_special_chars() {
@@ -676,6 +710,29 @@ mod tests {
         let client = HFClientBuilder::new().endpoint("https://huggingface.co").build().unwrap();
         let url = client.download_url("datasets/", "owner/ds", "v1.0", "data/train.csv").unwrap();
         assert_eq!(url, "https://huggingface.co/datasets/owner/ds/resolve/v1.0/data/train.csv");
+    }
+
+    #[test]
+    fn split_id_splits_owner_and_name() {
+        assert_eq!(split_id("openai-community/gpt2"), ("openai-community", "gpt2"));
+        assert_eq!(split_id("HuggingFaceFW/fineweb"), ("HuggingFaceFW", "fineweb"));
+    }
+
+    #[test]
+    fn split_id_ownerless_short_form() {
+        assert_eq!(split_id("gpt2"), ("", "gpt2"));
+        assert_eq!(split_id(""), ("", ""));
+    }
+
+    #[test]
+    fn split_id_only_splits_first_slash() {
+        assert_eq!(split_id("owner/sub/name"), ("owner", "sub/name"));
+    }
+
+    #[test]
+    fn split_id_empty_owner_or_name() {
+        assert_eq!(split_id("/name"), ("", "name"));
+        assert_eq!(split_id("owner/"), ("owner", ""));
     }
 
     #[test]

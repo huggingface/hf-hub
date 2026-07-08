@@ -1108,6 +1108,29 @@ impl<T: RepoType> HFRepository<T> {
     /// [`HFRepository::download_file_to_bytes`] when you do not want to write to
     /// disk.
     ///
+    /// # Offline / cache-only lookups
+    ///
+    /// Set `.local_files_only(true)` to resolve strictly from the local cache
+    /// without any network request — this is the replacement for the 0.x
+    /// `Cache::get` API. A cache miss returns
+    /// [`HFError::LocalEntryNotFound`](crate::HFError::LocalEntryNotFound), which
+    /// is distinct from a real failure: match it to tell "not cached" apart from
+    /// a genuinely missing file ([`HFError::EntryNotFound`](crate::HFError::EntryNotFound))
+    /// or any transport error.
+    ///
+    /// ```no_run
+    /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+    /// use hf_hub::HFError;
+    ///
+    /// let repo = hf_hub::HFClient::new()?.model("openai-community", "gpt2");
+    /// match repo.download_file().filename("config.json").local_files_only(true).send().await {
+    ///     Ok(path) => println!("cached at {}", path.display()),
+    ///     Err(HFError::LocalEntryNotFound { .. }) => println!("not in cache"),
+    ///     Err(e) => return Err(e),
+    /// }
+    /// # Ok(()) }
+    /// ```
+    ///
     /// Endpoint: `GET {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}`.
     ///
     /// # Parameters
