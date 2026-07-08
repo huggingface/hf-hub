@@ -27,7 +27,9 @@ use sha2::{Digest, Sha256};
 use super::files::matches_any_glob;
 use super::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoTreeEntry, RepoType};
 use crate::client::encode_ref;
-use crate::error::{HFError, HFResult};
+#[cfg(not(target_family = "wasm"))]
+use crate::error::HFError;
+use crate::error::HFResult;
 use crate::progress::{EmitEvent, Progress, UploadEvent};
 use crate::{constants, retry};
 
