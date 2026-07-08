@@ -287,14 +287,6 @@ impl<T: RepoType> HFRepository<T> {
         .await
     }
 
-    #[cfg(not(target_family = "wasm"))]
-    async fn upload_folder_impl(&self, params: UploadFolderParams) -> HFResult<CommitInfo> {
-        // `upload_folder` always streams through the multi-commit pipeline: a small folder
-        // fits in one batch (one commit), a large one is split across several. This mirrors
-        // huggingface_hub, which routes `upload_folder` through its xet upload pipeline.
-        self.run_multi_commit_pipeline(params).await
-    }
-
     async fn delete_file_impl(&self, params: DeleteFileParams) -> HFResult<CommitInfo> {
         let commit_message = params
             .commit_message
@@ -875,7 +867,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        Box::pin(self.upload_folder_impl(UploadFolderParams {
+        Box::pin(self.run_multi_commit_pipeline(UploadFolderParams {
             folder_path,
             path_in_repo,
             revision,

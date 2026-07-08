@@ -56,48 +56,6 @@ impl AdaptiveCommitSize {
     }
 }
 
-#[cfg(test)]
-mod sizer_tests {
-    use super::*;
-
-    #[test]
-    fn starts_at_250() {
-        assert_eq!(AdaptiveCommitSize::new().current(), 250);
-    }
-
-    #[test]
-    fn grows_after_fast_commit() {
-        let mut s = AdaptiveCommitSize::new();
-        s.record_commit(Duration::from_secs(5));
-        assert_eq!(s.current(), 400);
-    }
-
-    #[test]
-    fn shrinks_after_slow_commit() {
-        let mut s = AdaptiveCommitSize::new();
-        s.record_commit(Duration::from_secs(120));
-        assert_eq!(s.current(), 200);
-    }
-
-    #[test]
-    fn clamps_at_top() {
-        let mut s = AdaptiveCommitSize::new();
-        for _ in 0..20 {
-            s.record_commit(Duration::from_secs(1));
-        }
-        assert_eq!(s.current(), 1000);
-    }
-
-    #[test]
-    fn clamps_at_bottom_after_slow_commits() {
-        let mut s = AdaptiveCommitSize::new();
-        for _ in 0..20 {
-            s.record_commit(Duration::from_secs(120));
-        }
-        assert_eq!(s.current(), 20);
-    }
-}
-
 /// Running state threaded across the sequential batch commits. All commits target a
 /// single fixed revision (the branch, or `refs/pr/N` when uploading to a PR); this
 /// only tracks the parent-oid chain so each commit builds on the previous one.
@@ -128,32 +86,6 @@ impl CommitState {
     fn record(&mut self, info: &CommitInfo) {
         self.prev_oid = info.commit_oid.clone();
         self.committed += 1;
-    }
-}
-
-#[cfg(test)]
-mod commit_state_tests {
-    use super::*;
-
-    fn info(oid: &str) -> CommitInfo {
-        CommitInfo {
-            commit_url: None,
-            commit_message: None,
-            commit_description: None,
-            commit_oid: Some(oid.to_string()),
-            pr_url: None,
-            pr_num: None,
-        }
-    }
-
-    #[test]
-    fn first_commit_has_no_parent_then_chains_oids() {
-        let mut s = CommitState::new();
-        assert_eq!(s.next_parent(), None);
-        s.record(&info("sha1"));
-        assert_eq!(s.next_parent().as_deref(), Some("sha1"));
-        s.record(&info("sha2"));
-        assert_eq!(s.next_parent().as_deref(), Some("sha2"));
     }
 }
 
@@ -205,49 +137,6 @@ impl BatchAccumulator {
             && (self.adds.len() >= max_files
                 || self.regular_bytes >= REGULAR_CONTENT_BYTES_BUDGET
                 || now.duration_since(self.started_at) >= MAX_COMMIT_INTERVAL)
-    }
-}
-
-#[cfg(test)]
-mod batch_tests {
-    use super::*;
-
-    fn regular(size: u64) -> PreparedAdd {
-        PreparedAdd::Regular {
-            op: CommitOperation::add_bytes("f", vec![0u8; size as usize]),
-            size,
-        }
-    }
-
-    #[test]
-    fn flushes_on_file_count() {
-        let mut b = BatchAccumulator::new();
-        for _ in 0..5 {
-            b.push(regular(1));
-        }
-        assert!(b.should_flush(5, Instant::now()));
-        assert!(!b.should_flush(6, Instant::now()));
-    }
-
-    #[test]
-    fn flushes_on_regular_byte_budget() {
-        let mut b = BatchAccumulator::new();
-        b.push(regular(REGULAR_CONTENT_BYTES_BUDGET));
-        assert!(b.should_flush(10_000, Instant::now()));
-    }
-
-    #[test]
-    fn flushes_on_age() {
-        let mut b = BatchAccumulator::new();
-        b.push(regular(1));
-        let future = Instant::now() + MAX_COMMIT_INTERVAL + Duration::from_secs(1);
-        assert!(b.should_flush(10_000, future));
-    }
-
-    #[test]
-    fn empty_never_flushes() {
-        let b = BatchAccumulator::new();
-        assert!(!b.should_flush(1, Instant::now() + Duration::from_secs(3600)));
     }
 }
 
@@ -306,63 +195,6 @@ impl ProgressHandler for AggregatingProgress {
             ProgressEvent::Upload(_) => {},
             ProgressEvent::Download(_) => self.inner.on_progress(event),
         }
-    }
-}
-
-#[cfg(test)]
-mod aggregating_tests {
-    use std::sync::Mutex;
-
-    use super::*;
-
-    #[derive(Default)]
-    struct Capture(Mutex<Vec<(u64, u64)>>); // (bytes_completed, total_bytes)
-    impl ProgressHandler for Capture {
-        fn on_progress(&self, event: &ProgressEvent) {
-            if let ProgressEvent::Upload(UploadEvent::Progress {
-                bytes_completed,
-                total_bytes,
-                ..
-            }) = event
-            {
-                self.0.lock().unwrap().push((*bytes_completed, *total_bytes));
-            }
-        }
-    }
-
-    fn progress_event(done: u64) -> ProgressEvent {
-        ProgressEvent::Upload(UploadEvent::Progress {
-            bytes_completed: done,
-            total_bytes: 50,
-            bytes_per_sec: None,
-            transfer_bytes_completed: done,
-            transfer_bytes: 50,
-            transfer_bytes_per_sec: None,
-            files: vec![],
-        })
-    }
-
-    #[test]
-    fn rebases_onto_grand_total() {
-        let cap = Arc::new(Capture::default());
-        let agg = AggregatingProgress::new(Progress::from(cap.clone() as Arc<dyn ProgressHandler>), 100);
-        agg.on_progress(&progress_event(10)); // batch 1: 10/50 -> 10/100
-        agg.finish_batch(50, 50);
-        agg.on_progress(&progress_event(20)); // batch 2: 20/50 -> 70/100
-        let seen = cap.0.lock().unwrap().clone();
-        assert_eq!(seen, vec![(10, 100), (70, 100)]);
-    }
-
-    #[test]
-    fn swallows_start_and_complete() {
-        let cap = Arc::new(Capture::default());
-        let agg = AggregatingProgress::new(Progress::from(cap.clone() as Arc<dyn ProgressHandler>), 100);
-        agg.on_progress(&ProgressEvent::Upload(UploadEvent::Start {
-            total_files: 3,
-            total_bytes: 100,
-        }));
-        agg.on_progress(&ProgressEvent::Upload(UploadEvent::Complete));
-        assert!(cap.0.lock().unwrap().is_empty());
     }
 }
 
@@ -741,4 +573,165 @@ async fn committer_loop<T: RepoType>(
     // `None` means the coordinator ended the stream without any commit (e.g. it failed
     // early); that is not itself an error here — the caller decides based on coord_result.
     Ok(last_info)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    // --- AdaptiveCommitSize ---
+
+    #[test]
+    fn sizer_starts_at_250() {
+        assert_eq!(AdaptiveCommitSize::new().current(), 250);
+    }
+
+    #[test]
+    fn sizer_grows_after_fast_commit() {
+        let mut s = AdaptiveCommitSize::new();
+        s.record_commit(Duration::from_secs(5));
+        assert_eq!(s.current(), 400);
+    }
+
+    #[test]
+    fn sizer_shrinks_after_slow_commit() {
+        let mut s = AdaptiveCommitSize::new();
+        s.record_commit(Duration::from_secs(120));
+        assert_eq!(s.current(), 200);
+    }
+
+    #[test]
+    fn sizer_clamps_at_top() {
+        let mut s = AdaptiveCommitSize::new();
+        for _ in 0..20 {
+            s.record_commit(Duration::from_secs(1));
+        }
+        assert_eq!(s.current(), 1000);
+    }
+
+    #[test]
+    fn sizer_clamps_at_bottom_after_slow_commits() {
+        let mut s = AdaptiveCommitSize::new();
+        for _ in 0..20 {
+            s.record_commit(Duration::from_secs(120));
+        }
+        assert_eq!(s.current(), 20);
+    }
+
+    // --- CommitState ---
+
+    fn commit_info(oid: &str) -> CommitInfo {
+        CommitInfo {
+            commit_url: None,
+            commit_message: None,
+            commit_description: None,
+            commit_oid: Some(oid.to_string()),
+            pr_url: None,
+            pr_num: None,
+        }
+    }
+
+    #[test]
+    fn commit_state_first_has_no_parent_then_chains_oids() {
+        let mut s = CommitState::new();
+        assert_eq!(s.next_parent(), None);
+        s.record(&commit_info("sha1"));
+        assert_eq!(s.next_parent().as_deref(), Some("sha1"));
+        s.record(&commit_info("sha2"));
+        assert_eq!(s.next_parent().as_deref(), Some("sha2"));
+    }
+
+    // --- BatchAccumulator ---
+
+    fn regular(size: u64) -> PreparedAdd {
+        PreparedAdd::Regular {
+            op: CommitOperation::add_bytes("f", vec![0u8; size as usize]),
+            size,
+        }
+    }
+
+    #[test]
+    fn batch_flushes_on_file_count() {
+        let mut b = BatchAccumulator::new();
+        for _ in 0..5 {
+            b.push(regular(1));
+        }
+        assert!(b.should_flush(5, Instant::now()));
+        assert!(!b.should_flush(6, Instant::now()));
+    }
+
+    #[test]
+    fn batch_flushes_on_regular_byte_budget() {
+        let mut b = BatchAccumulator::new();
+        b.push(regular(REGULAR_CONTENT_BYTES_BUDGET));
+        assert!(b.should_flush(10_000, Instant::now()));
+    }
+
+    #[test]
+    fn batch_flushes_on_age() {
+        let mut b = BatchAccumulator::new();
+        b.push(regular(1));
+        let future = Instant::now() + MAX_COMMIT_INTERVAL + Duration::from_secs(1);
+        assert!(b.should_flush(10_000, future));
+    }
+
+    #[test]
+    fn batch_empty_never_flushes() {
+        let b = BatchAccumulator::new();
+        assert!(!b.should_flush(1, Instant::now() + Duration::from_secs(3600)));
+    }
+
+    // --- AggregatingProgress ---
+
+    #[derive(Default)]
+    struct Capture(Mutex<Vec<(u64, u64)>>); // (bytes_completed, total_bytes)
+    impl ProgressHandler for Capture {
+        fn on_progress(&self, event: &ProgressEvent) {
+            if let ProgressEvent::Upload(UploadEvent::Progress {
+                bytes_completed,
+                total_bytes,
+                ..
+            }) = event
+            {
+                self.0.lock().unwrap().push((*bytes_completed, *total_bytes));
+            }
+        }
+    }
+
+    fn progress_event(done: u64) -> ProgressEvent {
+        ProgressEvent::Upload(UploadEvent::Progress {
+            bytes_completed: done,
+            total_bytes: 50,
+            bytes_per_sec: None,
+            transfer_bytes_completed: done,
+            transfer_bytes: 50,
+            transfer_bytes_per_sec: None,
+            files: vec![],
+        })
+    }
+
+    #[test]
+    fn aggregating_rebases_onto_grand_total() {
+        let cap = Arc::new(Capture::default());
+        let agg = AggregatingProgress::new(Progress::from(cap.clone() as Arc<dyn ProgressHandler>), 100);
+        agg.on_progress(&progress_event(10)); // batch 1: 10/50 -> 10/100
+        agg.finish_batch(50, 50);
+        agg.on_progress(&progress_event(20)); // batch 2: 20/50 -> 70/100
+        let seen = cap.0.lock().unwrap().clone();
+        assert_eq!(seen, vec![(10, 100), (70, 100)]);
+    }
+
+    #[test]
+    fn aggregating_swallows_start_and_complete() {
+        let cap = Arc::new(Capture::default());
+        let agg = AggregatingProgress::new(Progress::from(cap.clone() as Arc<dyn ProgressHandler>), 100);
+        agg.on_progress(&ProgressEvent::Upload(UploadEvent::Start {
+            total_files: 3,
+            total_bytes: 100,
+        }));
+        agg.on_progress(&ProgressEvent::Upload(UploadEvent::Complete));
+        assert!(cap.0.lock().unwrap().is_empty());
+    }
 }
