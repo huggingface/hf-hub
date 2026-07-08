@@ -435,11 +435,9 @@ fn test_sync_branch_operations() {
 
 // --- Async-context safety ---
 //
-// Regression tests for the dedicated-runtime-thread execution model: every
-// call below used to panic on tokio's nested-runtime guard ("Cannot start a
-// runtime from within a runtime") when the sync API was invoked from inside
-// an async application, and dropping the client from async context panicked
-// during unwind as well.
+// Regression tests: every call below used to panic on tokio's nested-runtime
+// guard when the sync API was used inside an async application, and dropping
+// the client from async context panicked as well.
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_sync_info_and_download_inside_async_context() {

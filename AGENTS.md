@@ -125,9 +125,8 @@ helper that already has the field as an `Option<T>` local).
 Every async method MUST have a manually-written blocking counterpart on the corresponding
 `*Sync` struct under `#[cfg(feature = "blocking")]`. Mirror the same `#[builder]` parameter list
 verbatim. The body calls the inner async builder and blocks on the runtime. (`self.runtime` is a
-`RuntimeThread`, not a `tokio::runtime::Runtime`: the runtime lives on a dedicated background
-thread so sync methods are safe to call from inside another tokio runtime. Its `block_on` takes
-any `Send` future — no `'static` bound — so the wrapper body borrows `self.inner` directly.)
+`RuntimeThread`: the runtime lives on a background thread so sync methods are safe from inside
+another tokio runtime, and its `block_on` takes any `Send` future — no `'static` bound.)
 
 ```rust
 #[cfg(feature = "blocking")]

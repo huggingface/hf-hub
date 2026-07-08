@@ -5,24 +5,17 @@ use crate::client::HFClient;
 use crate::error::{HFError, HFResult};
 use crate::repository::{HFRepository, RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
 
-/// A dedicated background thread that owns a single-threaded tokio runtime,
+/// A dedicated background thread owning a single-threaded tokio runtime,
 /// modeled on `reqwest::blocking`.
 ///
-/// The runtime is created on — and never leaves — the background thread.
-/// `tokio::runtime::Runtime::block_on` and `Runtime`'s `Drop` both panic when
-/// invoked from inside another tokio runtime, which is exactly the situation
-/// a blocking API embedded in an async application ends up in. Keeping the
-/// runtime off every caller thread removes both panic modes: sync wrapper
-/// methods run their futures via [`RuntimeThread::block_on`], which merely
-/// blocks the calling thread until the future completes.
+/// The runtime never leaves this thread: `Runtime::block_on` and `Runtime`'s
+/// `Drop` both panic inside another tokio runtime, so keeping the runtime off
+/// caller threads removes both panic modes.
 ///
-/// Shutdown: the background thread sits in `runtime.block_on(shutdown_rx)`,
-/// which also drives the IO/timer drivers and any tasks the wrapped futures
-/// spawn. When the last handle sharing this `RuntimeThread` drops, the
-/// `_shutdown` sender drops with it, the receiver resolves, `block_on`
-/// returns, and the runtime is dropped on its own thread. The thread is
-/// detached rather than joined so that dropping the last handle never blocks
-/// the caller (reqwest-style).
+/// The thread parks in `runtime.block_on(shutdown_rx)`, driving IO, timers,
+/// and spawned tasks. When the last handle drops, the shutdown sender drops,
+/// `block_on` returns, and the runtime is dropped on its own thread. The
+/// thread is detached so dropping the last handle never blocks.
 pub(crate) struct RuntimeThread {
     handle: tokio::runtime::Handle,
     _shutdown: futures::channel::oneshot::Sender<()>,
@@ -61,22 +54,17 @@ impl RuntimeThread {
             })
     }
 
-    /// Runs `future` to completion on the background runtime, blocking the
-    /// calling thread until it finishes.
+    /// Runs `future` on the background runtime, blocking the caller until it
+    /// completes.
     ///
-    /// Safe to call from inside another tokio runtime: the future is polled by
-    /// a short-lived scoped thread via `Handle::block_on` (IO, timers, and
-    /// spawned tasks are driven by the parked background thread), so no tokio
-    /// blocking API ever runs on the caller thread and the nested-runtime
-    /// enter guard is never tripped. The scoped thread also lets `future`
-    /// borrow from the caller's stack — no `'static` bound — so wrapper
-    /// methods can pass `self.inner...` futures directly. If the future
-    /// panics, the panic is resumed on the calling thread, matching the
-    /// semantics `Runtime::block_on` had.
+    /// Safe inside another tokio runtime: the future is polled on a
+    /// short-lived scoped thread via `Handle::block_on`, so no tokio blocking
+    /// API runs on the caller thread. The scoped thread also lets `future`
+    /// borrow from the caller's stack — no `'static` bound. Panics are
+    /// resumed on the caller.
     ///
-    /// Do not call from the background runtime thread itself (e.g. from a
-    /// progress callback): the scoped thread would wait on a runtime whose
-    /// driver is parked inside this call, deadlocking.
+    /// Do not call from the background runtime thread itself (e.g. a progress
+    /// callback): that deadlocks, since the driver is parked inside this call.
     pub(crate) fn block_on<F>(&self, future: F) -> F::Output
     where
         F: Future + Send,
@@ -93,11 +81,10 @@ impl RuntimeThread {
 
 /// Synchronous/blocking counterpart to [`HFClient`].
 ///
-/// Wraps an [`HFClient`] together with a single-threaded tokio runtime living
-/// on a dedicated background thread (`RuntimeThread` in this module) so the
-/// async API can be used from synchronous code — including from threads that
-/// are themselves inside a tokio runtime, where a caller-owned runtime would
-/// panic on tokio's nested-runtime guard.
+/// Wraps an [`HFClient`] together with a single-threaded tokio runtime on a
+/// dedicated background thread (`RuntimeThread` in this module), so the async
+/// API can be used from synchronous code — including from inside another
+/// tokio runtime, where a caller-owned runtime would panic.
 ///
 /// Xet uploads and downloads do not run on this runtime: hf-xet requires a
 /// multi-threaded runtime with the IO and time drivers enabled, so the
@@ -334,10 +321,9 @@ mod tests {
         HFClientSync::from_inner(inner).unwrap()
     }
 
-    /// Regression test: with the runtime owned by the caller-side handle, this
-    /// panicked on tokio's nested-runtime guard ("Cannot start a runtime from
-    /// within a runtime"). The connection error is expected; the point is
-    /// completing without a panic.
+    /// Regression: panicked with "Cannot start a runtime from within a
+    /// runtime" when the caller-side handle owned the runtime. The connection
+    /// error is expected; the point is completing without a panic.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn sync_call_inside_multi_thread_runtime_does_not_panic() {
         let client = client_with_unreachable_endpoint();
@@ -345,9 +331,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Same regression as the multi-thread flavor. The call blocks the only
-    /// caller-runtime thread while the work runs on the dedicated background
-    /// thread, so it still completes.
     #[tokio::test]
     async fn sync_call_inside_current_thread_runtime_does_not_panic() {
         let client = client_with_unreachable_endpoint();
@@ -355,9 +338,8 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Regression test: dropping the handle (and with it the old caller-side
-    /// `Runtime`) from async context also panicked before the runtime moved
-    /// to its own thread.
+    /// Regression: dropping the handle from async context also panicked when
+    /// the caller side owned the runtime.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn construct_and_drop_inside_async_context_does_not_panic() {
         let client = HFClientSync::from_inner(HFClient::builder().build().unwrap()).unwrap();
@@ -390,9 +372,8 @@ mod tests {
         assert_eq!(panic.downcast_ref::<&str>(), Some(&"boom"));
     }
 
-    /// The scoped-thread `block_on` must accept borrowing (non-`'static`)
-    /// futures — that property is what keeps the ~65 wrapper call sites
-    /// unchanged.
+    /// `block_on` must accept borrowing (non-`'static`) futures — the
+    /// property that keeps the wrapper call sites unchanged.
     #[test]
     fn block_on_accepts_borrowing_futures() {
         let runtime = RuntimeThread::spawn().unwrap();
