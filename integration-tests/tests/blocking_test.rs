@@ -253,7 +253,7 @@ fn test_sync_get_commit_diff() {
 
     let diff = gpt2
         .get_commit_diff()
-        .compare(format!("{}..{}", commits[1].id, commits[0].id))
+        .compare(&format!("{}..{}", commits[1].id, commits[0].id))
         .send()
         .unwrap();
     assert!(!diff.is_empty());

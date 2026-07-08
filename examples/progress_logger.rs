@@ -92,7 +92,7 @@ async fn main() -> hf_hub::HFResult<()> {
     client
         .create_repository()
         .repo_type(RepoTypeModel)
-        .repo_id(repo.repo_path())
+        .repo_id(&repo.repo_path())
         .private(true)
         .exist_ok(true)
         .send()
@@ -112,7 +112,7 @@ async fn main() -> hf_hub::HFResult<()> {
     client
         .delete_repository()
         .repo_type(RepoTypeModel)
-        .repo_id(repo.repo_path())
+        .repo_id(&repo.repo_path())
         .missing_ok(true)
         .send()
         .await?;

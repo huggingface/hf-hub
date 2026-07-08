@@ -34,7 +34,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let metadata = repo
         .get_file_metadata()
         .filepath(args.filepath)
-        .maybe_revision(args.revision)
+        .maybe_revision(args.revision.as_deref())
         .send()
         .await?;
 

@@ -911,8 +911,7 @@ impl HFClient {
     pub async fn create_repository(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
-        #[builder(into)]
-        repo_id: String,
+        repo_id: &str,
         /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
         /// or [`RepoTypeKernel`]).
         repo_type: impl RepoType,
@@ -928,7 +927,7 @@ impl HFClient {
     ) -> HFResult<RepoUrl> {
         let url = format!("{}/api/repos/create", self.endpoint());
 
-        let (namespace, name) = split_repo_id(&repo_id);
+        let (namespace, name) = split_repo_id(repo_id);
 
         let mut body = serde_json::json!({
             "name": name,
@@ -939,8 +938,8 @@ impl HFClient {
         if let Some(ns) = namespace {
             body["organization"] = serde_json::Value::String(ns.to_string());
         }
-        if let Some(ref sdk) = space_sdk {
-            body["sdk"] = serde_json::Value::String(sdk.clone());
+        if let Some(sdk) = space_sdk {
+            body["sdk"] = serde_json::Value::String(sdk);
         }
 
         let headers = self.auth_headers();
@@ -978,8 +977,7 @@ impl HFClient {
     pub async fn delete_repository(
         &self,
         /// Repository ID in `"owner/name"` or `"name"` format.
-        #[builder(into)]
-        repo_id: String,
+        repo_id: &str,
         /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
         /// or [`RepoTypeKernel`]).
         repo_type: impl RepoType,
@@ -989,7 +987,7 @@ impl HFClient {
     ) -> HFResult<()> {
         let url = format!("{}/api/repos/delete", self.endpoint());
 
-        let (namespace, name) = split_repo_id(&repo_id);
+        let (namespace, name) = split_repo_id(repo_id);
 
         let mut body = serde_json::json!({
             "name": name,
@@ -1009,7 +1007,7 @@ impl HFClient {
             return Ok(());
         }
 
-        self.check_response(response, Some(&repo_id), crate::error::NotFoundContext::Repo)
+        self.check_response(response, Some(repo_id), crate::error::NotFoundContext::Repo)
             .await?;
         Ok(())
     }
@@ -1031,11 +1029,9 @@ impl HFClient {
     pub async fn move_repository(
         &self,
         /// Current repository ID in `"owner/name"` format.
-        #[builder(into)]
-        from_id: String,
+        from_id: &str,
         /// New repository ID in `"owner/name"` format.
-        #[builder(into)]
-        to_id: String,
+        to_id: &str,
         /// The repo kind ([`RepoTypeModel`], [`RepoTypeDataset`], [`RepoTypeSpace`],
         /// or [`RepoTypeKernel`]).
         repo_type: impl RepoType,
@@ -1178,13 +1174,12 @@ impl<T: RepoType> HFRepository<T> {
     pub async fn revision_exists(
         &self,
         /// Git revision to check for existence.
-        #[builder(into)]
-        revision: String,
+        revision: &str,
     ) -> HFResult<bool> {
         let url = format!(
             "{}/revision/{}",
             self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
-            crate::client::encode_ref(&revision)
+            crate::client::encode_ref(revision)
         );
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -1210,23 +1205,21 @@ impl<T: RepoType> HFRepository<T> {
     pub async fn file_exists(
         &self,
         /// Path of the file to check within the repository.
-        #[builder(into)]
-        filename: String,
+        filename: &str,
         /// Git revision to check. Defaults to the main branch.
-        #[builder(into)]
-        revision: Option<String>,
+        revision: Option<&str>,
     ) -> HFResult<bool> {
-        let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
+        let revision = revision.unwrap_or(constants::DEFAULT_REVISION);
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &self.repo_path(), revision, &filename)?;
+            .download_url(self.repo_type.url_prefix(), &self.repo_path(), revision, filename)?;
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().head(&url).headers(headers.clone()).send()
         })
         .await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            if self.revision_exists().revision(revision.to_string()).send().await? {
+            if self.revision_exists().revision(revision).send().await? {
                 return Ok(false);
             }
             return Err(HFError::RevisionNotFound {
@@ -1541,7 +1534,7 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_repository(
         &self,
-        #[builder(into)] repo_id: String,
+        repo_id: &str,
         repo_type: impl RepoType,
         private: Option<bool>,
         #[builder(default)] exist_ok: bool,
@@ -1564,7 +1557,7 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_repository(
         &self,
-        #[builder(into)] repo_id: String,
+        repo_id: &str,
         repo_type: impl RepoType,
         #[builder(default)] missing_ok: bool,
     ) -> HFResult<()> {
@@ -1581,12 +1574,7 @@ impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::move_repository`]. See the async method for parameters and
     /// behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn move_repository(
-        &self,
-        #[builder(into)] from_id: String,
-        #[builder(into)] to_id: String,
-        repo_type: impl RepoType,
-    ) -> HFResult<RepoUrl> {
+    pub fn move_repository(&self, from_id: &str, to_id: &str, repo_type: impl RepoType) -> HFResult<RepoUrl> {
         self.runtime.block_on(
             self.inner
                 .move_repository()
@@ -1610,18 +1598,14 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::revision_exists`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn revision_exists(&self, #[builder(into)] revision: String) -> HFResult<bool> {
+    pub fn revision_exists(&self, revision: &str) -> HFResult<bool> {
         self.runtime.block_on(self.inner.revision_exists().revision(revision).send())
     }
 
     /// Blocking counterpart of [`HFRepository::file_exists`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn file_exists(
-        &self,
-        #[builder(into)] filename: String,
-        #[builder(into)] revision: Option<String>,
-    ) -> HFResult<bool> {
+    pub fn file_exists(&self, filename: &str, revision: Option<&str>) -> HFResult<bool> {
         self.runtime
             .block_on(self.inner.file_exists().filename(filename).maybe_revision(revision).send())
     }
