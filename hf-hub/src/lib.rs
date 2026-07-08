@@ -185,6 +185,7 @@
 //! ## Cargo features
 //!
 //! - `blocking` — enables the synchronous `*Sync` handles.
+//! - `socks` — enables SOCKS proxy support in the underlying HTTP client (forwards to `reqwest/socks`).
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
