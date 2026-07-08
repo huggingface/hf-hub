@@ -136,14 +136,23 @@ impl<T: RepoType> HFRepository<T> {
             .download_url(self.repo_type.url_prefix(), &repo_path, revision, &filename);
 
         let headers = self.hf_client.auth_headers();
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
-        })
-        .await?;
-        let response = self
-            .hf_client
-            .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Entry { path: filename.clone() })
-            .await?;
+        // Follow relative redirects (renamed repos, mirror endpoints) but stop on the absolute CDN
+        // redirect so the `X-Linked-Etag` / `X-Repo-Commit` headers stay readable, matching the
+        // Python client. A redirect response is therefore expected and must not be treated as an
+        // error by `check_response`.
+        let response = self.hf_client.head_following_relative_redirects(&url, headers).await?;
+        let status = response.status();
+        let response = if status.is_success() || status.is_redirection() {
+            response
+        } else {
+            self.hf_client
+                .check_response(
+                    response,
+                    Some(&repo_path),
+                    crate::error::NotFoundContext::Entry { path: filename.clone() },
+                )
+                .await?
+        };
 
         let etag = extract_etag(&response).ok_or_else(|| {
             HFError::malformed_response_at(format!("missing ETag header for {filename}"), url.to_string())
@@ -159,7 +168,7 @@ impl<T: RepoType> HFRepository<T> {
             );
             0
         });
-        let location = Some(response.url().to_string());
+        let location = Some(super::files::extract_location(&response));
 
         Ok(FileMetadataInfo {
             filename,

@@ -1,12 +1,39 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
+use reqwest::header::{ACCEPT_ENCODING, AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use tracing::debug;
 
 use crate::constants;
 use crate::error::{HFError, HFResult, HttpErrorContext, NotFoundContext};
 use crate::retry::{self, RetryConfig};
+
+/// Maximum number of relative redirects followed while resolving file metadata, bounding the
+/// loop in [`HFClient::head_following_relative_redirects`] in case an endpoint advertises a
+/// redirect cycle. Matches the implicit cap of `reqwest`'s default redirect policy.
+const MAX_RELATIVE_REDIRECTS: usize = 10;
+
+/// Resolve the next URL for a *relative* redirect, or `None` when the redirect should not be
+/// followed (absolute / cross-host `Location`, or no usable `Location` header — e.g. a `304`).
+///
+/// Mirrors the Python `huggingface_hub` logic
+/// `urlparse(url)._replace(path=urlparse(location).path)`: only the path component of the current
+/// URL is swapped for the redirect target's path, preserving the original scheme and host. A
+/// `Location` with a host (either `scheme://host/…` or the protocol-relative `//host/…`) is
+/// treated as absolute and left unfollowed.
+fn relative_redirect_target(current_url: &str, response: &reqwest::Response) -> Option<String> {
+    let location = response.headers().get(reqwest::header::LOCATION)?.to_str().ok()?;
+
+    let is_absolute = location.starts_with("//") || reqwest::Url::parse(location).is_ok();
+    if is_absolute {
+        return None;
+    }
+
+    let mut next = reqwest::Url::parse(current_url).ok()?;
+    let path = location.split(['?', '#']).next().unwrap_or(location);
+    next.set_path(path);
+    Some(next.into())
+}
 
 /// Async client for the Hugging Face Hub API.
 ///
@@ -265,6 +292,48 @@ impl HFClient {
 
     pub(crate) fn retry_config(&self) -> &RetryConfig {
         &self.inner.retry_config
+    }
+
+    /// Perform a `HEAD` request that transparently follows *relative* redirects, mirroring the
+    /// Python `huggingface_hub` `_httpx_follow_relative_redirects_with_backoff` helper.
+    ///
+    /// Relative redirects (a `Location` header without a host — used when a repository is renamed
+    /// or by some mirror endpoints such as `hf-mirror.com`) are followed so the final response
+    /// carries the `X-Linked-Etag` / `X-Repo-Commit` metadata headers. Absolute redirects (e.g. a
+    /// `302` to a CDN) are returned *unfollowed* so callers can read those headers off the redirect
+    /// response itself, exactly as the plain hub endpoint serves them.
+    ///
+    /// Each individual hop is retried via [`retry::retry`]. Non-redirect responses (including `304
+    /// Not Modified` and `404 Not Found`) are returned to the caller as-is.
+    ///
+    /// `Accept-Encoding: identity` is forced on every hop so the server cannot apply a transfer
+    /// encoding to the `HEAD`, keeping `Content-Length` equal to the file's real size — mirroring
+    /// what the Python `get_hf_file_metadata` sets before this same resolve `HEAD`.
+    pub(crate) async fn head_following_relative_redirects(
+        &self,
+        url: &str,
+        mut headers: HeaderMap,
+    ) -> HFResult<reqwest::Response> {
+        headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
+        let mut current_url = url.to_string();
+        for _ in 0..MAX_RELATIVE_REDIRECTS {
+            let response = retry::retry(self.retry_config(), || {
+                self.no_redirect_client().head(&current_url).headers(headers.clone()).send()
+            })
+            .await?;
+
+            if response.status().is_redirection()
+                && let Some(next_url) = relative_redirect_target(&current_url, &response)
+            {
+                current_url = next_url;
+                continue;
+            }
+            return Ok(response);
+        }
+        Err(HFError::malformed_response_at(
+            format!("exceeded the maximum of {MAX_RELATIVE_REDIRECTS} relative redirects"),
+            url.to_string(),
+        ))
     }
 
     /// Hub base URL this client targets, with any trailing slash trimmed.
@@ -738,5 +807,149 @@ mod tests {
             let client = HFClientBuilder::new().build().unwrap();
             assert!(client.inner.token.is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use reqwest::header::HeaderMap;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::HFClient;
+    use crate::constants;
+
+    /// Spawn an HTTP/1.1 server that routes raw responses by request path (one request per
+    /// connection). `respond` maps the request path to a full raw HTTP response string.
+    async fn spawn_server<F>(respond: F) -> std::net::SocketAddr
+    where
+        F: Fn(&str) -> String + Send + Sync + 'static,
+    {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]);
+                let path = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .to_string();
+                let response = respond(&path);
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+            }
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn follows_relative_redirect_to_reach_etag() {
+        // Mirror-style endpoint: the resolve URL relative-redirects to a versioned path, and only
+        // the final response carries the ETag — the shape that broke downloads via hf-mirror.com.
+        let addr = spawn_server(|path| {
+            if path.contains("/resolve/main/") {
+                "HTTP/1.1 302 Found\r\n\
+                 Location: /org/repo/resolve/abc123/model.bin\r\n\
+                 Content-Length: 0\r\n\
+                 Connection: close\r\n\r\n"
+                    .to_string()
+            } else {
+                "HTTP/1.1 200 OK\r\n\
+                 ETag: \"deadbeefcafe\"\r\n\
+                 X-Repo-Commit: abc123\r\n\
+                 Content-Length: 1024\r\n\
+                 Connection: close\r\n\r\n"
+                    .to_string()
+            }
+        })
+        .await;
+
+        let client = HFClient::builder().endpoint(format!("http://{addr}")).build().unwrap();
+        let url = format!("http://{addr}/org/repo/resolve/main/model.bin");
+
+        let response = client.head_following_relative_redirects(&url, HeaderMap::new()).await.unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            response.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()),
+            Some("\"deadbeefcafe\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn does_not_follow_absolute_redirect() {
+        // Plain hub endpoint: the resolve URL 302-redirects to an absolute CDN URL but carries the
+        // X-Linked-Etag / X-Repo-Commit headers on the redirect itself. The redirect must NOT be
+        // followed, so those headers stay readable on the returned response.
+        let addr = spawn_server(|_path| {
+            "HTTP/1.1 302 Found\r\n\
+             Location: https://cdn.example.com/blob/xyz\r\n\
+             X-Linked-Etag: \"linkedsha256\"\r\n\
+             X-Repo-Commit: commit789\r\n\
+             Content-Length: 0\r\n\
+             Connection: close\r\n\r\n"
+                .to_string()
+        })
+        .await;
+
+        let client = HFClient::builder().endpoint(format!("http://{addr}")).build().unwrap();
+        let url = format!("http://{addr}/org/repo/resolve/main/model.bin");
+
+        let response = client.head_following_relative_redirects(&url, HeaderMap::new()).await.unwrap();
+
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(constants::HEADER_X_LINKED_ETAG)
+                .and_then(|v| v.to_str().ok()),
+            Some("\"linkedsha256\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn sends_accept_encoding_identity() {
+        // The metadata HEAD must advertise `Accept-Encoding: identity` so the server cannot apply a
+        // transfer encoding that would skew `Content-Length` away from the real file size, matching
+        // the Python client.
+        use std::sync::{Arc, Mutex};
+
+        let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let captured_for_server = Arc::clone(&captured);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = vec![0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                *captured_for_server.lock().unwrap() = Some(String::from_utf8_lossy(&buf[..n]).to_string());
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\n\
+                          ETag: \"deadbeefcafe\"\r\n\
+                          X-Repo-Commit: abc123\r\n\
+                          Content-Length: 1024\r\n\
+                          Connection: close\r\n\r\n",
+                    )
+                    .await;
+                let _ = sock.flush().await;
+            }
+        });
+
+        let client = HFClient::builder().endpoint(format!("http://{addr}")).build().unwrap();
+        let url = format!("http://{addr}/org/repo/resolve/main/model.bin");
+        client.head_following_relative_redirects(&url, HeaderMap::new()).await.unwrap();
+
+        let request = captured.lock().unwrap().clone().unwrap();
+        assert!(
+            request.to_ascii_lowercase().contains("accept-encoding: identity"),
+            "expected `Accept-Encoding: identity` in request, got:\n{request}"
+        );
     }
 }
