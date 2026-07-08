@@ -94,9 +94,9 @@ impl RuntimeThread {
 /// Synchronous/blocking counterpart to [`HFClient`].
 ///
 /// Wraps an [`HFClient`] together with a single-threaded tokio runtime living
-/// on a dedicated background thread (see [`RuntimeThread`]) so the async API
-/// can be used from synchronous code — including from threads that are
-/// themselves inside a tokio runtime, where a caller-owned runtime would
+/// on a dedicated background thread (`RuntimeThread` in this module) so the
+/// async API can be used from synchronous code — including from threads that
+/// are themselves inside a tokio runtime, where a caller-owned runtime would
 /// panic on tokio's nested-runtime guard.
 ///
 /// Xet uploads and downloads do not run on this runtime: hf-xet requires a
