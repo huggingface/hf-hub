@@ -28,4 +28,7 @@ jobs:
 
       - name: Publish package rust
         working-directory: ./hf-hub
-        run: cargo publish --token "${{ secrets.CRATES_TOKEN }}"
+        # The HF registry proxy setup replaces the crates-io source with a
+        # non-remote-registry mirror (hf-mirror), which cannot be published to.
+        # Pass --registry crates-io so the publish targets crates.io directly.
+        run: cargo publish --registry crates-io --token "${{ secrets.CRATES_TOKEN }}"
