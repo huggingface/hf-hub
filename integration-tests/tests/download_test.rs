@@ -439,7 +439,7 @@ async fn test_download_file_with_progress_to_local_dir() {
     assert!(
         matches!(&events[0], ProgressEvent::Download(DownloadEvent::Start { total_files: 1, .. })),
         "first event should be Download(Start), got {:?}",
-        &events[0]
+        events[0]
     );
 
     // Last event should be Download(Complete)
@@ -518,7 +518,7 @@ async fn test_download_file_to_bytes_with_progress() {
     assert!(
         matches!(&events[0], ProgressEvent::Download(DownloadEvent::Start { total_files: 1, .. })),
         "first event should be Download(Start), got {:?}",
-        &events[0]
+        events[0]
     );
     assert!(
         matches!(events.last().unwrap(), ProgressEvent::Download(DownloadEvent::Complete)),
@@ -557,7 +557,7 @@ async fn test_download_file_stream_with_progress() {
     assert!(
         matches!(&events[0], ProgressEvent::Download(DownloadEvent::Start { total_files: 1, .. })),
         "first event should be Download(Start), got {:?}",
-        &events[0]
+        events[0]
     );
     assert!(
         matches!(events.last().unwrap(), ProgressEvent::Download(DownloadEvent::Complete)),
@@ -623,7 +623,7 @@ async fn test_upload_file_with_progress() {
     assert!(
         matches!(&events[0], ProgressEvent::Upload(UploadEvent::Start { total_files: 1, .. })),
         "first event should be Upload(Start), got {:?}",
-        &events[0]
+        events[0]
     );
 
     assert!(
@@ -674,7 +674,7 @@ async fn test_create_commit_with_progress_multiple_files() {
         assert_eq!(*total_files, 2);
         assert_eq!(*total_bytes, 18); // "content a" + "content b" = 9 + 9
     } else {
-        panic!("first event should be Upload(Start), got {:?}", &events[0]);
+        panic!("first event should be Upload(Start), got {:?}", events[0]);
     }
 
     assert!(
