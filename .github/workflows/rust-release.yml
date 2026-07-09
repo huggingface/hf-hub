@@ -31,4 +31,8 @@ jobs:
         # The HF registry proxy setup replaces the crates-io source with a
         # non-remote-registry mirror (hf-mirror), which cannot be published to.
         # Pass --registry crates-io so the publish targets crates.io directly.
-        run: cargo publish --registry crates-io --token "${{ secrets.CRATES_TOKEN }}"
+        # The token is provided via CARGO_REGISTRY_TOKEN rather than the
+        # deprecated --token flag.
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
+        run: cargo publish --registry crates-io
