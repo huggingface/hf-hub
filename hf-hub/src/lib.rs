@@ -92,6 +92,20 @@
 //! Space-specific methods like `runtime`, `add_secret`, and `pause` live as `impl`
 //! blocks on `HFRepository<RepoTypeSpace>` — there is no separate `HFSpace` wrapper.
 //!
+//! When you start from a single `"owner/name"` string, [`split_id`] turns it into
+//! the `(owner, name)` pair these constructors take (short-form ids like `"gpt2"`
+//! yield an empty owner):
+//!
+//! ```rust,no_run
+//! use hf_hub::{HFClient, split_id};
+//!
+//! # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+//! let client = HFClient::new()?;
+//! let (owner, name) = split_id("openai-community/gpt2");
+//! let model = client.model(owner, name);
+//! # let _ = model; Ok(()) }
+//! ```
+//!
 //! ## File operations
 //!
 //! File APIs live on the repository handle. Downloads go through the local cache
@@ -140,7 +154,8 @@
 //! ## Blocking API
 //!
 //! Enable the `blocking` feature for synchronous wrappers that manage a dedicated
-//! tokio runtime internally:
+//! tokio runtime internally. The runtime lives on a background thread, so the
+//! blocking methods are safe to call even from inside another tokio runtime:
 //!
 //! ```toml
 //! [dependencies]
@@ -188,6 +203,10 @@
 //! - `socks` — enables SOCKS proxy support in the underlying HTTP client (forwards to `reqwest/socks`).
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
+// With the fs/tokio-dependent modules cfg-gated out on wasm, many shared
+// helpers are reachable only from native call sites and would each warn as
+// `dead_code`; allow them wholesale.
+#![cfg_attr(target_family = "wasm", allow(dead_code))]
 
 mod client;
 pub(crate) mod constants;
@@ -195,11 +214,14 @@ mod error;
 mod pagination;
 mod retry;
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 mod blocking;
 
+// Modules needing the filesystem or the multi-threaded tokio runtime are
+// native-only; pure-HTTP modules are exposed on wasm too. See `verify_wasm.sh`.
 pub mod buckets;
+#[cfg(not(target_family = "wasm"))]
 pub mod cache;
 pub mod progress;
 pub mod repository;
@@ -207,12 +229,12 @@ pub mod spaces;
 pub mod users;
 pub(crate) mod xet;
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
 pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync};
 #[doc(inline)]
 pub use buckets::HFBucket;
-pub use client::{HFClient, HFClientBuilder};
+pub use client::{HFClient, HFClientBuilder, split_id};
 #[doc(hidden)]
 pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult, XetOperation};

@@ -11,23 +11,45 @@
 //! Range parameters use Rust `std::ops::Range<u64>` semantics (start-inclusive, end-exclusive).
 //! See each builder's docs for the exact path / range / glob format rules.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
+#[cfg(not(target_family = "wasm"))]
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use bon::bon;
+#[cfg(not(target_family = "wasm"))]
 use futures::TryStreamExt;
 use futures::stream::{Stream, StreamExt};
+#[cfg(not(target_family = "wasm"))]
 use reqwest::header::IF_NONE_MATCH;
+#[cfg(not(target_family = "wasm"))]
 use serde::Deserialize;
 
-use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash, matches_any_glob};
-use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
+use super::files::extract_file_size;
+#[cfg(not(target_family = "wasm"))]
+use super::{
+    FileMetadataInfo,
+    files::{extract_commit_hash, extract_etag, extract_xet_hash, matches_any_glob},
+};
+use super::{HFRepository, RepoTreeEntry, RepoType};
+#[cfg(not(target_family = "wasm"))]
 use crate::cache::storage as cache;
 use crate::error::{HFError, HFResult};
 use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress};
 use crate::{constants, retry};
 
+/// Boxed byte stream returned by [`HFRepository::download_file_stream`].
+///
+/// `Send + Unpin` on native targets; on wasm the browser `reqwest` backend
+/// produces `!Send` streams, so the `Send` bound is dropped.
+#[cfg(not(target_family = "wasm"))]
+pub type HFByteStream = Box<dyn Stream<Item = HFResult<bytes::Bytes>> + Send + Unpin>;
+#[cfg(target_family = "wasm")]
+pub type HFByteStream = Box<dyn Stream<Item = HFResult<bytes::Bytes>> + Unpin>;
+
 /// Internal options struct used by the file download helpers.
+#[cfg(not(target_family = "wasm"))]
 struct DownloadFileParams {
     filename: String,
     local_dir: Option<PathBuf>,
@@ -46,6 +68,7 @@ struct DownloadFileStreamParams {
 }
 
 /// Internal options struct used by `snapshot_download_impl`.
+#[cfg(not(target_family = "wasm"))]
 struct SnapshotDownloadParams {
     revision: Option<String>,
     allow_patterns: Option<Vec<String>>,
@@ -58,6 +81,7 @@ struct SnapshotDownloadParams {
 }
 
 impl<T: RepoType> HFRepository<T> {
+    #[cfg(not(target_family = "wasm"))]
     async fn download_file_impl(&self, params: DownloadFileParams) -> HFResult<PathBuf> {
         let result = self.download_file_inner(&params).await;
         if result.is_ok() {
@@ -66,6 +90,7 @@ impl<T: RepoType> HFRepository<T> {
         result
     }
 
+    #[cfg(not(target_family = "wasm"))]
     async fn download_file_inner(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         if params.local_dir.is_some() {
             self.download_file_to_local_dir(params).await
@@ -77,10 +102,74 @@ impl<T: RepoType> HFRepository<T> {
         }
     }
 
+    // Determine whether the file is xet-backed and learn its size.
+    //
+    // Native: HEAD the resolve URL and read `X-Xet-Hash` /
+    // `Content-Length` / `X-Linked-Size` from the response headers.
+    //
+    // Wasm: the resolve URL 302-redirects to a CAS blob URL, and the Fetch
+    // spec only surfaces the final response's headers when following
+    // redirects (`redirect: 'manual'` doesn't help — it yields an opaque
+    // response with no readable headers). So on wasm we dispatch via
+    // `paths-info`, a non-redirecting JSON endpoint that returns the same
+    // metadata in the body.
+    #[cfg(not(target_family = "wasm"))]
+    async fn resolve_xet_hash_and_size(
+        &self,
+        revision: &str,
+        filename: &str,
+    ) -> HFResult<(Option<String>, Option<u64>)> {
+        let repo_path = self.repo_path();
+        let url = self
+            .hf_client
+            .download_url(T::default().url_prefix(), &repo_path, revision, filename)?;
+        let headers = self.hf_client.auth_headers();
+        let head_response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
+        })
+        .await?;
+        let head_response = self
+            .hf_client
+            .check_response(
+                head_response,
+                Some(&repo_path),
+                crate::error::NotFoundContext::Entry {
+                    path: filename.to_string(),
+                },
+            )
+            .await?;
+        Ok((extract_xet_hash(&head_response), extract_file_size(&head_response)))
+    }
+
+    #[cfg(target_family = "wasm")]
+    async fn resolve_xet_hash_and_size(
+        &self,
+        revision: &str,
+        filename: &str,
+    ) -> HFResult<(Option<String>, Option<u64>)> {
+        let entries = self
+            .get_paths_info()
+            .paths(vec![filename.to_string()])
+            .revision(revision.to_string())
+            .send()
+            .await?;
+        let entry = entries
+            .into_iter()
+            .find(|e| matches!(e, RepoTreeEntry::File { path, .. } if path == filename));
+        match entry {
+            Some(RepoTreeEntry::File { xet_hash, size, .. }) => Ok((xet_hash, Some(size))),
+            _ => Err(HFError::EntryNotFound {
+                path: filename.to_string(),
+                repo_id: self.repo_path(),
+                context: None,
+            }),
+        }
+    }
+
     async fn download_file_stream_impl(
         &self,
         params: DownloadFileStreamParams,
-    ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = Result<bytes::Bytes, HFError>> + Send + Unpin>)> {
+    ) -> HFResult<(Option<u64>, HFByteStream)> {
         if let Some(ref range) = params.range
             && range.start >= range.end
         {
@@ -94,29 +183,17 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename);
+            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename)?;
 
         let headers = self.hf_client.auth_headers();
-        let head_response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
-        })
-        .await?;
-        let head_response = self
-            .hf_client
-            .check_response(
-                head_response,
-                Some(&repo_path),
-                crate::error::NotFoundContext::Entry {
-                    path: params.filename.clone(),
-                },
-            )
-            .await?;
 
-        if let Some(xet_hash) = extract_xet_hash(&head_response) {
-            let file_size: u64 = extract_file_size(&head_response).unwrap_or_else(|| {
-                    tracing::warn!(url = %url, "missing or invalid Content-Length/X-Linked-Size header for xet file, defaulting file size to 0");
-                    0
-                });
+        let (xet_hash, file_size_hint) = self.resolve_xet_hash_and_size(revision, &params.filename).await?;
+
+        if let Some(xet_hash) = xet_hash {
+            let file_size: u64 = file_size_hint.unwrap_or_else(|| {
+                tracing::warn!(url = %url, "missing file size for xet file, defaulting to 0");
+                0
+            });
 
             let content_length = params.range.as_ref().map(|r| r.end.saturating_sub(r.start)).or(Some(file_size));
 
@@ -131,6 +208,8 @@ impl<T: RepoType> HFRepository<T> {
             });
             let wrapped =
                 wrap_stream_with_progress(Box::new(Box::pin(stream)), params.progress, params.filename, total_bytes);
+            #[cfg(target_family = "wasm")]
+            let wrapped = buffer_wasm_stream(wrapped);
             return Ok((content_length, wrapped));
         }
 
@@ -166,6 +245,8 @@ impl<T: RepoType> HFRepository<T> {
         });
         let wrapped =
             wrap_stream_with_progress(Box::new(Box::pin(stream)), params.progress, params.filename, total_bytes);
+        #[cfg(target_family = "wasm")]
+        let wrapped = buffer_wasm_stream(wrapped);
         Ok((content_length, wrapped))
     }
 
@@ -181,12 +262,13 @@ impl<T: RepoType> HFRepository<T> {
         Ok(buf.freeze())
     }
 
+    #[cfg(not(target_family = "wasm"))]
     async fn download_file_to_local_dir(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename);
+            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename)?;
 
         let headers = self.hf_client.auth_headers();
         let head_response = retry::retry(self.hf_client.retry_config(), || {
@@ -266,6 +348,7 @@ impl<T: RepoType> HFRepository<T> {
     /// Resolve a file from the local cache without making network requests.
     /// Matches Python's `try_to_load_from_cache`: checks the snapshot pointer
     /// first, then consults `.no_exist` markers for negative cache hits.
+    #[cfg(not(target_family = "wasm"))]
     fn resolve_from_cache_only(&self, repo_folder: &str, revision: &str, filename: &str) -> HFResult<PathBuf> {
         let cache_dir = self.hf_client.cache_dir();
 
@@ -298,6 +381,7 @@ impl<T: RepoType> HFRepository<T> {
     /// Resolve the cached etag for a file by reading the symlink target in snapshots/.
     /// On Windows, where copies are used instead of symlinks, `read_link` will fail
     /// and this returns `None`, disabling conditional-request (If-None-Match) optimization.
+    #[cfg(not(target_family = "wasm"))]
     fn find_cached_etag(&self, repo_folder: &str, revision: &str, filename: &str) -> Option<String> {
         let cache_dir = self.hf_client.cache_dir();
 
@@ -314,6 +398,7 @@ impl<T: RepoType> HFRepository<T> {
         target.file_name()?.to_str().map(|s| s.to_string())
     }
 
+    #[cfg(not(target_family = "wasm"))]
     async fn download_file_to_cache(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let cache_dir = self.hf_client.cache_dir();
@@ -343,6 +428,7 @@ impl<T: RepoType> HFRepository<T> {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
     async fn download_file_to_cache_network(
         &self,
         params: &DownloadFileParams,
@@ -354,7 +440,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename);
+            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &params.filename)?;
 
         let cached_etag = if !force_download {
             self.find_cached_etag(repo_folder, revision, &params.filename)
@@ -369,14 +455,7 @@ impl<T: RepoType> HFRepository<T> {
             head_headers.insert(IF_NONE_MATCH, hv);
         }
 
-        let head_response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client
-                .no_redirect_client()
-                .head(&url)
-                .headers(head_headers.clone())
-                .send()
-        })
-        .await?;
+        let head_response = self.hf_client.head_with_relative_redirects(&url, &head_headers).await?;
 
         let status = head_response.status();
 
@@ -499,6 +578,7 @@ impl<T: RepoType> HFRepository<T> {
         finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await
     }
 
+    #[cfg(not(target_family = "wasm"))]
     async fn resolve_commit_hash(&self, revision: &str) -> HFResult<String> {
         if cache::is_commit_hash(revision) {
             return Ok(revision.to_string());
@@ -514,6 +594,7 @@ impl<T: RepoType> HFRepository<T> {
         })
     }
 
+    #[cfg(not(target_family = "wasm"))]
     async fn list_filtered_files(
         &self,
         revision: &str,
@@ -541,6 +622,7 @@ impl<T: RepoType> HFRepository<T> {
         Ok(filenames)
     }
 
+    #[cfg(not(target_family = "wasm"))]
     async fn snapshot_download_impl(&self, params: SnapshotDownloadParams) -> HFResult<PathBuf> {
         if params.local_dir.is_none() && !self.hf_client.cache_enabled() {
             return Err(HFError::CacheNotEnabled);
@@ -591,18 +673,18 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         let repo_path = self.repo_path();
+        let repo_path_ref = &repo_path;
         let commit_hash_ref = &commit_hash;
-        let head_futs = filenames.iter().map(|filename| {
-                let url = self
-                    .hf_client.download_url(self.repo_type.url_prefix(), &repo_path, commit_hash_ref, filename);
-                let auth = self.hf_client.auth_headers();
-                let filename = filename.clone();
-                let repo_folder_ref = &repo_folder;
-                async move {
-                    let resp = retry::retry(self.hf_client.retry_config(), || {
-                        self.hf_client.no_redirect_client().head(&url).headers(auth.clone()).send()
-                    })
-                    .await?;
+        let mut head_futs = Vec::with_capacity(filenames.len());
+        for filename in &filenames {
+            let auth = self.hf_client.auth_headers();
+            let filename = filename.clone();
+            let repo_folder_ref = &repo_folder;
+            head_futs.push(async move {
+                    let url = self
+                        .hf_client
+                        .download_url(self.repo_type.url_prefix(), repo_path_ref, commit_hash_ref, &filename)?;
+                    let resp = self.hf_client.head_with_relative_redirects(&url, &auth).await?;
                     // Per-file 404 resilience: write a .no_exist marker and skip
                     // the file rather than aborting the entire snapshot download.
                     // This matches the Python huggingface_hub library behavior.
@@ -640,8 +722,8 @@ impl<T: RepoType> HFRepository<T> {
                         file_size,
                         location,
                     }))
-                }
             });
+        }
 
         let file_metas: Vec<FileMetadataInfo> = futures::stream::iter(head_futs)
             .buffer_unordered(max_workers)
@@ -810,6 +892,7 @@ impl<T: RepoType> HFRepository<T> {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn mark_no_exist_and_return_error(
     cache_dir: &Path,
     repo_folder: &str,
@@ -835,6 +918,7 @@ async fn mark_no_exist_and_return_error(
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn finalize_cached_file(
     cache_dir: &Path,
     repo_folder: &str,
@@ -850,6 +934,7 @@ async fn finalize_cached_file(
     Ok(cache::snapshot_path(cache_dir, repo_folder, commit_hash, filename))
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn build_download_params(
     _repo_id: &str,
     filenames: &[String],
@@ -871,17 +956,23 @@ fn build_download_params(
         .collect()
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn download_concurrently<T: RepoType>(
     api: &HFRepository<T>,
     params: &[DownloadFileParams],
     max_workers: usize,
 ) -> HFResult<Vec<PathBuf>> {
-    futures::stream::iter(params.iter().map(|p| api.download_file_inner(p)))
+    let mut download_futs = Vec::with_capacity(params.len());
+    for file_params in params {
+        download_futs.push(api.download_file_inner(file_params));
+    }
+    futures::stream::iter(download_futs)
         .buffer_unordered(max_workers)
         .try_collect()
         .await
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn stream_response_to_file_with_progress(
     response: reqwest::Response,
     dest: &Path,
@@ -924,12 +1015,48 @@ async fn stream_response_to_file_with_progress(
     Ok(())
 }
 
-fn wrap_stream_with_progress(
-    stream: Box<dyn Stream<Item = HFResult<bytes::Bytes>> + Send + Unpin>,
+/// Decouple the inner byte stream from the JS-side `ReadableStream` reader cadence on wasm.
+///
+/// `wasm_streams::ReadableStream::from_stream` builds the JS stream with `QueuingStrategy(0.0)`
+/// (HWM=0) — the underlying Rust stream is only polled when JS calls `reader.read()`. For the xet
+/// download path, slow JS-side consumption then propagates through hf-xet's term-permit semaphore
+/// (`AdjustableSemaphore` in `file_reconstructor.rs`) and stalls xorb fetching. Browsers differ in
+/// how aggressively they schedule the `pull` callback, so the effect is intermittent.
+///
+/// This pump task drains the inner stream into a small bounded channel under `spawn_local`. JS
+/// `reader.read()` now pulls from the local channel (cheap) instead of gating the live xet
+/// pipeline; xet keeps making progress as long as the channel has room. The channel depth bounds
+/// the extra in-flight bytes — at most `depth * max_chunk_size` beyond what xet already buffers.
+#[cfg(target_family = "wasm")]
+pub(crate) fn buffer_wasm_stream(inner: HFByteStream) -> HFByteStream {
+    use futures::SinkExt;
+    use futures::channel::mpsc;
+
+    const BUFFER_DEPTH: usize = 2;
+    let (mut tx, rx) = mpsc::channel::<HFResult<bytes::Bytes>>(BUFFER_DEPTH);
+
+    wasm_bindgen_futures::spawn_local(async move {
+        let mut inner = inner;
+        while let Some(item) = inner.next().await {
+            let is_err = item.is_err();
+            if tx.send(item).await.is_err() {
+                return;
+            }
+            if is_err {
+                return;
+            }
+        }
+    });
+
+    Box::new(Box::pin(rx))
+}
+
+pub(crate) fn wrap_stream_with_progress(
+    stream: HFByteStream,
     progress: Option<Progress>,
     filename: String,
     total_bytes: u64,
-) -> Box<dyn Stream<Item = HFResult<bytes::Bytes>> + Send + Unpin> {
+) -> HFByteStream {
     if progress.is_none() {
         return stream;
     }
@@ -977,6 +1104,28 @@ impl<T: RepoType> HFRepository<T> {
     /// [`HFRepository::download_file_to_bytes`] when you do not want to write to
     /// disk.
     ///
+    /// # Offline / cache-only lookups
+    ///
+    /// Set `.local_files_only(true)` to resolve strictly from the local cache
+    /// without any network request — this is the replacement for the 0.x
+    /// `Cache::get` API. A cache miss returns
+    /// [`HFError::LocalEntryNotFound`], which is distinct from a real failure:
+    /// match it to tell "not cached" apart from a genuinely missing file
+    /// ([`HFError::EntryNotFound`]) or any transport error.
+    ///
+    /// ```no_run
+    /// # #[tokio::main] async fn main() -> hf_hub::HFResult<()> {
+    /// use hf_hub::HFError;
+    ///
+    /// let repo = hf_hub::HFClient::new()?.model("openai-community", "gpt2");
+    /// match repo.download_file().filename("config.json").local_files_only(true).send().await {
+    ///     Ok(path) => println!("cached at {}", path.display()),
+    ///     Err(HFError::LocalEntryNotFound { .. }) => println!("not in cache"),
+    ///     Err(e) => return Err(e),
+    /// }
+    /// # Ok(()) }
+    /// ```
+    ///
     /// Endpoint: `GET {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filename}`.
     ///
     /// # Parameters
@@ -988,6 +1137,7 @@ impl<T: RepoType> HFRepository<T> {
     /// - `force_download` (default `false`): re-download the file even if a cached copy exists.
     /// - `local_files_only` (default `false`): only return the file if cached locally; never make a network request.
     /// - `progress`: optional progress handler.
+    #[cfg(not(target_family = "wasm"))]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn download_file(
         &self,
@@ -1010,14 +1160,14 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        self.download_file_impl(DownloadFileParams {
+        Box::pin(self.download_file_impl(DownloadFileParams {
             filename,
             local_dir,
             revision,
             force_download,
             local_files_only,
             progress,
-        })
+        }))
         .await
     }
 
@@ -1056,13 +1206,13 @@ impl<T: RepoType> HFRepository<T> {
         /// as the caller polls each chunk; `Complete` is emitted when the stream is exhausted.
         #[builder(into)]
         progress: Option<Progress>,
-    ) -> HFResult<(Option<u64>, Box<dyn Stream<Item = Result<bytes::Bytes, HFError>> + Send + Unpin>)> {
-        self.download_file_stream_impl(DownloadFileStreamParams {
+    ) -> HFResult<(Option<u64>, HFByteStream)> {
+        Box::pin(self.download_file_stream_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
             progress,
-        })
+        }))
         .await
     }
 
@@ -1101,12 +1251,12 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<bytes::Bytes> {
-        self.download_file_to_bytes_impl(DownloadFileStreamParams {
+        Box::pin(self.download_file_to_bytes_impl(DownloadFileStreamParams {
             filename,
             revision,
             range,
             progress,
-        })
+        }))
         .await
     }
 
@@ -1132,6 +1282,7 @@ impl<T: RepoType> HFRepository<T> {
     /// - `local_files_only` (default `false`): resolve only from the local cache.
     /// - `max_workers`: maximum concurrent file downloads (default 8).
     /// - `progress`: optional progress handler.
+    #[cfg(not(target_family = "wasm"))]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn snapshot_download(
         &self,
@@ -1158,7 +1309,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<PathBuf> {
-        self.snapshot_download_impl(SnapshotDownloadParams {
+        Box::pin(self.snapshot_download_impl(SnapshotDownloadParams {
             revision,
             allow_patterns,
             ignore_patterns,
@@ -1167,7 +1318,7 @@ impl<T: RepoType> HFRepository<T> {
             local_files_only,
             max_workers,
             progress,
-        })
+        }))
         .await
     }
 }

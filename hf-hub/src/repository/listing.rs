@@ -14,6 +14,7 @@ use reqwest::Url;
 
 use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash};
 use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
+use crate::client::encode_ref;
 use crate::error::{HFError, HFResult};
 use crate::{constants, retry};
 
@@ -29,6 +30,8 @@ impl<T: RepoType> HFRepository<T> {
     /// # Parameters
     ///
     /// - `revision`: Git revision to list. Defaults to the main branch.
+    /// - `path_in_repo`: repository-relative subdirectory to list. Defaults to the repo root. Leading, trailing, and
+    ///   consecutive `/` separators are ignored; path segments are URL-encoded automatically.
     /// - `recursive` (default `false`): traverse subdirectories.
     /// - `expand` (default `false`): include per-file metadata such as size, LFS info, and last-commit summaries.
     /// - `limit`: cap the total number of entries yielded.
@@ -38,6 +41,11 @@ impl<T: RepoType> HFRepository<T> {
         /// Git revision to list. Defaults to the main branch.
         #[builder(into)]
         revision: Option<String>,
+        /// Repository-relative subdirectory to list. Defaults to the repo root.
+        /// Leading, trailing, and consecutive `/` separators are ignored;
+        /// path segments are URL-encoded automatically.
+        #[builder(into)]
+        path_in_repo: Option<String>,
         /// Traverse subdirectories.
         #[builder(default)]
         recursive: bool,
@@ -48,9 +56,15 @@ impl<T: RepoType> HFRepository<T> {
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<RepoTreeEntry>> + '_> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url_str =
-            format!("{}/tree/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
-        let url = Url::parse(&url_str)?;
+        let url_str = format!(
+            "{}/tree/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
+        let mut url = Url::parse(&url_str)?;
+        if let Some(path) = path_in_repo.as_deref() {
+            crate::client::append_path_segments(&mut url, path)?;
+        }
 
         let mut query: Vec<(String, String)> = Vec::new();
         if recursive {
@@ -84,8 +98,11 @@ impl<T: RepoType> HFRepository<T> {
         revision: Option<String>,
     ) -> HFResult<Vec<RepoTreeEntry>> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url =
-            format!("{}/paths-info/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url = format!(
+            "{}/paths-info/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
 
         let body = serde_json::json!({ "paths": paths });
 
@@ -133,7 +150,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &filename);
+            .download_url(self.repo_type.url_prefix(), &repo_path, revision, &filename)?;
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -184,6 +201,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     pub fn list_tree(
         &self,
         #[builder(into)] revision: Option<String>,
+        #[builder(into)] path_in_repo: Option<String>,
         #[builder(default)] recursive: bool,
         #[builder(default)] expand: bool,
         limit: Option<usize>,
@@ -193,6 +211,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .inner
                 .list_tree()
                 .maybe_revision(revision)
+                .maybe_path_in_repo(path_in_repo)
                 .recursive(recursive)
                 .expand(expand)
                 .maybe_limit(limit)

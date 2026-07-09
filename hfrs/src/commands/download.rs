@@ -58,10 +58,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
         multi.map(|multi| CliProgressHandler::new(multi).into())
     };
 
-    let (owner, name) = match args.repo_id.split_once('/') {
-        Some(parts) => parts,
-        None => ("", args.repo_id.as_str()),
-    };
+    let (owner, name) = hf_hub::split_id(&args.repo_id);
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     let path = if args.filenames.len() == 1 && args.include.is_empty() && args.exclude.is_empty() {
         repo.download_file()

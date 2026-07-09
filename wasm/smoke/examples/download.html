@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>hf-hub-wasm-smoke — browser download example</title>
+  <style>
+    body { font-family: monospace; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0; }
+    p.sub { margin-top: 0.25rem; color: #555; }
+    label { display: block; margin: 0.5rem 0 0.2rem; font-weight: bold; }
+    input { width: 100%; box-sizing: border-box; padding: 0.3rem; }
+    .row { display: flex; gap: 0.5rem; }
+    .row > * { flex: 1; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; }
+    #log { margin-top: 1rem; white-space: pre-wrap; background: #f4f4f4; padding: 1rem; min-height: 4rem; max-height: 400px; overflow-y: auto; }
+    code { background: #eee; padding: 0 0.2rem; }
+  </style>
+</head>
+<body>
+  <h1>hf-hub — wasm download example</h1>
+  <p class="sub">Build the WASM package first: <code>./build_wasm.sh</code>, then serve this
+  directory with a COOP/COEP-enabled static server (required for the
+  threaded wasm in <code>hf-xet</code>) and open
+  <code>http://localhost:8080/examples/download.html</code>.</p>
+
+  <p class="sub">The page calls
+  <code>HFRepository::download_file_stream</code> via wasm-bindgen — the
+  same builder used on native — and either reports the byte total or
+  collects the bytes for a Save button.</p>
+
+  <label>Hugging Face Hub token (optional, leave blank for public repos)</label>
+  <input id="hfToken" placeholder="hf_xxxxxxxxxxxxxxxxxxx" />
+
+  <div class="row">
+    <div>
+      <label>Hub endpoint</label>
+      <input id="endpoint" value="https://huggingface.co" />
+    </div>
+    <div>
+      <label>Repo type (plural)</label>
+      <input id="repoType" value="models" />
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Owner</label>
+      <input id="owner" value="Qwen" />
+    </div>
+    <div>
+      <label>Repo name</label>
+      <input id="name" value="Qwen-Image-Edit" />
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Revision</label>
+      <input id="revision" value="main" />
+    </div>
+    <div>
+      <label>File path within repo</label>
+      <input id="filepath" value="transformer/diffusion_pytorch_model-00001-of-00009.safetensors" />
+    </div>
+  </div>
+
+  <button id="streamBtn">Stream &amp; count bytes</button>
+  <button id="downloadBtn">Download to memory</button>
+  <button id="saveBtn" style="display:none">Save file</button>
+
+  <div id="log">Ready.</div>
+
+  <script type="module">
+    import init, { smoke_stream_total_bytes, download_file_bytes } from '../pkg/hf_hub_wasm_smoke.js';
+
+    await init();
+
+    const log = document.getElementById('log');
+    let downloadedBlob = null;
+    let downloadedFileName = 'download.bin';
+
+    function append(line) {
+      log.textContent += line + '\n';
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function readInputs() {
+      return {
+        endpoint: document.getElementById('endpoint').value.trim(),
+        token: document.getElementById('hfToken').value.trim() || undefined,
+        repoType: document.getElementById('repoType').value.trim(),
+        owner: document.getElementById('owner').value.trim(),
+        name: document.getElementById('name').value.trim(),
+        revision: document.getElementById('revision').value.trim(),
+        filepath: document.getElementById('filepath').value.trim(),
+      };
+    }
+
+    document.getElementById('streamBtn').addEventListener('click', async () => {
+      log.textContent = '';
+      document.getElementById('saveBtn').style.display = 'none';
+      const i = readInputs();
+      append(`Streaming ${i.owner}/${i.name}@${i.revision} :: ${i.filepath}`);
+      try {
+        const t0 = performance.now();
+        const total = await smoke_stream_total_bytes(
+          i.endpoint, i.token, i.repoType, i.owner, i.name, i.revision, i.filepath,
+        );
+        const elapsedSec = (performance.now() - t0) / 1000;
+        append(`Done — ${total} bytes in ${elapsedSec.toFixed(2)}s (${(total / 1024 / 1024 / elapsedSec).toFixed(2)} MiB/s).`);
+      } catch (e) {
+        append(`\nERROR: ${e && e.message ? e.message : e}`);
+        console.error(e);
+      }
+    });
+
+    document.getElementById('downloadBtn').addEventListener('click', async () => {
+      log.textContent = '';
+      document.getElementById('saveBtn').style.display = 'none';
+      downloadedBlob = null;
+      const i = readInputs();
+      append(`Downloading ${i.owner}/${i.name}@${i.revision} :: ${i.filepath}`);
+      try {
+        const t0 = performance.now();
+        const bytes = await download_file_bytes(
+          i.endpoint, i.token, i.repoType, i.owner, i.name, i.revision, i.filepath,
+        );
+        const elapsedSec = (performance.now() - t0) / 1000;
+        append(`Done — ${bytes.length} bytes in ${elapsedSec.toFixed(2)}s.`);
+        downloadedBlob = new Blob([bytes]);
+        downloadedFileName = i.filepath.split('/').pop() || 'download.bin';
+        document.getElementById('saveBtn').style.display = 'inline';
+      } catch (e) {
+        append(`\nERROR: ${e && e.message ? e.message : e}`);
+        console.error(e);
+      }
+    });
+
+    document.getElementById('saveBtn').addEventListener('click', () => {
+      if (!downloadedBlob) return;
+      const url = URL.createObjectURL(downloadedBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = downloadedFileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+  </script>
+</body>
+</html>

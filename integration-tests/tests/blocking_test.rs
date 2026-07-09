@@ -297,7 +297,7 @@ fn create_test_repo(client: &HFClientSync) -> String {
     let test_repo = client.model(parts[0], parts[1]);
     test_repo
         .upload_file()
-        .source(AddSource::bytes(b"initial content"))
+        .source(AddSource::bytes(b"initial content".as_slice()))
         .path_in_repo("README.md")
         .commit_message("initial commit")
         .send()
@@ -335,7 +335,7 @@ fn test_sync_create_and_delete_repo() {
 
     let commit = test_repo
         .upload_file()
-        .source(AddSource::bytes(b"hello world"))
+        .source(AddSource::bytes(b"hello world".as_slice()))
         .path_in_repo("test.txt")
         .commit_message("test upload")
         .send()
@@ -431,4 +431,46 @@ fn test_sync_branch_operations() {
     assert!(!refs.branches.iter().any(|b| b.name == "test-branch"));
 
     delete_test_repo(&client, &repo_id);
+}
+
+// --- Async-context safety ---
+//
+// Regression tests: every call below used to panic on tokio's nested-runtime
+// guard when the sync API was used inside an async application, and dropping
+// the client from async context panicked as well.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_sync_info_and_download_inside_async_context() {
+    let Some(client) = prod_sync_api() else { return };
+    let repo = repo_handle(&client, TEST_MODEL_REPO);
+
+    let info = repo.info().send().unwrap();
+    assert_eq!(info.id, TEST_MODEL_REPO);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = repo
+        .download_file()
+        .filename("config.json")
+        .local_dir(dir.path().to_path_buf())
+        .send()
+        .unwrap();
+    assert!(path.exists());
+}
+
+#[tokio::test]
+async fn test_sync_call_inside_current_thread_runtime() {
+    let Some(client) = prod_sync_api() else { return };
+    let repo = repo_handle(&client, TEST_MODEL_REPO);
+    assert!(repo.exists().send().unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_sync_client_clone_and_staggered_drop_inside_async_context() {
+    let Some(client) = prod_sync_api() else { return };
+    let clone = client.clone();
+    let repo = repo_handle(&client, TEST_MODEL_REPO);
+    drop(client);
+    drop(clone);
+    assert!(repo.exists().send().unwrap());
+    drop(repo);
 }

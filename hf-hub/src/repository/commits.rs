@@ -19,6 +19,7 @@ use url::Url;
 
 use super::diff::{self, HFFileDiff};
 use super::{HFRepository, RepoType};
+use crate::client::encode_ref;
 use crate::error::HFResult;
 use crate::{constants, retry};
 
@@ -130,8 +131,11 @@ impl<T: RepoType> HFRepository<T> {
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<GitCommitInfo>> + '_> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url_str =
-            format!("{}/commits/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url_str = format!(
+            "{}/commits/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
         let url = Url::parse(&url_str)?;
         Ok(self.hf_client.paginate(url, vec![], limit))
     }
@@ -200,7 +204,11 @@ impl<T: RepoType> HFRepository<T> {
         ///   `"<sha1>..<sha2>"`).
         compare: &str,
     ) -> HFResult<String> {
-        let url = format!("{}/compare/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), compare);
+        let url = format!(
+            "{}/compare/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(compare)
+        );
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -240,7 +248,11 @@ impl<T: RepoType> HFRepository<T> {
         ///   `"<sha1>..<sha2>"`).
         compare: &str,
     ) -> HFResult<String> {
-        let url = format!("{}/compare/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), compare);
+        let url = format!(
+            "{}/compare/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(compare)
+        );
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -285,7 +297,11 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         compare: String,
     ) -> HFResult<impl Stream<Item = HFResult<HFFileDiff>> + '_> {
-        let url = format!("{}/compare/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), compare);
+        let url = format!(
+            "{}/compare/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(&compare)
+        );
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -324,7 +340,11 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         revision: Option<String>,
     ) -> HFResult<()> {
-        let url = format!("{}/branch/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), branch);
+        let url = format!(
+            "{}/branch/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(branch)
+        );
 
         let mut body = serde_json::Map::new();
         if let Some(rev) = revision {
@@ -362,7 +382,11 @@ impl<T: RepoType> HFRepository<T> {
         /// Name of the branch to delete.
         branch: &str,
     ) -> HFResult<()> {
-        let url = format!("{}/branch/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), branch);
+        let url = format!(
+            "{}/branch/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(branch)
+        );
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -398,7 +422,11 @@ impl<T: RepoType> HFRepository<T> {
         message: Option<String>,
     ) -> HFResult<()> {
         let revision = revision.unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!("{}/tag/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url = format!(
+            "{}/tag/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
 
         let mut body = serde_json::json!({ "tag": tag });
         if let Some(m) = message {
@@ -436,7 +464,8 @@ impl<T: RepoType> HFRepository<T> {
         /// Name of the tag to delete.
         tag: &str,
     ) -> HFResult<()> {
-        let url = format!("{}/tag/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), tag);
+        let url =
+            format!("{}/tag/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), encode_ref(tag));
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {

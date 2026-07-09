@@ -119,7 +119,7 @@ async fn main() -> hf_hub::HFResult<()> {
     // Upload from bytes
     let commit = repo
         .upload_file()
-        .source(AddSource::bytes(b"Hello from Rust!"))
+        .source(AddSource::bytes(b"Hello from Rust!".as_slice()))
         .path_in_repo("hello.txt")
         .commit_message("Add hello.txt from bytes")
         .send()

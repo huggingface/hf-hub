@@ -36,21 +36,37 @@ fn is_transient_status(status: StatusCode) -> bool {
 }
 
 fn is_transient_reqwest_error(err: &ReqwestError) -> bool {
-    if err.is_timeout() || err.is_connect() {
+    // The wasm reqwest backend exposes no `is_connect`/`is_body`/`is_decode`/
+    // `is_redirect` and no `hyper::Error` source, so wasm retries only on
+    // timeout — strictly less generous than native.
+    if err.is_timeout() {
         return true;
     }
-    if err.is_body() || err.is_decode() || err.is_builder() || err.is_redirect() || err.is_status() {
+    if err.is_builder() || err.is_status() {
         return false;
     }
-    if err.is_request()
-        && let Some(hyper_err) = find_source::<hyper::Error>(err)
-        && (hyper_err.is_incomplete_message()
-            || hyper_err.is_canceled()
-            || find_source::<std::io::Error>(hyper_err).is_some())
+    #[cfg(target_family = "wasm")]
     {
-        return true;
+        false
     }
-    false
+    #[cfg(not(target_family = "wasm"))]
+    {
+        if err.is_connect() {
+            return true;
+        }
+        if err.is_body() || err.is_decode() || err.is_redirect() {
+            return false;
+        }
+        if err.is_request()
+            && let Some(hyper_err) = find_source::<hyper::Error>(err)
+            && (hyper_err.is_incomplete_message()
+                || hyper_err.is_canceled()
+                || find_source::<std::io::Error>(hyper_err).is_some())
+        {
+            return true;
+        }
+        false
+    }
 }
 
 fn find_source<T: std::error::Error + 'static>(err: &dyn std::error::Error) -> Option<&T> {

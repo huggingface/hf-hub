@@ -336,7 +336,21 @@ impl HFError {
     /// where falling back to a cached version is appropriate.
     pub(crate) fn is_transient(&self) -> bool {
         match self {
-            HFError::Request { source, .. } => source.is_connect() || source.is_timeout(),
+            // `reqwest::Error::is_connect` is not available on the wasm32 backend.
+            HFError::Request { source, .. } => {
+                let timeout = source.is_timeout();
+                let connect = {
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        source.is_connect()
+                    }
+                    #[cfg(target_family = "wasm")]
+                    {
+                        false
+                    }
+                };
+                timeout || connect
+            },
             HFError::Http { context } => {
                 matches!(context.status.as_u16(), 500 | 502 | 503 | 504)
             },

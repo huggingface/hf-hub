@@ -13,20 +13,21 @@
 //!   copy operations.
 //! - Use [`sync`] for one-way directory mirroring between a local folder and a bucket prefix.
 
+#[cfg(not(target_family = "wasm"))]
 pub mod sync;
 
+#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 
 use bon::bon;
-use futures::Stream;
-#[cfg(feature = "blocking")]
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, NotFoundContext};
 use crate::progress::{DownloadEvent, EmitEvent, Progress, UploadEvent};
+use crate::repository::download::{HFByteStream, wrap_stream_with_progress};
 use crate::retry;
 
 const BUCKET_BATCH_CHUNK_SIZE: usize = 1000;
@@ -151,12 +152,11 @@ impl HFBucket {
         recursive: bool,
     ) -> HFResult<impl Stream<Item = HFResult<BucketTreeEntry>> + '_> {
         let bucket_id = self.bucket_id();
-        let mut url_str = format!("{}/api/buckets/{}/tree", self.hf_client.endpoint(), bucket_id);
+        let url_str = format!("{}/api/buckets/{}/tree", self.hf_client.endpoint(), bucket_id);
+        let mut url = Url::parse(&url_str)?;
         if let Some(ref prefix) = prefix {
-            url_str = format!("{}/{}", url_str, prefix);
+            crate::client::append_path_segments(&mut url, prefix)?;
         }
-
-        let url = Url::parse(&url_str)?;
 
         let mut query = vec![];
         if recursive {
@@ -211,6 +211,36 @@ impl HFBucket {
         Ok(all_entries)
     }
 
+    /// Stream the bytes of a single file in this bucket without writing to disk.
+    ///
+    /// Parallel of
+    /// [`HFRepository::download_file_stream`](crate::repository::HFRepository::download_file_stream) for buckets.
+    /// Returns `(content_length, stream)` — `content_length` reflects the file size reported by `paths-info`.
+    /// Xet-backed files dispatch through xet streaming; non-xet files fall back to a direct GET on the bucket's
+    /// `resolve` URL.
+    ///
+    /// Endpoint (non-xet branch): `GET {endpoint}/buckets/{bucket_id}/resolve/{remote_path}`.
+    ///
+    /// # Parameters
+    ///
+    /// - `remote_path` (required): file path within the bucket.
+    /// - `progress`: optional progress handler. `Start` is emitted before the stream is returned; `Progress` is emitted
+    ///   as the caller polls each chunk; `Complete` is emitted when the stream is exhausted.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn download_file_stream(
+        &self,
+        /// File path within the bucket.
+        #[builder(into)]
+        remote_path: String,
+        /// Progress handler. `Start` is emitted before the stream is returned; `Progress` is
+        /// emitted as the caller polls each chunk; `Complete` is emitted when the stream is
+        /// exhausted.
+        #[builder(into)]
+        progress: Option<Progress>,
+    ) -> HFResult<(Option<u64>, HFByteStream)> {
+        Box::pin(self.download_file_stream_impl(remote_path, progress)).await
+    }
+
     /// Get metadata for a single file in this bucket via a HEAD request.
     ///
     /// Endpoint: `HEAD /buckets/{bucket_id}/resolve/{path}`.
@@ -218,6 +248,7 @@ impl HFBucket {
     /// # Parameters
     ///
     /// - `remote_path` (required): file path within the bucket.
+    #[cfg(not(target_family = "wasm"))]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn get_file_metadata(
         &self,
@@ -226,11 +257,16 @@ impl HFBucket {
         remote_path: String,
     ) -> HFResult<BucketFileMetadata> {
         let bucket_id = self.bucket_id();
-        let url = format!("{}/buckets/{}/resolve/{}", self.hf_client.endpoint(), bucket_id, remote_path);
+        let mut url = Url::parse(&format!("{}/buckets/{}/resolve", self.hf_client.endpoint(), bucket_id))?;
+        crate::client::append_path_segments(&mut url, &remote_path)?;
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.no_redirect_client().head(&url).headers(headers.clone()).send()
+            self.hf_client
+                .no_redirect_client()
+                .head(url.clone())
+                .headers(headers.clone())
+                .send()
         })
         .await?;
 
@@ -390,6 +426,40 @@ impl HFBucket {
         self.batch_operations().delete(paths).send().await
     }
 
+    /// Upload an arbitrary set of [`AddSource`](crate::repository::AddSource)-backed files to the bucket.
+    ///
+    /// More general analog of [`HFBucket::upload_files`] (which only reads from local
+    /// paths): each pair can use any [`AddSource`](crate::repository::AddSource)
+    /// variant — `Bytes` for in-memory content, `File` for a local path, or `Stream`
+    /// for sources too large to materialize at once. For the common in-memory case,
+    /// build entries with
+    /// [`AddSource::bytes`](crate::repository::AddSource::bytes):
+    ///
+    /// ```rust,no_run
+    /// # use hf_hub::repository::AddSource;
+    /// # let _: Vec<(String, AddSource)> =
+    /// vec![("logs/run-1.txt".into(), AddSource::bytes(b"hello".as_slice()))]
+    /// # ;
+    /// ```
+    ///
+    /// Goes through the same preupload + xet pipeline as [`HFBucket::upload_files`].
+    ///
+    /// # Parameters
+    ///
+    /// - `files` (required): list of `(remote_path, source)` pairs.
+    /// - `progress`: optional progress handler.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn upload_source_files(
+        &self,
+        /// List of `(remote_path, source)` pairs.
+        files: Vec<(String, crate::repository::AddSource)>,
+        /// Progress handler.
+        #[builder(into)]
+        progress: Option<Progress>,
+    ) -> HFResult<()> {
+        Box::pin(self.upload_sources_impl(files, progress)).await
+    }
+
     /// Upload local files to the bucket.
     ///
     /// File contents are uploaded to xet first, then registered in the bucket via the batch
@@ -400,6 +470,7 @@ impl HFBucket {
     ///
     /// - `files` (required): list of [`BucketUpload`] entries describing each `local` → `remote` mapping.
     /// - `progress`: optional progress handler.
+    #[cfg(not(target_family = "wasm"))]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_files(
         &self,
@@ -409,6 +480,108 @@ impl HFBucket {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<()> {
+        Box::pin(self.upload_files_impl(files, progress)).await
+    }
+
+    /// Download files from the bucket to local paths.
+    ///
+    /// The method first resolves xet metadata for each `remote` path, then downloads the file
+    /// contents through xet. Directory entries are rejected. Each entry pairs a bucket-relative
+    /// source with a local destination via the [`BucketDownload`] struct (use
+    /// [`BucketDownload::new`] to construct one).
+    ///
+    /// # Parameters
+    ///
+    /// - `files` (required): list of [`BucketDownload`] entries describing each `remote` → `local` mapping.
+    /// - `progress`: optional progress handler.
+    #[cfg(not(target_family = "wasm"))]
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn download_files(
+        &self,
+        /// List of [`BucketDownload`] entries describing each `remote` → `local` mapping.
+        files: Vec<BucketDownload>,
+        /// Progress handler.
+        #[builder(into)]
+        progress: Option<Progress>,
+    ) -> HFResult<()> {
+        Box::pin(self.download_files_impl(files, progress)).await
+    }
+}
+
+impl HFBucket {
+    /// Body of [`HFBucket::download_file_stream`], extracted so the builder `send()` future only
+    /// holds a boxed pointer to this state machine rather than embedding it inline.
+    async fn download_file_stream_impl(
+        &self,
+        remote_path: String,
+        progress: Option<Progress>,
+    ) -> HFResult<(Option<u64>, HFByteStream)> {
+        let bucket_id = self.bucket_id();
+
+        let entries = self.get_paths_info().paths(vec![remote_path.clone()]).send().await?;
+        let (xet_hash, file_size) = entries
+            .into_iter()
+            .find_map(|e| match e {
+                BucketTreeEntry::File {
+                    path, size, xet_hash, ..
+                } if path == remote_path => Some((xet_hash, size)),
+                _ => None,
+            })
+            .ok_or_else(|| HFError::EntryNotFound {
+                path: remote_path.clone(),
+                repo_id: bucket_id.clone(),
+                context: None,
+            })?;
+
+        if !xet_hash.is_empty() {
+            let stream = self.xet_download_stream(&xet_hash, file_size).await?;
+            progress.emit(DownloadEvent::Start {
+                total_files: 1,
+                total_bytes: file_size,
+            });
+            let boxed: HFByteStream = Box::new(Box::pin(stream));
+            let wrapped = wrap_stream_with_progress(boxed, progress, remote_path, file_size);
+            #[cfg(target_family = "wasm")]
+            let wrapped = crate::repository::download::buffer_wasm_stream(wrapped);
+            return Ok((Some(file_size), wrapped));
+        }
+
+        let mut url = Url::parse(&format!("{}/buckets/{}/resolve", self.hf_client.endpoint(), bucket_id))?;
+        crate::client::append_path_segments(&mut url, &remote_path)?;
+        let headers = self.hf_client.auth_headers();
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client.http_client().get(url.clone()).headers(headers.clone()).send()
+        })
+        .await?;
+        let response = self
+            .hf_client
+            .check_response(
+                response,
+                Some(&bucket_id),
+                NotFoundContext::Entry {
+                    path: remote_path.clone(),
+                },
+            )
+            .await?;
+
+        let content_length = response.content_length().or(Some(file_size));
+        let total_bytes = content_length.unwrap_or(file_size);
+        let stream = response.bytes_stream().map(|r| r.map_err(HFError::from));
+        progress.emit(DownloadEvent::Start {
+            total_files: 1,
+            total_bytes,
+        });
+        let boxed: HFByteStream = Box::new(Box::pin(stream));
+        let wrapped = wrap_stream_with_progress(boxed, progress, remote_path, total_bytes);
+        #[cfg(target_family = "wasm")]
+        let wrapped = crate::repository::download::buffer_wasm_stream(wrapped);
+        Ok((content_length, wrapped))
+    }
+
+    /// Body of [`HFBucket::upload_files`], extracted so the builder `send()` future only holds a
+    /// boxed pointer to this state machine rather than embedding it inline.
+    #[cfg(not(target_family = "wasm"))]
+    async fn upload_files_impl(&self, files: Vec<BucketUpload>, progress: Option<Progress>) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
         }
@@ -458,26 +631,10 @@ impl HFBucket {
         Ok(())
     }
 
-    /// Download files from the bucket to local paths.
-    ///
-    /// The method first resolves xet metadata for each `remote` path, then downloads the file
-    /// contents through xet. Directory entries are rejected. Each entry pairs a bucket-relative
-    /// source with a local destination via the [`BucketDownload`] struct (use
-    /// [`BucketDownload::new`] to construct one).
-    ///
-    /// # Parameters
-    ///
-    /// - `files` (required): list of [`BucketDownload`] entries describing each `remote` → `local` mapping.
-    /// - `progress`: optional progress handler.
-    #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub async fn download_files(
-        &self,
-        /// List of [`BucketDownload`] entries describing each `remote` → `local` mapping.
-        files: Vec<BucketDownload>,
-        /// Progress handler.
-        #[builder(into)]
-        progress: Option<Progress>,
-    ) -> HFResult<()> {
+    /// Body of [`HFBucket::download_files`], extracted so the builder `send()` future only holds a
+    /// boxed pointer to this state machine rather than embedding it inline.
+    #[cfg(not(target_family = "wasm"))]
+    async fn download_files_impl(&self, files: Vec<BucketDownload>, progress: Option<Progress>) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
         }
@@ -531,6 +688,51 @@ impl HFBucket {
         self.xet_download_batch(&xet_batch_files, &progress).await?;
 
         progress.emit(DownloadEvent::Complete);
+        Ok(())
+    }
+
+    /// Shared implementation: upload pre-built `(remote_path, AddSource)` pairs through xet
+    /// and register them in the bucket. Used by [`HFBucket::upload_source_files`].
+    async fn upload_sources_impl(
+        &self,
+        uploads: Vec<(String, crate::repository::AddSource)>,
+        progress: Option<Progress>,
+    ) -> HFResult<()> {
+        if uploads.is_empty() {
+            return Ok(());
+        }
+
+        let total_bytes: u64 = uploads
+            .iter()
+            .map(|(_, source)| match source {
+                crate::repository::AddSource::Bytes(b) => b.len() as u64,
+                crate::repository::AddSource::Stream(s) => s.size(),
+                #[cfg(not(target_family = "wasm"))]
+                crate::repository::AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+            })
+            .sum();
+        progress.emit(UploadEvent::Start {
+            total_files: uploads.len(),
+            total_bytes,
+        });
+
+        let xet_infos = self.xet_upload(&uploads, &progress).await?;
+
+        let add_files: Vec<BucketAddFile> = uploads
+            .iter()
+            .zip(xet_infos.iter())
+            .map(|((remote, _source), xet_info)| BucketAddFile {
+                path: remote.clone(),
+                xet_hash: xet_info.hash.clone(),
+                size: xet_info.file_size.unwrap_or(0),
+                mtime: None,
+                content_type: None,
+            })
+            .collect();
+
+        self.batch_operations().add_files(add_files).send().await?;
+
+        progress.emit(UploadEvent::Complete);
         Ok(())
     }
 }
@@ -684,6 +886,7 @@ pub struct BucketFileMetadata {
 /// Using a named struct (rather than a `(local, remote)` tuple) prevents the
 /// two paths from being silently swapped at the call site, where a copy-paste
 /// from [`BucketDownload`] would otherwise compile.
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, Clone)]
 pub struct BucketUpload {
     /// Path on the local filesystem (absolute or relative to the current
@@ -695,6 +898,7 @@ pub struct BucketUpload {
     pub remote: String,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl BucketUpload {
     /// Construct a [`BucketUpload`] from a local source path and a bucket-relative
     /// destination path.
@@ -712,6 +916,7 @@ impl BucketUpload {
 /// named struct (rather than a `(remote, local)` tuple) prevents the two paths
 /// from being silently swapped at the call site, where a copy-paste from
 /// [`BucketUpload`] would otherwise compile.
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, Clone)]
 pub struct BucketDownload {
     /// **Bucket-relative**, slash-separated source path (e.g.,
@@ -724,6 +929,7 @@ pub struct BucketDownload {
     pub local: PathBuf,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl BucketDownload {
     /// Construct a [`BucketDownload`] from a bucket-relative source path and a
     /// local destination path.
@@ -1013,6 +1219,18 @@ impl crate::blocking::HFBucketSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn delete_files(&self, paths: Vec<String>) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_files().paths(paths).send())
+    }
+
+    /// Blocking counterpart of [`HFBucket::upload_source_files`]. See the async method for
+    /// parameters and behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn upload_source_files(
+        &self,
+        files: Vec<(String, crate::repository::AddSource)>,
+        #[builder(into)] progress: Option<Progress>,
+    ) -> HFResult<()> {
+        self.runtime
+            .block_on(self.inner.upload_source_files().files(files).maybe_progress(progress).send())
     }
 
     /// Blocking counterpart of [`HFBucket::upload_files`]. See the async method for parameters

@@ -1,12 +1,79 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
 use tracing::debug;
+use url::Url;
 
 use crate::constants;
 use crate::error::{HFError, HFResult, HttpErrorContext, NotFoundContext};
 use crate::retry::{self, RetryConfig};
+
+/// Append `path` to `url` as percent-encoded URL path segments.
+///
+/// Splits `path` on `/` and pushes each non-empty piece via
+/// [`Url::path_segments_mut`], which percent-encodes characters that aren't
+/// valid in a path segment (e.g. `#`, `?`, ` `, `%`).
+///
+/// Returns an error only if `url` is a cannot-be-a-base URL (e.g. `mailto:`,
+/// `data:`); all URLs hf-hub constructs are http(s) and so this never fails
+/// in practice.
+pub(crate) fn append_path_segments(url: &mut Url, path: &str) -> HFResult<()> {
+    let url_str = url.as_str().to_string();
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|()| HFError::InvalidParameter(format!("unexpected non-base URL: {url_str}")))?;
+    for seg in path.split('/').filter(|s| !s.is_empty()) {
+        segments.push(seg);
+    }
+    Ok(())
+}
+
+/// Everything except RFC 3986 unreserved characters (`A-Za-z0-9-._~`), mirroring
+/// Python's `urllib.parse.quote(s, safe="")` as used by `huggingface_hub`.
+const REF_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'-').remove(b'.').remove(b'_').remove(b'~');
+
+/// Percent-encode a git revision (branch, tag, or commit SHA) for use as a single
+/// URL path segment.
+///
+/// Unlike [`append_path_segments`], `/` is encoded too (`feature/x` → `feature%2Fx`)
+/// so the revision occupies exactly one segment — the Hub API expects revisions
+/// fully encoded. Also safe for `<base>..<head>` compare specs: `.` is unreserved,
+/// so the `..` separator stays literal while each side is encoded.
+pub(crate) fn encode_ref(revision: &str) -> Cow<'_, str> {
+    utf8_percent_encode(revision, REF_ENCODE_SET).into()
+}
+
+/// Split a repo or bucket id into its `(owner, name)` parts.
+///
+/// A fully-qualified id (`"owner/name"`) splits on the first `/`. A short-form
+/// id with no owner (`"gpt2"`) yields an empty owner, matching the `owner, name`
+/// argument pair taken by [`HFClient::model`], [`HFClient::dataset`],
+/// [`HFClient::space`], and [`HFClient::repository`]. Only the first `/` is a
+/// separator, so nested names (`"owner/sub/name"`) keep their tail intact
+/// (`("owner", "sub/name")`).
+///
+/// ```
+/// use hf_hub::split_id;
+///
+/// assert_eq!(split_id("openai-community/gpt2"), ("openai-community", "gpt2"));
+/// assert_eq!(split_id("gpt2"), ("", "gpt2"));
+/// ```
+pub fn split_id(id: &str) -> (&str, &str) {
+    match id.split_once('/') {
+        Some((owner, name)) => (owner, name),
+        None => ("", id),
+    }
+}
+
+/// Whether a `Location` header value is a relative reference (no scheme, no
+/// host), like `/Snowflake/repo/resolve/main/config.json`. Protocol-relative
+/// URLs (`//host/path`) carry a host and are treated as absolute.
+fn is_relative_location(location: &str) -> bool {
+    Url::parse(location) == Err(url::ParseError::RelativeUrlWithoutBase) && !location.starts_with("//")
+}
 
 /// Async client for the Hugging Face Hub API.
 ///
@@ -52,6 +119,10 @@ impl std::fmt::Debug for HFClient {
 
 pub(crate) struct HFClientInner {
     pub(crate) client: reqwest::Client,
+    // The wasm32 reqwest backend ignores `redirect()` configuration — the browser
+    // (or fetch in Node) handles redirects opaquely — so we only carry a separate
+    // no-redirect client on native targets.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) no_redirect_client: reqwest::Client,
     pub(crate) retry_config: RetryConfig,
     pub(crate) endpoint: String,
@@ -190,6 +261,7 @@ impl HFClientBuilder {
             None => reqwest::Client::builder().default_headers(default_headers.clone()).build()?,
         };
 
+        #[cfg(not(target_family = "wasm"))]
         let no_redirect_client = reqwest::Client::builder()
             .default_headers(default_headers)
             .redirect(reqwest::redirect::Policy::none())
@@ -203,6 +275,7 @@ impl HFClientBuilder {
         Ok(HFClient {
             inner: Arc::new(HFClientInner {
                 client,
+                #[cfg(not(target_family = "wasm"))]
                 no_redirect_client,
                 retry_config,
                 endpoint: endpoint.trim_end_matches('/').to_string(),
@@ -259,6 +332,7 @@ impl HFClient {
         &self.inner.client
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn no_redirect_client(&self) -> &reqwest::Client {
         &self.inner.no_redirect_client
     }
@@ -312,18 +386,64 @@ impl HFClient {
         format!("{}/api/{}/{}", self.endpoint(), api_segment, repo_id)
     }
 
-    /// Build a download URL: {endpoint}/{url_prefix}{repo_id}/resolve/{revision}/{filename}.
+    /// Build a download URL: `{endpoint}/{url_prefix}{repo_id}/resolve/{revision}/{filename}`.
     ///
     /// `url_prefix` is `""` for models or `"<plural>/"` for the other repo types. Pass
     /// [`crate::repository::RepoType::url_prefix`] for the concrete repo type at the call
-    /// site.
-    pub(crate) fn download_url(&self, url_prefix: &str, repo_id: &str, revision: &str, filename: &str) -> String {
-        format!("{}/{}{}/resolve/{}/{}", self.endpoint(), url_prefix, repo_id, revision, filename)
+    /// site. `revision` is fully percent-encoded (including `/`) so it occupies exactly one
+    /// path segment; `filename` is percent-encoded path-segment by path-segment, so values
+    /// like `subdir/file name #1.bin` produce a correctly escaped URL.
+    pub(crate) fn download_url(
+        &self,
+        url_prefix: &str,
+        repo_id: &str,
+        revision: &str,
+        filename: &str,
+    ) -> HFResult<String> {
+        let base = format!("{}/{}{}/resolve/{}", self.endpoint(), url_prefix, repo_id, encode_ref(revision));
+        let mut url = Url::parse(&base)?;
+        append_path_segments(&mut url, filename)?;
+        Ok(url.into())
     }
 
     /// Build a bucket API URL: `{endpoint}/api/buckets/{bucket_id}`
     pub(crate) fn bucket_api_url(&self, bucket_id: &str) -> String {
         format!("{}/api/buckets/{}", self.endpoint(), bucket_id)
+    }
+
+    /// Issue a HEAD request via the no-redirect client, manually following
+    /// *relative* redirects (Location without a host).
+    ///
+    /// The Hub 307s to the canonical repo path when a repo id differs in
+    /// casing (e.g. `snowflake/…` → `Snowflake/…`); that response carries no
+    /// ETag, so metadata extraction must happen after following it. Absolute
+    /// redirects (e.g. to the CDN) are returned as-is — their headers already
+    /// carry the linked metadata. Mirrors `huggingface_hub`'s
+    /// `follow_relative_redirects` behavior.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) async fn head_with_relative_redirects(
+        &self,
+        url: &str,
+        headers: &HeaderMap,
+    ) -> HFResult<reqwest::Response> {
+        const MAX_RELATIVE_REDIRECTS: usize = 10;
+        let mut url = Url::parse(url)?;
+        for _ in 0..=MAX_RELATIVE_REDIRECTS {
+            let response = retry::retry(self.retry_config(), || {
+                self.no_redirect_client().head(url.clone()).headers(headers.clone()).send()
+            })
+            .await?;
+            if response.status().is_redirection()
+                && let Some(location) = response.headers().get(reqwest::header::LOCATION)
+                && let Ok(location) = location.to_str()
+                && is_relative_location(location)
+            {
+                url = url.join(location)?;
+                continue;
+            }
+            return Ok(response);
+        }
+        Err(HFError::malformed_response_at("too many relative redirects", url.to_string()))
     }
 
     /// Check an HTTP response and map error status codes to HFError variants.
@@ -401,7 +521,17 @@ impl HFClient {
             return Ok((session.clone(), guard.generation));
         }
 
-        let session = xet::xet_session::XetSessionBuilder::new()
+        #[cfg(not(target_family = "wasm"))]
+        let builder = xet::xet_session::XetSessionBuilder::new();
+        // Cap transfer concurrency on wasm to avoid exhausting linear memory.
+        #[cfg(target_family = "wasm")]
+        let builder = {
+            let mut config = xet::xet_session::XetConfig::new();
+            config.client.ac_max_upload_concurrency = 8;
+            config.client.ac_max_download_concurrency = 8;
+            xet::xet_session::XetSessionBuilder::new_with_config(config)
+        };
+        let session = builder
             .build()
             .map_err(|e| HFError::xet(crate::error::XetOperation::Session, e))?;
         guard.session = Some(session.clone());
@@ -469,8 +599,129 @@ fn resolve_token() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
+    use url::Url;
 
-    use super::HFClientBuilder;
+    use super::{HFClientBuilder, append_path_segments, encode_ref, is_relative_location, split_id};
+
+    #[test]
+    fn append_path_segments_encodes_special_chars() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "with space/and#hash?and+plus").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base/with%20space/and%23hash%3Fand+plus");
+    }
+
+    #[test]
+    fn append_path_segments_handles_leading_trailing_and_repeated_slashes() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "/a//b/c/").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base/a/b/c");
+    }
+
+    #[test]
+    fn append_path_segments_encodes_percent_literals() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "a%2Fb/c").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base/a%252Fb/c");
+    }
+
+    #[test]
+    fn append_path_segments_handles_unicode() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "ümlaut/файл.txt").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base/%C3%BCmlaut/%D1%84%D0%B0%D0%B9%D0%BB.txt");
+    }
+
+    #[test]
+    fn append_path_segments_empty_path_is_noop() {
+        let mut url = Url::parse("https://example.com/base").unwrap();
+        append_path_segments(&mut url, "").unwrap();
+        assert_eq!(url.as_str(), "https://example.com/base");
+    }
+
+    #[test]
+    fn encode_ref_encodes_slash_and_reserved_chars() {
+        assert_eq!(encode_ref("feature/x"), "feature%2Fx");
+        assert_eq!(encode_ref("fix#123"), "fix%23123");
+        assert_eq!(encode_ref("wip?draft"), "wip%3Fdraft");
+        assert_eq!(encode_ref("v1.0+beta"), "v1.0%2Bbeta");
+        assert_eq!(encode_ref("with space"), "with%20space");
+        assert_eq!(encode_ref("100%done"), "100%25done");
+    }
+
+    #[test]
+    fn encode_ref_preserves_unreserved_chars() {
+        assert_eq!(encode_ref("main"), "main");
+        assert_eq!(encode_ref("v1.0-rc.2_final~ok"), "v1.0-rc.2_final~ok");
+        assert_eq!(encode_ref("abc123def456"), "abc123def456");
+    }
+
+    #[test]
+    fn encode_ref_keeps_compare_dots_literal() {
+        assert_eq!(encode_ref("main..feature/x"), "main..feature%2Fx");
+        assert_eq!(encode_ref("v1.0...v2.0"), "v1.0...v2.0");
+    }
+
+    #[test]
+    fn encode_ref_encodes_unicode() {
+        assert_eq!(encode_ref("ветка"), "%D0%B2%D0%B5%D1%82%D0%BA%D0%B0");
+    }
+
+    #[test]
+    fn is_relative_location_classification() {
+        assert!(is_relative_location("/Snowflake/repo/resolve/main/config.json"));
+        assert!(is_relative_location("relative/path"));
+        assert!(!is_relative_location("https://cdn-lfs.huggingface.co/repos/x"));
+        assert!(!is_relative_location("//cdn-lfs.huggingface.co/repos/x"));
+    }
+
+    #[test]
+    fn download_url_encodes_revision() {
+        let client = HFClientBuilder::new().endpoint("https://huggingface.co").build().unwrap();
+        let url = client.download_url("", "owner/repo", "feature/x", "file.bin").unwrap();
+        assert_eq!(url, "https://huggingface.co/owner/repo/resolve/feature%2Fx/file.bin");
+
+        let url = client.download_url("", "owner/repo", "fix#123", "file.bin").unwrap();
+        assert_eq!(url, "https://huggingface.co/owner/repo/resolve/fix%23123/file.bin");
+    }
+
+    #[test]
+    fn download_url_encodes_filename_segments() {
+        let client = HFClientBuilder::new().endpoint("https://huggingface.co").build().unwrap();
+        let url = client
+            .download_url("", "owner/repo", "main", "subdir/file name #1.bin")
+            .unwrap();
+        assert_eq!(url, "https://huggingface.co/owner/repo/resolve/main/subdir/file%20name%20%231.bin");
+    }
+
+    #[test]
+    fn download_url_dataset_prefix() {
+        let client = HFClientBuilder::new().endpoint("https://huggingface.co").build().unwrap();
+        let url = client.download_url("datasets/", "owner/ds", "v1.0", "data/train.csv").unwrap();
+        assert_eq!(url, "https://huggingface.co/datasets/owner/ds/resolve/v1.0/data/train.csv");
+    }
+
+    #[test]
+    fn split_id_splits_owner_and_name() {
+        assert_eq!(split_id("openai-community/gpt2"), ("openai-community", "gpt2"));
+        assert_eq!(split_id("HuggingFaceFW/fineweb"), ("HuggingFaceFW", "fineweb"));
+    }
+
+    #[test]
+    fn split_id_ownerless_short_form() {
+        assert_eq!(split_id("gpt2"), ("", "gpt2"));
+        assert_eq!(split_id(""), ("", ""));
+    }
+
+    #[test]
+    fn split_id_only_splits_first_slash() {
+        assert_eq!(split_id("owner/sub/name"), ("owner", "sub/name"));
+    }
+
+    #[test]
+    fn split_id_empty_owner_or_name() {
+        assert_eq!(split_id("/name"), ("", "name"));
+        assert_eq!(split_id("owner/"), ("owner", ""));
+    }
 
     #[test]
     fn test_builder_cache_dir_explicit() {

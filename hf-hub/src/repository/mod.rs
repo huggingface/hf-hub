@@ -35,8 +35,9 @@ pub use commits::{CommitAuthor, DiffEntry, GitCommitInfo, GitRefInfo, GitRefs};
 pub use diff::{GitStatus, HFDiffParseError, HFFileDiff};
 pub use files::{
     AddSource, BlobLfsInfo, BlobSecurityInfo, CommitInfo, CommitOperation, FileMetadataInfo, LastCommitInfo,
-    RepoTreeEntry,
+    RepoTreeEntry, SourceByteStream, StreamFactory, StreamSource,
 };
+#[cfg(not(target_family = "wasm"))]
 pub(crate) use files::{extract_file_size, extract_xet_hash};
 use futures::Stream;
 pub use repo_type::{RepoType, RepoTypeAny, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace};
@@ -262,7 +263,7 @@ pub struct EvalResultSource {
 /// Returned by [`HFClient::list_models`] and by
 /// [`HFRepository::info`] when the repo is a model.
 /// Most fields are optional because they depend on the `expand` parameter and the repo's state.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     /// Repo ID, in the form `owner/name`.
@@ -357,7 +358,7 @@ pub struct ModelInfo {
 /// Returned by [`HFClient::list_datasets`] and by
 /// [`HFRepository::info`] when the repo is a dataset.
 /// Most fields are optional because they depend on the `expand` parameter and the repo's state.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatasetInfo {
     /// Repo ID, in the form `owner/name`.
@@ -414,7 +415,7 @@ pub struct DatasetInfo {
 /// Returned by [`HFClient::list_spaces`] and by
 /// [`HFRepository::info`] when the repo is a Space.
 /// Most fields are optional because they depend on the `expand` parameter and the Space's state.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceInfo {
     /// Repo ID, in the form `owner/name`.
@@ -481,7 +482,7 @@ pub struct SpaceInfo {
 /// Kernels are also retrievable via `/api/models/{repo_id}` (kernels carry
 /// `library_name: "kernels"`) if you need the full model-style metadata; in
 /// that case go through [`HFClient::model`] and the [`ModelInfo`] response.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KernelInfo {
     /// Repo ID, in the form `owner/name`.
@@ -1113,7 +1114,7 @@ impl<T: RepoType> HFRepository<T> {
     ) -> HFResult<I> {
         let mut url = self.hf_client.api_url(self.repo_type.plural(), &self.repo_path());
         if let Some(ref revision) = revision {
-            url = format!("{url}/revision/{revision}");
+            url = format!("{url}/revision/{}", crate::client::encode_ref(revision));
         }
         let headers = self.hf_client.auth_headers();
         let expand_params: Option<Vec<(&str, &str)>> =
@@ -1175,8 +1176,11 @@ impl<T: RepoType> HFRepository<T> {
         /// Git revision to check for existence.
         revision: &str,
     ) -> HFResult<bool> {
-        let url =
-            format!("{}/revision/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url = format!(
+            "{}/revision/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            crate::client::encode_ref(revision)
+        );
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().get(&url).headers(headers.clone()).send()
@@ -1208,7 +1212,7 @@ impl<T: RepoType> HFRepository<T> {
         let revision = revision.unwrap_or(constants::DEFAULT_REVISION);
         let url = self
             .hf_client
-            .download_url(self.repo_type.url_prefix(), &self.repo_path(), revision, filename);
+            .download_url(self.repo_type.url_prefix(), &self.repo_path(), revision, filename)?;
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().head(&url).headers(headers.clone()).send()
