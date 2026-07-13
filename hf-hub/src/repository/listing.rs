@@ -189,10 +189,10 @@ impl<T: RepoType> HFRepository<T> {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 use futures::stream::StreamExt as _;
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::list_tree`]. Returns the collected stream as a

@@ -861,7 +861,7 @@ impl HFBucket {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFBucketSync {
     /// Blocking counterpart of [`HFBucket::sync`]. See the async method for parameters and

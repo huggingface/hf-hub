@@ -1421,7 +1421,7 @@ fn split_repo_id(repo_id: &str) -> (Option<&str>, &str) {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::list_models`]. Returns the collected stream as a
@@ -1586,7 +1586,7 @@ impl crate::blocking::HFClientSync {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::exists`].
@@ -1640,7 +1640,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
 /// runtime. Builder type names are unique to keep the bon-generated state types from
 /// colliding across the four impl blocks.
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFRepositorySync<RepoTypeModel> {
     /// Blocking counterpart of [`HFRepository::<RepoTypeModel>::info`].
@@ -1656,7 +1656,7 @@ impl crate::blocking::HFRepositorySync<RepoTypeModel> {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFRepositorySync<RepoTypeDataset> {
     /// Blocking counterpart of [`HFRepository::<RepoTypeDataset>::info`].
@@ -1676,7 +1676,7 @@ impl crate::blocking::HFRepositorySync<RepoTypeDataset> {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     /// Blocking counterpart of [`HFRepository::<RepoTypeSpace>::info`].
@@ -1692,7 +1692,7 @@ impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFRepositorySync<RepoTypeKernel> {
     /// Blocking counterpart of [`HFRepository::<RepoTypeKernel>::info`].

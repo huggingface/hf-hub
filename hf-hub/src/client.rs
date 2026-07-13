@@ -297,7 +297,7 @@ impl HFClientBuilder {
     /// Returns an error if the endpoint URL is not a valid URL, if the `reqwest` client
     /// cannot be constructed (e.g., an invalid `User-Agent` string was provided), or if the
     /// tokio runtime handle could not be correctly created for the blocking client.
-    #[cfg(feature = "blocking")]
+    #[cfg(all(feature = "blocking", not(target_family = "wasm")))]
     #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
     pub fn build_sync(self) -> HFResult<crate::blocking::HFClientSync> {
         let async_client = self.build()?;

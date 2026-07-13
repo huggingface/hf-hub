@@ -11,6 +11,8 @@ documentation = "https://docs.rs/hf-hub"
 [package.metadata.docs.rs]
 features = ["blocking"]
 rustdoc-args = ["--cfg", "docsrs"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [dependencies]
 bytes = "1"
