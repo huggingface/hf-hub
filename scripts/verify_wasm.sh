@@ -16,6 +16,12 @@ fi
 echo "==> cargo check -p hf-hub --target wasm32-unknown-unknown --no-default-features"
 cargo check -p hf-hub --target wasm32-unknown-unknown --no-default-features
 
+# docs.rs builds the wasm32 target with the same features as the linux target
+# (see [package.metadata.docs.rs]), so `blocking` must stay wasm-compatible.
+echo
+echo "==> cargo check -p hf-hub --target wasm32-unknown-unknown --features blocking"
+cargo check -p hf-hub --target wasm32-unknown-unknown --features blocking
+
 echo
 echo "==> cargo check (wasm/smoke) — exercises HFRepository::download_file_stream through wasm-bindgen"
 (cd wasm/smoke && cargo check --target wasm32-unknown-unknown)
