@@ -527,6 +527,11 @@ impl<T: RepoType> HFRepository<T> {
 
         let snapshot_path = cache::snapshot_path(cache_dir, repo_folder, &commit_hash, &params.filename);
         if snapshot_path.exists() && !force_download {
+            if !cache::is_commit_hash(revision)
+                && let Err(error) = cache::write_ref(cache_dir, repo_folder, revision, &commit_hash).await
+            {
+                tracing::debug!(%error, revision, %commit_hash, "failed to update cache ref for existing snapshot");
+            }
             params.progress.emit(DownloadEvent::Progress {
                 files: vec![FileProgress {
                     filename: params.filename.clone(),
@@ -1196,7 +1201,7 @@ mod tests {
     const TEST_ETAG: &str = "etag-http";
 
     #[tokio::test]
-    async fn cache_download_reuses_regular_snapshot_when_blob_is_absent() {
+    async fn cache_download_reuses_regular_snapshot_and_updates_ref() {
         let get_count = Arc::new(AtomicUsize::new(0));
         let endpoint = start_metadata_server(Arc::clone(&get_count)).await;
 
@@ -1204,9 +1209,6 @@ mod tests {
         let snapshot = cache::snapshot_path(dir.path(), "models--owner--repo", TEST_COMMIT, "model.bin");
         std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
         std::fs::write(&snapshot, b"cached without symlink").unwrap();
-        cache::write_ref(dir.path(), "models--owner--repo", "main", TEST_COMMIT)
-            .await
-            .unwrap();
 
         let client = HFClientBuilder::new().endpoint(endpoint).cache_dir(dir.path()).build().unwrap();
         let path = client
@@ -1221,6 +1223,18 @@ mod tests {
         assert_eq!(path, snapshot);
         assert_eq!(std::fs::read(path).unwrap(), b"cached without symlink");
         assert_eq!(get_count.load(Ordering::Relaxed), 0);
+
+        let offline_path = client
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .revision("main")
+            .local_files_only(true)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(offline_path, snapshot);
     }
 
     async fn start_metadata_server(get_count: Arc<AtomicUsize>) -> String {
