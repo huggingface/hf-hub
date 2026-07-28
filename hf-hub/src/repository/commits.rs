@@ -19,6 +19,7 @@ use url::Url;
 
 use super::diff::{self, HFFileDiff};
 use super::{HFRepository, RepoType};
+use crate::client::encode_ref;
 use crate::error::HFResult;
 use crate::{constants, retry};
 
@@ -130,8 +131,11 @@ impl<T: RepoType> HFRepository<T> {
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<GitCommitInfo>> + '_> {
         let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url_str =
-            format!("{}/commits/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url_str = format!(
+            "{}/commits/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
         let url = Url::parse(&url_str)?;
         Ok(self.hf_client.paginate(url, vec![], limit))
     }
@@ -198,10 +202,13 @@ impl<T: RepoType> HFRepository<T> {
         ///   `"v1.0"`, `"abc123…"`), or
         /// - Two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g., `"main..feature"`,
         ///   `"<sha1>..<sha2>"`).
-        #[builder(into)]
-        compare: String,
+        compare: &str,
     ) -> HFResult<String> {
-        let url = format!("{}/compare/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), compare);
+        let url = format!(
+            "{}/compare/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(compare)
+        );
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -239,10 +246,13 @@ impl<T: RepoType> HFRepository<T> {
         ///   `"v1.0"`, `"abc123…"`), or
         /// - Two revisions in `<base>..<head>` form (two dots), comparing `base` to `head` (e.g., `"main..feature"`,
         ///   `"<sha1>..<sha2>"`).
-        #[builder(into)]
-        compare: String,
+        compare: &str,
     ) -> HFResult<String> {
-        let url = format!("{}/compare/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), compare);
+        let url = format!(
+            "{}/compare/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(compare)
+        );
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -287,7 +297,11 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         compare: String,
     ) -> HFResult<impl Stream<Item = HFResult<HFFileDiff>> + '_> {
-        let url = format!("{}/compare/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), compare);
+        let url = format!(
+            "{}/compare/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(&compare)
+        );
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -321,17 +335,20 @@ impl<T: RepoType> HFRepository<T> {
     pub async fn create_branch(
         &self,
         /// Name of the branch to create.
-        #[builder(into)]
-        branch: String,
+        branch: &str,
         /// Revision to branch from. Defaults to the current main branch head.
         #[builder(into)]
         revision: Option<String>,
     ) -> HFResult<()> {
-        let url = format!("{}/branch/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), branch);
+        let url = format!(
+            "{}/branch/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(branch)
+        );
 
         let mut body = serde_json::Map::new();
-        if let Some(ref rev) = revision {
-            body.insert("startingPoint".into(), serde_json::Value::String(rev.clone()));
+        if let Some(rev) = revision {
+            body.insert("startingPoint".into(), serde_json::Value::String(rev));
         }
 
         let headers = self.hf_client.auth_headers();
@@ -363,10 +380,13 @@ impl<T: RepoType> HFRepository<T> {
     pub async fn delete_branch(
         &self,
         /// Name of the branch to delete.
-        #[builder(into)]
-        branch: String,
+        branch: &str,
     ) -> HFResult<()> {
-        let url = format!("{}/branch/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), branch);
+        let url = format!(
+            "{}/branch/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(branch)
+        );
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -394,21 +414,23 @@ impl<T: RepoType> HFRepository<T> {
     pub async fn create_tag(
         &self,
         /// Name of the tag to create.
-        #[builder(into)]
-        tag: String,
+        tag: &str,
         /// Revision to tag. Defaults to the current main branch head.
-        #[builder(into)]
-        revision: Option<String>,
+        revision: Option<&str>,
         /// Annotation message for the tag.
         #[builder(into)]
         message: Option<String>,
     ) -> HFResult<()> {
-        let revision = revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!("{}/tag/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let revision = revision.unwrap_or(constants::DEFAULT_REVISION);
+        let url = format!(
+            "{}/tag/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
 
         let mut body = serde_json::json!({ "tag": tag });
-        if let Some(ref m) = message {
-            body["message"] = serde_json::Value::String(m.clone());
+        if let Some(m) = message {
+            body["message"] = serde_json::Value::String(m);
         }
 
         let headers = self.hf_client.auth_headers();
@@ -440,10 +462,10 @@ impl<T: RepoType> HFRepository<T> {
     pub async fn delete_tag(
         &self,
         /// Name of the tag to delete.
-        #[builder(into)]
-        tag: String,
+        tag: &str,
     ) -> HFResult<()> {
-        let url = format!("{}/tag/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), tag);
+        let url =
+            format!("{}/tag/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), encode_ref(tag));
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
@@ -492,14 +514,14 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::get_commit_diff`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_commit_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
+    pub fn get_commit_diff(&self, compare: &str) -> HFResult<String> {
         self.runtime.block_on(self.inner.get_commit_diff().compare(compare).send())
     }
 
     /// Blocking counterpart of [`HFRepository::get_raw_diff`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn get_raw_diff(&self, #[builder(into)] compare: String) -> HFResult<String> {
+    pub fn get_raw_diff(&self, compare: &str) -> HFResult<String> {
         self.runtime.block_on(self.inner.get_raw_diff().compare(compare).send())
     }
 
@@ -521,11 +543,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::create_branch`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn create_branch(
-        &self,
-        #[builder(into)] branch: String,
-        #[builder(into)] revision: Option<String>,
-    ) -> HFResult<()> {
+    pub fn create_branch(&self, branch: &str, #[builder(into)] revision: Option<String>) -> HFResult<()> {
         self.runtime
             .block_on(self.inner.create_branch().branch(branch).maybe_revision(revision).send())
     }
@@ -533,7 +551,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::delete_branch`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_branch(&self, #[builder(into)] branch: String) -> HFResult<()> {
+    pub fn delete_branch(&self, branch: &str) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_branch().branch(branch).send())
     }
 
@@ -542,8 +560,8 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn create_tag(
         &self,
-        #[builder(into)] tag: String,
-        #[builder(into)] revision: Option<String>,
+        tag: &str,
+        revision: Option<&str>,
         #[builder(into)] message: Option<String>,
     ) -> HFResult<()> {
         self.runtime.block_on(
@@ -559,7 +577,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::delete_tag`]. See the async method for parameters
     /// and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn delete_tag(&self, #[builder(into)] tag: String) -> HFResult<()> {
+    pub fn delete_tag(&self, tag: &str) -> HFResult<()> {
         self.runtime.block_on(self.inner.delete_tag().tag(tag).send())
     }
 }

@@ -23,8 +23,8 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     let result = client
         .move_repository()
         .repo_type(RepoTypeAny::from(args.r#type))
-        .from_id(args.from_id)
-        .to_id(args.to_id)
+        .from_id(&args.from_id)
+        .to_id(&args.to_id)
         .send()
         .await?;
     Ok(CommandResult::Raw(result.url))

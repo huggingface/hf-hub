@@ -52,10 +52,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
         (None, None) => None,
     };
 
-    let (owner, name) = match args.repo_id.split_once('/') {
-        Some(parts) => parts,
-        None => ("", args.repo_id.as_str()),
-    };
+    let (owner, name) = hf_hub::split_id(&args.repo_id);
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     repo.update_settings()
         .maybe_private(args.private)

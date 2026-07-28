@@ -13,7 +13,9 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
+#[cfg(not(target_family = "wasm"))]
 use std::io::Read;
+#[cfg(not(target_family = "wasm"))]
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
@@ -21,9 +23,13 @@ use bon::bon;
 use futures::stream::StreamExt;
 use sha2::{Digest, Sha256};
 
+#[cfg(not(target_family = "wasm"))]
 use super::files::matches_any_glob;
 use super::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoTreeEntry, RepoType};
-use crate::error::{HFError, HFResult};
+use crate::client::encode_ref;
+#[cfg(not(target_family = "wasm"))]
+use crate::error::HFError;
+use crate::error::HFResult;
 use crate::progress::{EmitEvent, Progress, UploadEvent};
 use crate::{constants, retry};
 
@@ -52,6 +58,7 @@ struct UploadFileParams {
 }
 
 /// Internal options struct for [`HFRepository::upload_folder`].
+#[cfg(not(target_family = "wasm"))]
 struct UploadFolderParams {
     folder_path: PathBuf,
     path_in_repo: Option<String>,
@@ -84,7 +91,11 @@ struct DeleteFolderParams {
 impl<T: RepoType> HFRepository<T> {
     async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!("{}/commit/{}", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()), revision);
+        let url = format!(
+            "{}/commit/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
 
         let add_ops_count = params
             .operations
@@ -97,6 +108,8 @@ impl<T: RepoType> HFRepository<T> {
                 if let CommitOperation::Add { source, .. } = op {
                     total += match source {
                         AddSource::Bytes(b) => b.len() as u64,
+                        AddSource::Stream(s) => s.size(),
+                        #[cfg(not(target_family = "wasm"))]
                         AddSource::File(p) => std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
                     };
                 }
@@ -199,9 +212,18 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     async fn inline_base64_entry(path_in_repo: &str, source: &AddSource) -> HFResult<serde_json::Value> {
-        let content = match source {
-            AddSource::File(path) => std::fs::read(path)?,
+        let content: bytes::Bytes = match source {
+            #[cfg(not(target_family = "wasm"))]
+            AddSource::File(path) => bytes::Bytes::from(std::fs::read(path)?),
             AddSource::Bytes(bytes) => bytes.clone(),
+            AddSource::Stream(s) => {
+                let mut stream = s.open();
+                let mut buf = bytes::BytesMut::with_capacity(s.size() as usize);
+                while let Some(chunk) = stream.next().await {
+                    buf.extend_from_slice(&chunk?);
+                }
+                buf.freeze()
+            },
         };
         let b64 = base64::engine::general_purpose::STANDARD.encode(&content);
         Ok(serde_json::json!({
@@ -235,6 +257,7 @@ impl<T: RepoType> HFRepository<T> {
         .await
     }
 
+    #[cfg(not(target_family = "wasm"))]
     async fn upload_folder_impl(&self, params: UploadFolderParams) -> HFResult<CommitInfo> {
         let mut operations = Vec::new();
 
@@ -359,11 +382,12 @@ impl<T: RepoType> HFRepository<T> {
             return Ok(HashMap::new());
         }
 
-        // Step 1: Gather file info (path, size, sample) for preupload check
-        let mut file_infos: Vec<(String, u64, Vec<u8>, &AddSource)> = Vec::new();
+        // Step 1: Gather file info (path, size, sample, sha) for preupload check.
+        // Sample + SHA are computed in a single source-read pass — see prepare_source.
+        let mut file_infos: Vec<(String, u64, Vec<u8>, String, &AddSource)> = Vec::new();
         for (path_in_repo, source) in &add_ops {
-            let (size, sample) = read_size_and_sample(source)?;
-            file_infos.push(((*path_in_repo).clone(), size, sample, source));
+            let (size, sample, sha256_oid) = prepare_source(source).await?;
+            file_infos.push(((*path_in_repo).clone(), size, sample, sha256_oid, source));
         }
 
         // Step 2: Call preupload endpoint to classify files as "lfs" or "regular"
@@ -375,16 +399,16 @@ impl<T: RepoType> HFRepository<T> {
                 revision,
                 &file_infos
                     .iter()
-                    .map(|(path, size, sample, _)| (path.as_str(), *size, sample.as_slice()))
+                    .map(|(path, size, sample, _, _)| (path.as_str(), *size, sample.as_slice()))
                     .collect::<Vec<_>>(),
             )
             .await?;
         tracing::info!(?upload_modes, "preupload classification complete");
 
         // Step 3: Identify LFS files (empty files are always regular)
-        let lfs_files: Vec<&(String, u64, Vec<u8>, &AddSource)> = file_infos
+        let lfs_files: Vec<&(String, u64, Vec<u8>, String, &AddSource)> = file_infos
             .iter()
-            .filter(|(path, size, _, _)| {
+            .filter(|(path, size, _, _, _)| {
                 *size > 0 && upload_modes.get(path.as_str()).map(|m| m == "lfs").unwrap_or(false)
             })
             .collect();
@@ -395,7 +419,7 @@ impl<T: RepoType> HFRepository<T> {
 
         tracing::info!(
             lfs_file_count = lfs_files.len(),
-            lfs_files = ?lfs_files.iter().map(|(p, s, _, _)| (p.as_str(), *s)).collect::<Vec<_>>(),
+            lfs_files = ?lfs_files.iter().map(|(p, s, _, _, _)| (p.as_str(), *s)).collect::<Vec<_>>(),
             "files requiring LFS upload"
         );
 
@@ -411,7 +435,7 @@ impl<T: RepoType> HFRepository<T> {
         revision: &str,
         files: &[(&str, u64, &[u8])],
     ) -> HFResult<HashMap<String, String>> {
-        let url = format!("{}/preupload/{}", self.hf_client.api_url(api_segment, repo_id), revision);
+        let url = format!("{}/preupload/{}", self.hf_client.api_url(api_segment, repo_id), encode_ref(revision));
 
         let files_payload: Vec<serde_json::Value> = files
             .iter()
@@ -452,16 +476,19 @@ impl<T: RepoType> HFRepository<T> {
         &self,
         params: &CreateCommitParams,
         revision: &str,
-        lfs_files: &[&(String, u64, Vec<u8>, &AddSource)],
+        lfs_files: &[&(String, u64, Vec<u8>, String, &AddSource)],
     ) -> HFResult<HashMap<String, (String, u64)>> {
-        // Step 4: Compute SHA256 for LFS files
-        tracing::info!("computing SHA256 for {} LFS files", lfs_files.len());
-        let mut lfs_with_sha: Vec<(String, u64, String, &AddSource)> = Vec::new();
-        for (path, size, _, source) in lfs_files {
-            let sha256_oid = sha256_of_source(source).await?;
-            tracing::info!(path = path.as_str(), size, oid = sha256_oid.as_str(), "SHA256 computed");
-            lfs_with_sha.push(((*path).clone(), *size, sha256_oid, source));
-        }
+        // Step 4: SHA-256 was already computed alongside the preupload sample in
+        // `prepare_source` — see the per-file `file_infos` tuple. We just
+        // unpack it here instead of re-reading each source.
+        tracing::info!("collecting pre-computed SHA256 for {} LFS files", lfs_files.len());
+        let lfs_with_sha: Vec<(String, u64, String, &AddSource)> = lfs_files
+            .iter()
+            .map(|(path, size, _, sha256_oid, source)| {
+                tracing::info!(path = path.as_str(), size = *size, oid = sha256_oid.as_str(), "SHA256 reused");
+                ((*path).clone(), *size, sha256_oid.clone(), *source)
+            })
+            .collect();
 
         // Step 5: Call LFS batch endpoint to negotiate transfer method
         let objects: Vec<(&str, u64)> = lfs_with_sha.iter().map(|(_, size, oid, _)| (oid.as_str(), *size)).collect();
@@ -577,17 +604,39 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
+const PREUPLOAD_SAMPLE_SIZE: usize = 512;
+
+// Compute size, preupload sample, and SHA-256 in a single pass so a stream
+// source is only read twice total: the metadata pass here and the xet upload.
+async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>, String)> {
     match source {
         AddSource::Bytes(bytes) => {
+            let sample = bytes[..std::cmp::min(bytes.len(), PREUPLOAD_SAMPLE_SIZE)].to_vec();
             let hash = Sha256::digest(bytes);
-            Ok(hex_encode(&hash))
+            Ok((bytes.len() as u64, sample, hex_encode(&hash)))
         },
+        AddSource::Stream(s) => {
+            let mut stream = s.open();
+            let mut sample: Vec<u8> = Vec::with_capacity(PREUPLOAD_SAMPLE_SIZE);
+            let mut hasher = Sha256::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                hasher.update(&chunk);
+                if sample.len() < PREUPLOAD_SAMPLE_SIZE {
+                    let take = std::cmp::min(PREUPLOAD_SAMPLE_SIZE - sample.len(), chunk.len());
+                    sample.extend_from_slice(&chunk[..take]);
+                }
+            }
+            Ok((s.size(), sample, hex_encode(&hasher.finalize())))
+        },
+        #[cfg(not(target_family = "wasm"))]
         AddSource::File(path) => {
             let path = path.clone();
-            tokio::task::spawn_blocking(move || -> HFResult<String> {
+            tokio::task::spawn_blocking(move || -> HFResult<(u64, Vec<u8>, String)> {
                 let mut file = std::fs::File::open(&path)?;
+                let size = file.metadata()?.len();
                 let mut hasher = Sha256::new();
+                let mut sample: Vec<u8> = Vec::with_capacity(PREUPLOAD_SAMPLE_SIZE);
                 let mut buf = vec![0u8; 64 * 1024];
                 loop {
                     let n = file.read(&mut buf)?;
@@ -595,36 +644,22 @@ async fn sha256_of_source(source: &AddSource) -> HFResult<String> {
                         break;
                     }
                     hasher.update(&buf[..n]);
+                    if sample.len() < PREUPLOAD_SAMPLE_SIZE {
+                        let take = std::cmp::min(PREUPLOAD_SAMPLE_SIZE - sample.len(), n);
+                        sample.extend_from_slice(&buf[..take]);
+                    }
                 }
-                Ok(hex_encode(&hasher.finalize()))
+                Ok((size, sample, hex_encode(&hasher.finalize())))
             })
             .await
-            .map_err(|e| HFError::Other(format!("sha256 task failed: {e}")))?
-        },
-    }
-}
-
-fn read_size_and_sample(source: &AddSource) -> HFResult<(u64, Vec<u8>)> {
-    match source {
-        AddSource::Bytes(bytes) => {
-            let size = bytes.len() as u64;
-            let sample = bytes[..std::cmp::min(bytes.len(), 512)].to_vec();
-            Ok((size, sample))
-        },
-        AddSource::File(path) => {
-            let mut file = std::fs::File::open(path)?;
-            let metadata = file.metadata()?;
-            let size = metadata.len();
-            let mut sample = vec![0u8; 512];
-            let n = file.read(&mut sample)?;
-            sample.truncate(n);
-            Ok((size, sample))
+            .map_err(|e| HFError::Other(format!("prepare_source task failed: {e}")))?
         },
     }
 }
 
 /// Recursively collect files from a directory into CommitOperation::Add entries.
 /// Respects allow_patterns and ignore_patterns (glob-style).
+#[cfg(not(target_family = "wasm"))]
 fn collect_files_recursive(
     root: &Path,
     current: &Path,
@@ -721,7 +756,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        self.create_commit_impl(CreateCommitParams {
+        Box::pin(self.create_commit_impl(CreateCommitParams {
             operations,
             commit_message,
             commit_description,
@@ -729,7 +764,7 @@ impl<T: RepoType> HFRepository<T> {
             create_pr,
             parent_commit,
             progress,
-        })
+        }))
         .await
     }
 
@@ -748,7 +783,7 @@ impl<T: RepoType> HFRepository<T> {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_file(
         &self,
-        /// File content source (bytes or local file path).
+        /// File content source.
         source: AddSource,
         /// Destination path within the repository.
         #[builder(into)]
@@ -772,7 +807,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        self.upload_file_impl(UploadFileParams {
+        Box::pin(self.upload_file_impl(UploadFileParams {
             source,
             path_in_repo,
             revision,
@@ -781,7 +816,7 @@ impl<T: RepoType> HFRepository<T> {
             create_pr,
             parent_commit,
             progress,
-        })
+        }))
         .await
     }
 
@@ -809,6 +844,7 @@ impl<T: RepoType> HFRepository<T> {
     ///   full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g., `old/*.bin` to remove
     ///   every `.bin` directly under `old/` at the repo root.
     /// - `progress`: optional progress handler.
+    #[cfg(not(target_family = "wasm"))]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_folder(
         &self,
@@ -845,7 +881,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        self.upload_folder_impl(UploadFolderParams {
+        Box::pin(self.upload_folder_impl(UploadFolderParams {
             folder_path,
             path_in_repo,
             revision,
@@ -856,7 +892,7 @@ impl<T: RepoType> HFRepository<T> {
             ignore_patterns,
             delete_patterns,
             progress,
-        })
+        }))
         .await
     }
 
@@ -887,12 +923,12 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(default)]
         create_pr: bool,
     ) -> HFResult<CommitInfo> {
-        self.delete_file_impl(DeleteFileParams {
+        Box::pin(self.delete_file_impl(DeleteFileParams {
             path_in_repo,
             revision,
             commit_message,
             create_pr,
-        })
+        }))
         .await
     }
 
@@ -923,12 +959,12 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(default)]
         create_pr: bool,
     ) -> HFResult<CommitInfo> {
-        self.delete_folder_impl(DeleteFolderParams {
+        Box::pin(self.delete_folder_impl(DeleteFolderParams {
             path_in_repo,
             revision,
             commit_message,
             create_pr,
-        })
+        }))
         .await
     }
 }
@@ -994,6 +1030,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
 
     /// Blocking counterpart of [`HFRepository::upload_folder`]. See the async method for
     /// parameters and behavior.
+    #[cfg(not(target_family = "wasm"))]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn upload_folder(
         &self,

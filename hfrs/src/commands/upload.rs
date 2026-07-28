@@ -73,10 +73,7 @@ pub async fn execute(client: &HFClient, args: Args, multi: Option<indicatif::Mul
         multi.map(|multi| CliProgressHandler::new(multi).into())
     };
 
-    let (owner, name) = match args.repo_id.split_once('/') {
-        Some(parts) => parts,
-        None => ("", args.repo_id.as_str()),
-    };
+    let (owner, name) = hf_hub::split_id(&args.repo_id);
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     let url = do_upload(client, repo, args, local_path, handler).await?;
     Ok(CommandResult::Raw(url))
@@ -94,7 +91,7 @@ async fn do_upload(
         client
             .create_repository()
             .repo_type(*repo.repo_type())
-            .repo_id(args.repo_id.clone())
+            .repo_id(&args.repo_id)
             .maybe_private(if args.private { Some(true) } else { None })
             .exist_ok(true)
             .send()

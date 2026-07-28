@@ -24,7 +24,7 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
     client
         .delete_repository()
         .repo_type(RepoTypeAny::from(args.r#type))
-        .repo_id(args.repo_id)
+        .repo_id(&args.repo_id)
         .missing_ok(args.missing_ok)
         .send()
         .await?;

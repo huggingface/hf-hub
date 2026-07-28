@@ -7,3 +7,4 @@ target
 .DS_Store
 runslow
 docs/superpowers
+wasm/smoke/pkg/

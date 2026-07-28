@@ -22,10 +22,7 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
-    let (owner, name) = match args.space_id.split_once('/') {
-        Some(parts) => parts,
-        None => ("", args.space_id.as_str()),
-    };
+    let (owner, name) = hf_hub::split_id(&args.space_id);
     let repo = client.space(owner, name);
     let info = repo.info().maybe_revision(args.revision).send().await?;
     let json_value = json!({

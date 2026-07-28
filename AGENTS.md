@@ -68,6 +68,22 @@ These rules apply to ALL code written or modified in this repo:
 
 - Verify that every change is minimal and necessary — do not include unrelated modifications
 
+### WebAssembly compatibility
+
+`hf-hub` supports `wasm32-unknown-unknown`; try not to break compatibility.
+Filesystem- and tokio-runtime-dependent code is gated behind
+`#[cfg(not(target_family = "wasm"))]` — keep new code out of wasm builds or
+wasm-safe. Verify with `./scripts/verify_wasm.sh` (CI runs the same check);
+browser tests and runtime build flags live under `wasm/`.
+
+### Cargo features
+
+| Feature | Default? | Notes |
+|---------|----------|-------|
+| `blocking` | off | Synchronous `*Sync` wrappers in `blocking.rs`. Pulls in `tokio/rt`. Native only. |
+| `rustls-tls` | off | Force the rustls TLS backend on reqwest's native build. No effect on wasm. |
+| `default` | (empty) | No features by default. |
+
 ### Method builders (bon)
 
 All public methods on `HFClient`, `HFRepository`, `HFSpace`, and `HFBucket` use `bon`'s
@@ -108,7 +124,9 @@ helper that already has the field as an `Option<T>` local).
 
 Every async method MUST have a manually-written blocking counterpart on the corresponding
 `*Sync` struct under `#[cfg(feature = "blocking")]`. Mirror the same `#[builder]` parameter list
-verbatim. The body calls the inner async builder and blocks on the runtime:
+verbatim. The body calls the inner async builder and blocks on the runtime. (`self.runtime` is a
+`RuntimeThread`: the runtime lives on a background thread so sync methods are safe from inside
+another tokio runtime, and its `block_on` takes any `Send` future — no `'static` bound.)
 
 ```rust
 #[cfg(feature = "blocking")]
@@ -133,8 +151,7 @@ impl crate::blocking::HFRepositorySync {
 
 For stream-returning methods, the sync counterpart collects into `Vec<T>`: pin the stream and
 drain with `while let Some` (see existing examples in `repository/listing.rs` and
-`repository/mod.rs`). On `HFSpaceSync`, the runtime is reached via `&self.repo_sync.runtime`
-because the struct has no direct `runtime` field. Do NOT reintroduce the legacy `sync_api!` /
+`repository/mod.rs`). Do NOT reintroduce the legacy `sync_api!` /
 `sync_api_stream!` / `sync_api_async_stream!` macros — they were removed deliberately when the
 crate moved to bon.
 
@@ -184,14 +201,17 @@ hf-hub/
 │   │   │                           #   runtime/hardware/secrets/variables/duplicate
 │   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
 │   │   │                           #   user+org lookup, followers/following
-│   │   ├── xet.rs                  # Xet component (pub(crate)): XetConnectionInfo, xet transfer plumbing
-│   │   │                           #   used by repositories and buckets
+│   │   ├── xet.rs                  # Xet component (pub(crate)): XetConnectionInfo + xet transfer
+│   │   │                           #   plumbing. Most methods are native-only (cached session, fs);
+│   │   │                           #   the wasm `xet_download_stream` builds a fresh session per call
 │   │   ├── buckets/
 │   │   │   ├── mod.rs              # HFBucket handle, bucket types, create/list/tree/batch/download
 │   │   │   └── sync.rs             # BucketSync* types, HFBucket::sync — plan computation and execution
 │   │   └── cache/
 │   │       ├── mod.rs              # CachedFileInfo/CachedRepoInfo/HFCacheInfo + scan_cache API
 │   │       └── storage.rs          # pub(crate) on-disk plumbing: scan, locking, ref read/write, symlinks
+│   ├── tests/
+│   │   └── future_size.rs          # Regression tests: heavyweight builder send() futures stay boxed/small
 │   └── (unit tests live next to their modules in #[cfg(test)] blocks)
 ├── integration-tests/              # Integration tests crate (package: integration-tests)
 │   ├── Cargo.toml                  # Depends on hf-hub with "blocking" feature
@@ -213,6 +233,13 @@ hf-hub/
 ├── benches/                        # Benchmark crate (package: hf-hub-benches)
 │   ├── Cargo.toml                  # Criterion benchmark setup
 │   └── sync_api.rs                 # Download/info benches for the sync API
+├── wasm/                           # WASM-only artifacts, excluded from the workspace
+│   └── smoke/                      # Tiny `wasm-bindgen` crate that exercises hf-hub's
+│                                   #   wasm-safe surface — verification target for the
+│                                   #   `wasm` CI job and `./scripts/verify_wasm.sh`
+├── scripts/
+│   └── verify_wasm.sh              # `cargo check --target wasm32-unknown-unknown` for
+│                                   #   hf-hub + wasm/smoke
 └── hfrs/                           # CLI crate (package: hfrs)
     ├── Cargo.toml                  # Crate manifest, binary dependencies
     ├── src/
