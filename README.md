@@ -258,6 +258,28 @@ All fallible operations return `Result<T, HFError>`. The `HFError` enum provides
 - `HFError::RateLimited` — 429 response, too many requests
 - `HFError::Http` — other HTTP errors with status code, URL, and response body
 
+## WebAssembly support
+
+`hf-hub` compiles for `wasm32-unknown-unknown`. On wasm the API surface is
+the same call shape as native — `client.model(owner, name).download_file_stream()…send().await` —
+but only the streaming download path is wired up; methods that touch the
+filesystem (`download_file`, `snapshot_download`, `upload_file`, the
+`cache` and `buckets` modules, the `blocking` wrappers) are gated behind
+`#[cfg(not(target_family = "wasm"))]`. Pure-HTTP modules (`repository`,
+`spaces`, `users`) and HTTP-only methods on `HFRepository` (`exists`,
+`info`, `list_*`, etc.) are exposed on both targets.
+
+Verify locally with `./scripts/verify_wasm.sh`. CI runs the same check in
+the `wasm` job of `.github/workflows/rust.yml`. The `wasm/smoke/` crate is a
+tiny `wasm-bindgen` library that exercises the wasm-safe surface end-to-end
+(see `wasm/smoke/src/lib.rs`).
+
+When modifying `client`, `error`, `retry`, `xet`, or
+`repository/download.rs`, keep the wasm build green — reqwest's wasm
+backend has a reduced API (no `is_connect`, no `redirect()` policy) and
+its streams are `!Send`, and filesystem APIs must stay behind
+`#[cfg(not(target_family = "wasm"))]` gates.
+
 ## License
 
 Apache-2.0

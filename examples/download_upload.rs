@@ -109,7 +109,7 @@ async fn main() -> hf_hub::HFResult<()> {
     client
         .create_repository()
         .repo_type(RepoTypeModel)
-        .repo_id(repo.repo_path())
+        .repo_id(&repo.repo_path())
         .private(true)
         .exist_ok(true)
         .send()
@@ -119,7 +119,7 @@ async fn main() -> hf_hub::HFResult<()> {
     // Upload from bytes
     let commit = repo
         .upload_file()
-        .source(AddSource::bytes(b"Hello from Rust!"))
+        .source(AddSource::bytes(b"Hello from Rust!".as_slice()))
         .path_in_repo("hello.txt")
         .commit_message("Add hello.txt from bytes")
         .send()
@@ -158,7 +158,7 @@ async fn main() -> hf_hub::HFResult<()> {
     client
         .delete_repository()
         .repo_type(RepoTypeModel)
-        .repo_id(repo.repo_path())
+        .repo_id(&repo.repo_path())
         .missing_ok(true)
         .send()
         .await?;

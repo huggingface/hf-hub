@@ -1,0 +1,21 @@
+[package]
+name = "hf-hub-wasm-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "wasm32-unknown-unknown integration tests for hf-hub: runs HFClient/HFRepository against the live Hub from a headless browser."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+bytes = "1"
+hf-hub = { path = "../../hf-hub" }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+futures-util = "0.3"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

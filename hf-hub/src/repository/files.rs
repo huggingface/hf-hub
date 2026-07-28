@@ -13,13 +13,19 @@
 //! The public types in this module are shared across the listing, download, and
 //! upload helpers implemented on [`HFRepository`].
 
+#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
+use bytes::Bytes;
+use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 
 #[allow(unused_imports)] // used by intra-doc links
 use super::HFRepository;
 use crate::constants;
+use crate::error::HFResult;
 
 /// LFS metadata attached to a repository file, when the file is stored in Git LFS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,7 +90,7 @@ pub struct FileMetadataInfo {
 }
 
 /// File or directory entry returned by repository tree/listing APIs.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum RepoTreeEntry {
     /// A file entry in the repository tree.
@@ -159,7 +165,7 @@ pub struct CommitInfo {
 ///
 /// let ops = vec![
 ///     CommitOperation::add_file("model.safetensors", "/local/path/model.safetensors"),
-///     CommitOperation::add_bytes("config.json", br#"{"vocab_size":50257}"#.to_vec()),
+///     CommitOperation::add_bytes("config.json", br#"{"vocab_size":50257}"#.as_slice()),
 ///     CommitOperation::delete("old/checkpoint.bin"),
 /// ];
 /// # let _ = ops;
@@ -185,6 +191,7 @@ impl CommitOperation {
     /// `Add { path_in_repo, source: AddSource::file(source) }`. Prefer this
     /// for any non-trivial file size — see [`AddSource::File`] for the streaming
     /// behavior and memory cost.
+    #[cfg(not(target_family = "wasm"))]
     pub fn add_file(path_in_repo: impl Into<String>, source: impl Into<PathBuf>) -> Self {
         CommitOperation::Add {
             path_in_repo: path_in_repo.into(),
@@ -196,7 +203,7 @@ impl CommitOperation {
     /// `Add { path_in_repo, source: AddSource::bytes(source) }`. The bytes are
     /// retained in the operation and re-read at commit time — see
     /// [`AddSource::Bytes`] for the memory cost.
-    pub fn add_bytes(path_in_repo: impl Into<String>, source: impl Into<Vec<u8>>) -> Self {
+    pub fn add_bytes(path_in_repo: impl Into<String>, source: impl Into<Bytes>) -> Self {
         CommitOperation::Add {
             path_in_repo: path_in_repo.into(),
             source: AddSource::bytes(source),
@@ -208,6 +215,66 @@ impl CommitOperation {
         CommitOperation::Delete {
             path_in_repo: path_in_repo.into(),
         }
+    }
+}
+
+/// Stream of byte chunks produced by a [`StreamSource`].
+///
+/// `Send` on native targets; the bound is dropped on wasm, where streams
+/// typically wrap thread-bound JS values.
+#[cfg(not(target_family = "wasm"))]
+pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>> + Send>>;
+#[cfg(target_family = "wasm")]
+pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>>>>;
+
+/// Factory that produces a fresh [`SourceByteStream`] each time `open` is called.
+///
+/// The upload pipeline reads a source up to three times — a small "sample"
+/// prefix for the preupload classification, the full content for the LFS SHA-256
+/// hash, and the full content for the xet upload — so a one-shot stream isn't
+/// enough. Implementations must be cheap to re-open and produce identical bytes
+/// across opens.
+///
+/// The trait requires `Send + Sync` so that [`AddSource`] (and therefore
+/// `CommitOperation::Add { source }`) can be moved between tasks.
+pub trait StreamFactory: Send + Sync {
+    /// Produce a fresh stream over the source's bytes.
+    fn open(&self) -> SourceByteStream;
+}
+
+/// Source backed by a re-readable stream of byte chunks of known length.
+///
+/// Use this when the bytes are too large to materialize in memory at once.
+/// The upload pipeline only ever holds one chunk in flight at a time.
+#[derive(Clone)]
+pub struct StreamSource {
+    factory: Arc<dyn StreamFactory>,
+    size: u64,
+}
+
+impl StreamSource {
+    /// Construct a [`StreamSource`] from a factory and a known total byte length.
+    ///
+    /// `size` must equal the total number of bytes produced by `factory.open()`,
+    /// which must be the same across every invocation.
+    pub fn new(factory: Arc<dyn StreamFactory>, size: u64) -> Self {
+        Self { factory, size }
+    }
+
+    /// Total number of bytes the stream will produce.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// Open a fresh byte stream from the source.
+    pub fn open(&self) -> SourceByteStream {
+        self.factory.open()
+    }
+}
+
+impl std::fmt::Debug for StreamSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamSource").field("size", &self.size).finish_non_exhaustive()
     }
 }
 
@@ -223,21 +290,45 @@ impl CommitOperation {
 #[derive(Debug, Clone)]
 pub enum AddSource {
     /// Read file contents from this local path at commit time.
+    #[cfg(not(target_family = "wasm"))]
     File(PathBuf),
 
-    /// In-memory contents used as the file body.
-    Bytes(Vec<u8>),
+    /// In-memory contents used as the file body. Stored as [`bytes::Bytes`] so the
+    /// internal `.clone()` calls along the upload path are cheap refcount bumps
+    /// rather than full memory copies.
+    Bytes(Bytes),
+
+    /// Lazily-read byte stream of known total length. Lets the upload pipeline
+    /// process a source whose total size exceeds available memory: only one
+    /// chunk is held in flight at any time. See [`StreamSource`] for the
+    /// factory contract (must be re-readable to satisfy the sample, hash, and
+    /// upload passes).
+    Stream(StreamSource),
 }
 
 impl AddSource {
     /// Construct an [`AddSource::File`] from a local file path.
+    #[cfg(not(target_family = "wasm"))]
     pub fn file(path: impl Into<PathBuf>) -> Self {
         AddSource::File(path.into())
     }
 
     /// Construct an [`AddSource::Bytes`] from in-memory contents.
-    pub fn bytes(bytes: impl Into<Vec<u8>>) -> Self {
+    ///
+    /// `bytes` accepts any type that converts to [`bytes::Bytes`]: `Vec<u8>` is
+    /// taken by value with no copy (via `Bytes::from`), `&'static [u8]` /
+    /// `&'static str` are wrapped without copying, and an existing [`Bytes`]
+    /// passes through unchanged.
+    pub fn bytes(bytes: impl Into<Bytes>) -> Self {
         AddSource::Bytes(bytes.into())
+    }
+
+    /// Construct an [`AddSource::Stream`] from a [`StreamSource`].
+    ///
+    /// The total length must be known up-front and the factory must produce
+    /// identical bytes on every `open()` — see [`StreamSource::new`].
+    pub fn stream(source: StreamSource) -> Self {
+        AddSource::Stream(source)
     }
 }
 

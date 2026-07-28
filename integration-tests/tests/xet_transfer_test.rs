@@ -186,7 +186,7 @@ async fn test_upload_then_overwrite_same_path() {
     let repo = repo_handle(&client, &owner, &name);
 
     repo.upload_file()
-        .source(AddSource::bytes(b"version 1"))
+        .source(AddSource::bytes(b"version 1".as_slice()))
         .path_in_repo("versioned.txt")
         .commit_message("v1")
         .send()
@@ -194,7 +194,7 @@ async fn test_upload_then_overwrite_same_path() {
         .unwrap();
 
     repo.upload_file()
-        .source(AddSource::bytes(b"version 2 updated"))
+        .source(AddSource::bytes(b"version 2 updated".as_slice()))
         .path_in_repo("versioned.txt")
         .commit_message("v2")
         .send()

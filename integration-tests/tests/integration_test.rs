@@ -631,7 +631,7 @@ async fn test_get_file_metadata_with_revision() {
     let pinned = model
         .get_file_metadata()
         .filepath("config.json")
-        .revision(meta_main.commit_hash.clone())
+        .revision(&meta_main.commit_hash)
         .send()
         .await
         .unwrap();
@@ -693,7 +693,7 @@ async fn test_get_commit_diff() {
 
     let diff = gpt2
         .get_commit_diff()
-        .compare(format!("{}..{}", second.id, first.id))
+        .compare(&format!("{}..{}", second.id, first.id))
         .send()
         .await
         .unwrap();
@@ -713,7 +713,7 @@ async fn test_get_raw_diff() {
 
     let raw = gpt2
         .get_raw_diff()
-        .compare(format!("{}..{}", second.id, first.id))
+        .compare(&format!("{}..{}", second.id, first.id))
         .send()
         .await
         .unwrap();
@@ -798,7 +798,7 @@ async fn test_create_and_delete_repo() {
     let test_repo = repo(&client, &repo_id);
     let commit = test_repo
         .upload_file()
-        .source(AddSource::bytes(b"hello world"))
+        .source(AddSource::bytes(b"hello world".as_slice()))
         .path_in_repo("test.txt")
         .commit_message("test upload")
         .send()
@@ -839,7 +839,7 @@ async fn create_test_repo(client: &HFClient) -> String {
     let test_repo = repo(client, &repo_id);
     test_repo
         .upload_file()
-        .source(AddSource::bytes(b"initial content"))
+        .source(AddSource::bytes(b"initial content".as_slice()))
         .path_in_repo("README.md")
         .commit_message("initial commit")
         .send()
@@ -927,7 +927,7 @@ async fn test_delete_file() {
     let test_repo = repo(&client, &repo_id);
     test_repo
         .upload_file()
-        .source(AddSource::bytes(b"to delete"))
+        .source(AddSource::bytes(b"to delete".as_slice()))
         .path_in_repo("deleteme.txt")
         .commit_message("add file to delete")
         .send()
@@ -1221,7 +1221,7 @@ async fn test_space_secrets_and_variables() {
     client
         .create_repository()
         .repo_type(RepoTypeSpace)
-        .repo_id(space.repo_path())
+        .repo_id(&space.repo_path())
         .private(true)
         .space_sdk("static")
         .send()
@@ -1245,7 +1245,7 @@ async fn test_space_secrets_and_variables() {
     let _ = client
         .delete_repository()
         .repo_type(RepoTypeSpace)
-        .repo_id(space.repo_path())
+        .repo_id(&space.repo_path())
         .send()
         .await;
 }

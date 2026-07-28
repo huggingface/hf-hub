@@ -6,14 +6,10 @@
 
 [advisories]
 ignore = [
-    # Unsoundness in `rand` when a custom global logger calls `rand::rng()`.
-    # Two paths bring `rand` into our graph, neither of which is a meaningful
-    # exploitation surface for this library:
-    #   - `rand 0.8.5` via `tokio-retry` (jitter for retry backoff — not a
-    #     security boundary; a non-cryptographic RNG is fine here).
-    #   - `rand 0.9.2` via `reqwest -> quinn-proto` (HTTP/3 is not enabled by
-    #     any feature we turn on, so this code is effectively unused).
-    # Revisit if/when we adopt HTTP/3 or move retry logic off `tokio-retry`.
-    "RUSTSEC-2026-0097",
-    "RUSTSEC-2026-0104",
+    # Unsound `fmt::Pointer` impl in `crossbeam-epoch` 0.9.18, fixed in
+    # 0.9.20. It reaches Cargo.lock only via `criterion` (dev-dependency of
+    # the benches crate), and we never format `Atomic`/`Shared` pointers.
+    # The internal registry mirror does not serve 0.9.20 yet — bump the
+    # lockfile and drop this ignore once it syncs.
+    "RUSTSEC-2026-0204",
 ]

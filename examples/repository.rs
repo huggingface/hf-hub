@@ -78,7 +78,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let repo_url = client
         .create_repository()
         .repo_type(RepoTypeModel)
-        .repo_id(repo.repo_path())
+        .repo_id(&repo.repo_path())
         .private(true)
         .exist_ok(true)
         .send()
@@ -92,7 +92,7 @@ async fn main() -> hf_hub::HFResult<()> {
     let moved = client
         .move_repository()
         .repo_type(RepoTypeModel)
-        .from_id(repo.repo_path())
+        .from_id(&repo.repo_path())
         .to_id(&new_name)
         .send()
         .await?;

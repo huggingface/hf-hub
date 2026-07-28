@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>hf-hub-wasm-smoke — progress events</title>
+  <style>
+    body { font-family: monospace; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0; }
+    p.sub { margin-top: 0.25rem; color: #555; }
+    label { display: block; margin: 0.5rem 0 0.2rem; font-weight: bold; }
+    input { width: 100%; box-sizing: border-box; padding: 0.3rem; }
+    .row { display: flex; gap: 0.5rem; }
+    .row > * { flex: 1; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; }
+    #summary { margin-top: 1rem; padding: 0.75rem; background: #f4f4f4; }
+    #bar-wrap { margin-top: 0.5rem; background: #ddd; height: 18px; width: 100%; border-radius: 3px; overflow: hidden; }
+    #bar { background: #4a90e2; height: 100%; width: 0%; transition: width 0.1s linear; }
+    #events { margin-top: 1rem; white-space: pre-wrap; background: #f4f4f4; padding: 0.75rem; min-height: 8rem; max-height: 400px; overflow-y: auto; font-size: 0.85rem; }
+    #counts { margin-top: 0.5rem; color: #333; }
+    .kind { display: inline-block; min-width: 22ch; color: #2a5caa; }
+    code { background: #eee; padding: 0 0.2rem; }
+  </style>
+</head>
+<body>
+  <h1>hf-hub — wasm progress events</h1>
+  <p class="sub">Drives <code>HFRepository::download_file_stream</code> with a
+  <code>ProgressHandler</code> that forwards every <code>ProgressEvent</code>
+  to JS. Build first with <code>./build_wasm.sh</code> and serve this
+  directory with a COOP/COEP-enabled static server (required by the threaded
+  wasm in <code>hf-xet</code>).</p>
+
+  <label>Hugging Face Hub token (optional, leave blank for public repos)</label>
+  <input id="hfToken" placeholder="hf_xxxxxxxxxxxxxxxxxxx" />
+
+  <div class="row">
+    <div>
+      <label>Hub endpoint</label>
+      <input id="endpoint" value="https://huggingface.co" />
+    </div>
+    <div>
+      <label>Repo type (plural)</label>
+      <input id="repoType" value="models" />
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Owner</label>
+      <input id="owner" value="Qwen" />
+    </div>
+    <div>
+      <label>Repo name</label>
+      <input id="name" value="Qwen-Image-Edit" />
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Revision</label>
+      <input id="revision" value="main" />
+    </div>
+    <div>
+      <label>File path within repo</label>
+      <input id="filepath" value="transformer/diffusion_pytorch_model-00001-of-00009.safetensors" />
+    </div>
+  </div>
+
+  <button id="streamBtn">Stream with progress</button>
+
+  <div id="summary">
+    <div><strong>Status:</strong> <span id="status">Ready.</span></div>
+    <div id="bar-wrap"><div id="bar"></div></div>
+    <div id="counts"></div>
+  </div>
+
+  <label>Event log</label>
+  <div id="events"></div>
+
+  <script type="module">
+    import init, { download_with_progress } from '../pkg/hf_hub_wasm_smoke.js';
+
+    await init();
+
+    const statusEl = document.getElementById('status');
+    const barEl = document.getElementById('bar');
+    const countsEl = document.getElementById('counts');
+    const eventsEl = document.getElementById('events');
+
+    function readInputs() {
+      return {
+        endpoint: document.getElementById('endpoint').value.trim(),
+        token: document.getElementById('hfToken').value.trim() || undefined,
+        repoType: document.getElementById('repoType').value.trim(),
+        owner: document.getElementById('owner').value.trim(),
+        name: document.getElementById('name').value.trim(),
+        revision: document.getElementById('revision').value.trim(),
+        filepath: document.getElementById('filepath').value.trim(),
+      };
+    }
+
+    function formatBytes(n) {
+      if (n < 1024) return `${n} B`;
+      if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+      if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(2)} MiB`;
+      return `${(n / 1024 / 1024 / 1024).toFixed(2)} GiB`;
+    }
+
+    function appendEvent(line) {
+      eventsEl.textContent += line + '\n';
+      eventsEl.scrollTop = eventsEl.scrollHeight;
+    }
+
+    document.getElementById('streamBtn').addEventListener('click', async () => {
+      const i = readInputs();
+
+      statusEl.textContent = 'Streaming…';
+      barEl.style.width = '0%';
+      eventsEl.textContent = '';
+      countsEl.textContent = '';
+
+      // Per-event-kind counters so the user can see that every variant fires.
+      const kindCounts = Object.create(null);
+      const fileState = new Map();
+      let totalBytes = 0;
+      let bytesSeen = 0;
+      let bytesPerSec = null;
+
+      const renderCounts = () => {
+        const parts = Object.entries(kindCounts)
+          .sort()
+          .map(([k, v]) => `${k}: ${v}`)
+          .join('  •  ');
+        const rate = bytesPerSec != null ? `  •  rate: ${formatBytes(bytesPerSec)}/s` : '';
+        countsEl.textContent =
+          `seen ${formatBytes(bytesSeen)} / ${formatBytes(totalBytes)} ` +
+          `(${totalBytes ? ((bytesSeen / totalBytes) * 100).toFixed(1) : '0'}%)` +
+          rate + '\n' + parts;
+      };
+
+      const onProgress = (event) => {
+        kindCounts[event.kind] = (kindCounts[event.kind] || 0) + 1;
+
+        switch (event.kind) {
+          case 'download.start':
+            totalBytes = event.total_bytes;
+            appendEvent(`download.start            total_files=${event.total_files} total_bytes=${formatBytes(event.total_bytes)}`);
+            break;
+          case 'download.progress': {
+            for (const f of event.files) {
+              fileState.set(f.filename, f);
+            }
+            // Per-file deltas — we recompute running totals from the snapshot.
+            let agg = 0;
+            for (const f of fileState.values()) agg += f.bytes_completed;
+            bytesSeen = Math.max(bytesSeen, agg);
+            const sample = event.files[0];
+            appendEvent(
+              `download.progress         files=${event.files.length}` +
+              (sample
+                ? ` first=${sample.filename} ${formatBytes(sample.bytes_completed)}/${formatBytes(sample.total_bytes)} ${sample.status}`
+                : ''),
+            );
+            break;
+          }
+          case 'download.aggregate_progress':
+            bytesSeen = event.bytes_completed;
+            totalBytes = Math.max(totalBytes, event.total_bytes);
+            bytesPerSec = event.bytes_per_sec;
+            appendEvent(
+              `download.aggregate_progress ${formatBytes(event.bytes_completed)}/${formatBytes(event.total_bytes)}` +
+              (event.bytes_per_sec != null ? ` @ ${formatBytes(event.bytes_per_sec)}/s` : ''),
+            );
+            break;
+          case 'download.complete':
+            appendEvent('download.complete');
+            break;
+          default:
+            appendEvent(`${event.kind} ${JSON.stringify(event)}`);
+        }
+        if (totalBytes > 0) {
+          barEl.style.width = `${Math.min(100, (bytesSeen / totalBytes) * 100).toFixed(2)}%`;
+        }
+        renderCounts();
+      };
+
+      try {
+        const t0 = performance.now();
+        const total = await download_with_progress(
+          i.endpoint, i.token, i.repoType, i.owner, i.name, i.revision, i.filepath, onProgress,
+        );
+        const elapsedSec = (performance.now() - t0) / 1000;
+        statusEl.textContent =
+          `Done — ${formatBytes(total)} in ${elapsedSec.toFixed(2)}s ` +
+          `(${(total / 1024 / 1024 / elapsedSec).toFixed(2)} MiB/s).`;
+        barEl.style.width = '100%';
+      } catch (e) {
+        statusEl.textContent = `ERROR: ${e && e.message ? e.message : e}`;
+        console.error(e);
+      }
+    });
+  </script>
+</body>
+</html>

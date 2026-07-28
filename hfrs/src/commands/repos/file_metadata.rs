@@ -29,15 +29,12 @@ pub struct Args {
 }
 
 pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
-    let (owner, name) = match args.repo_id.split_once('/') {
-        Some(parts) => parts,
-        None => ("", args.repo_id.as_str()),
-    };
+    let (owner, name) = hf_hub::split_id(&args.repo_id);
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     let metadata = repo
         .get_file_metadata()
         .filepath(args.filepath)
-        .maybe_revision(args.revision)
+        .maybe_revision(args.revision.as_deref())
         .send()
         .await?;
 

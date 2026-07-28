@@ -61,13 +61,10 @@ pub async fn execute(client: &HFClient, args: Args) -> Result<CommandResult> {
 }
 
 async fn create(client: &HFClient, args: BranchCreateArgs) -> Result<CommandResult> {
-    let (owner, name) = match args.repo_id.split_once('/') {
-        Some(parts) => parts,
-        None => ("", args.repo_id.as_str()),
-    };
+    let (owner, name) = hf_hub::split_id(&args.repo_id);
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
     repo.create_branch()
-        .branch(args.branch)
+        .branch(&args.branch)
         .maybe_revision(args.revision)
         .send()
         .await?;
@@ -75,11 +72,8 @@ async fn create(client: &HFClient, args: BranchCreateArgs) -> Result<CommandResu
 }
 
 async fn delete(client: &HFClient, args: BranchDeleteArgs) -> Result<CommandResult> {
-    let (owner, name) = match args.repo_id.split_once('/') {
-        Some(parts) => parts,
-        None => ("", args.repo_id.as_str()),
-    };
+    let (owner, name) = hf_hub::split_id(&args.repo_id);
     let repo = client.repository::<hf_hub::RepoTypeAny>(args.r#type.into(), owner, name);
-    repo.delete_branch().branch(args.branch).send().await?;
+    repo.delete_branch().branch(&args.branch).send().await?;
     Ok(CommandResult::Silent)
 }
