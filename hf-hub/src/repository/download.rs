@@ -489,7 +489,7 @@ impl<T: RepoType> HFRepository<T> {
                 &commit_hash,
                 &params.filename,
                 &etag,
-                cache::PointerSource::ExistingBlob,
+                false,
             )
             .await;
         }
@@ -558,11 +558,6 @@ impl<T: RepoType> HFRepository<T> {
                     .await?;
             }
 
-            let source = if new_blob {
-                cache::PointerSource::NewBlob
-            } else {
-                cache::PointerSource::ExistingBlob
-            };
             return finalize_cached_file(
                 cache_dir,
                 repo_folder,
@@ -570,7 +565,7 @@ impl<T: RepoType> HFRepository<T> {
                 &commit_hash,
                 &params.filename,
                 &etag,
-                source,
+                new_blob,
             )
             .await;
         }
@@ -593,7 +588,7 @@ impl<T: RepoType> HFRepository<T> {
                 &commit_hash,
                 &params.filename,
                 &etag,
-                cache::PointerSource::ExistingBlob,
+                false,
             )
             .await;
         }
@@ -628,12 +623,7 @@ impl<T: RepoType> HFRepository<T> {
         });
         std::fs::rename(&incomplete_path, &blob)?;
 
-        let source = if new_blob {
-            cache::PointerSource::NewBlob
-        } else {
-            cache::PointerSource::ExistingBlob
-        };
-        finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag, source).await
+        finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag, new_blob).await
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -878,7 +868,7 @@ impl<T: RepoType> HFRepository<T> {
 
         // Cache mode
         let mut cached_progress: Vec<FileProgress> = Vec::new();
-        let mut xet_pointer_sources = HashMap::new();
+        let mut xet_new_blobs = HashMap::new();
         for meta in file_metas {
             let blob = cache::blob_path(cache_dir, &repo_folder, &meta.etag);
             let pointer = cache::snapshot_path(cache_dir, &repo_folder, &meta.commit_hash, &meta.filename);
@@ -898,7 +888,7 @@ impl<T: RepoType> HFRepository<T> {
                     &meta.commit_hash,
                     &meta.filename,
                     &meta.etag,
-                    cache::PointerSource::ExistingBlob,
+                    false,
                 )
                 .await?;
                 cached_progress.push(FileProgress {
@@ -910,14 +900,7 @@ impl<T: RepoType> HFRepository<T> {
                 continue;
             }
             if meta.xet_hash.is_some() {
-                xet_pointer_sources.insert(
-                    meta.etag.clone(),
-                    if blob.exists() {
-                        cache::PointerSource::ExistingBlob
-                    } else {
-                        cache::PointerSource::NewBlob
-                    },
-                );
+                xet_new_blobs.insert(meta.etag.clone(), !blob.exists());
                 xet_metas.push(meta);
             } else {
                 non_xet_filenames.push(meta.filename);
@@ -952,10 +935,7 @@ impl<T: RepoType> HFRepository<T> {
                     &m.commit_hash,
                     &m.filename,
                     &m.etag,
-                    xet_pointer_sources
-                        .get(&m.etag)
-                        .copied()
-                        .unwrap_or(cache::PointerSource::ExistingBlob),
+                    xet_new_blobs.get(&m.etag).copied().unwrap_or(false),
                 )
                 .await?;
             }
@@ -1021,12 +1001,12 @@ async fn finalize_cached_file(
     commit_hash: &str,
     filename: &str,
     etag: &str,
-    source: cache::PointerSource,
+    new_blob: bool,
 ) -> HFResult<PathBuf> {
     if !cache::is_commit_hash(revision) {
         cache::write_ref(cache_dir, repo_folder, revision, commit_hash).await?;
     }
-    cache::create_pointer_symlink(cache_dir, repo_folder, commit_hash, filename, etag, source).await?;
+    cache::create_pointer_symlink(cache_dir, repo_folder, commit_hash, filename, etag, new_blob).await?;
     Ok(cache::snapshot_path(cache_dir, repo_folder, commit_hash, filename))
 }
 

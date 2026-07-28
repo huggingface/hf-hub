@@ -9,12 +9,6 @@ pub(crate) struct CacheLock {
     _file: File,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PointerSource {
-    ExistingBlob,
-    NewBlob,
-}
-
 pub(crate) async fn acquire_lock(cache_dir: &Path, repo_folder: &str, etag: &str) -> crate::error::HFResult<CacheLock> {
     let path = lock_path(cache_dir, repo_folder, etag);
     if let Some(parent) = path.parent() {
@@ -69,7 +63,7 @@ pub(crate) async fn create_pointer_symlink(
     commit_hash: &str,
     filename: &str,
     etag: &str,
-    source: PointerSource,
+    new_blob: bool,
 ) -> crate::error::HFResult<()> {
     let pointer = snapshot_path(cache_dir, repo_folder, commit_hash, filename);
     if let Some(parent) = pointer.parent() {
@@ -80,7 +74,7 @@ pub(crate) async fn create_pointer_symlink(
     let relative = pathdiff::diff_paths(&blob, pointer_parent).unwrap_or_else(|| blob.clone());
     let _ = std::fs::remove_file(&pointer);
     #[cfg(not(windows))]
-    let _ = source;
+    let _ = new_blob;
 
     #[cfg(not(windows))]
     {
@@ -95,21 +89,18 @@ pub(crate) async fn create_pointer_symlink(
         match std::os::windows::fs::symlink_file(&relative, &pointer) {
             Ok(()) => {},
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
-            Err(_) => create_pointer_without_symlink(&blob, &pointer, source)?,
+            Err(_) => create_pointer_without_symlink(&blob, &pointer, new_blob)?,
         }
     }
     Ok(())
 }
 
 #[cfg(any(windows, test))]
-fn create_pointer_without_symlink(blob: &Path, pointer: &Path, source: PointerSource) -> crate::error::HFResult<()> {
-    match source {
-        PointerSource::ExistingBlob => {
-            std::fs::copy(blob, pointer)?;
-        },
-        PointerSource::NewBlob => {
-            std::fs::rename(blob, pointer)?;
-        },
+fn create_pointer_without_symlink(blob: &Path, pointer: &Path, new_blob: bool) -> crate::error::HFResult<()> {
+    if new_blob {
+        std::fs::rename(blob, pointer)?;
+    } else {
+        std::fs::copy(blob, pointer)?;
     }
     Ok(())
 }
@@ -355,9 +346,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        PointerSource, acquire_lock, blob_path, create_pointer_symlink, create_pointer_without_symlink, is_commit_hash,
-        lock_path, no_exist_path, parse_repo_folder_name, read_commit_refs, read_ref, ref_path, repo_folder_name,
-        scan_cache_dir, snapshot_path, write_ref,
+        acquire_lock, blob_path, create_pointer_symlink, create_pointer_without_symlink, is_commit_hash, lock_path,
+        no_exist_path, parse_repo_folder_name, read_commit_refs, read_ref, ref_path, repo_folder_name, scan_cache_dir,
+        snapshot_path, write_ref,
     };
 
     #[test]
@@ -462,7 +453,7 @@ mod tests {
         let blob = blob_path(cache, "models--gpt2", "abc123");
         std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
         std::fs::write(&blob, b"file content").unwrap();
-        create_pointer_symlink(cache, "models--gpt2", "def456", "config.json", "abc123", PointerSource::ExistingBlob)
+        create_pointer_symlink(cache, "models--gpt2", "def456", "config.json", "abc123", false)
             .await
             .unwrap();
         let pointer = snapshot_path(cache, "models--gpt2", "def456", "config.json");
@@ -480,16 +471,9 @@ mod tests {
         let blob = blob_path(cache, "models--gpt2", "abc123");
         std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
         std::fs::write(&blob, b"nested content").unwrap();
-        create_pointer_symlink(
-            cache,
-            "models--gpt2",
-            "def456",
-            "subdir/model.bin",
-            "abc123",
-            PointerSource::ExistingBlob,
-        )
-        .await
-        .unwrap();
+        create_pointer_symlink(cache, "models--gpt2", "def456", "subdir/model.bin", "abc123", false)
+            .await
+            .unwrap();
         let pointer = snapshot_path(cache, "models--gpt2", "def456", "subdir/model.bin");
         assert!(pointer.exists());
         assert!(pointer.symlink_metadata().unwrap().file_type().is_symlink());
@@ -508,7 +492,7 @@ mod tests {
         std::fs::create_dir_all(pointer.parent().unwrap()).unwrap();
         std::fs::write(&blob, b"cached content").unwrap();
 
-        create_pointer_without_symlink(&blob, &pointer, PointerSource::ExistingBlob).unwrap();
+        create_pointer_without_symlink(&blob, &pointer, false).unwrap();
 
         assert_eq!(std::fs::read(&blob).unwrap(), b"cached content");
         assert_eq!(std::fs::read(&pointer).unwrap(), b"cached content");
@@ -528,7 +512,7 @@ mod tests {
         std::fs::create_dir_all(pointer.parent().unwrap()).unwrap();
         std::fs::write(&blob, b"new content").unwrap();
 
-        create_pointer_without_symlink(&blob, &pointer, PointerSource::NewBlob).unwrap();
+        create_pointer_without_symlink(&blob, &pointer, true).unwrap();
 
         assert!(!blob.exists());
         assert_eq!(std::fs::read(&pointer).unwrap(), b"new content");
