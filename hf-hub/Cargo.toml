@@ -30,7 +30,7 @@ pathdiff = "0.2"
 percent-encoding = "2"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
-hf-xet = "1.5.3"
+hf-xet = "1.5"
 sha2 = "0.11"
 
 [features]
