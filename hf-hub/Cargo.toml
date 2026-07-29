@@ -1,6 +1,6 @@
 [package]
 name = "hf-hub"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 description = "Rust client for the Hugging Face Hub API"
 license = "Apache-2.0"
@@ -48,5 +48,3 @@ wasm-bindgen-futures = "0.4"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
-serial_test = "3"
-
