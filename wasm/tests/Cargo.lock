@@ -834,6 +834,7 @@ dependencies = [
  "tokio",
  "tokio-retry",
  "tokio-util",
+ "tower-http",
  "tracing",
  "url",
  "wasm-bindgen-futures",

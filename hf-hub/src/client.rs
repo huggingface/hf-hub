@@ -603,6 +603,40 @@ mod tests {
 
     use super::{HFClientBuilder, append_path_segments, encode_ref, is_relative_location, split_id};
 
+    /// A `resolve` URL built from a bracketed filename must still be redirect-followable.
+    /// reqwest delegates redirect handling to `tower-http`, which before 0.6.9 resolved
+    /// `Location` against the request URI with a strict RFC 3986 parser and silently
+    /// returned the 3xx unfollowed when the request path contained characters the WHATWG
+    /// URL standard leaves unencoded but RFC 3986 forbids (`[`, `]`, `^`, `|`) — the
+    /// caller saw a bare `302 Found` instead of the file. Guards the `tower-http >= 0.6.9`
+    /// floor in Cargo.toml.
+    #[tokio::test]
+    async fn redirect_is_followed_for_a_filename_with_brackets() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let responses = [
+                format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://{addr}/cdn\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+                "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\npayload!".to_string(),
+            ];
+            for response in responses {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 2048]).await;
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            }
+        });
+
+        let mut url = Url::parse(&format!("http://{addr}/datasets/owner/repo/resolve/main")).unwrap();
+        append_path_segments(&mut url, "[artist] name.png").unwrap();
+
+        let response = reqwest::Client::new().get(url.as_str()).send().await.unwrap();
+        assert_eq!(response.status(), 200, "redirect was not followed, landed on {}", response.url());
+        assert_eq!(response.text().await.unwrap(), "payload!");
+    }
+
     #[test]
     fn append_path_segments_encodes_special_chars() {
         let mut url = Url::parse("https://example.com/base").unwrap();
