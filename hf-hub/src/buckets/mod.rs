@@ -1094,7 +1094,7 @@ impl HFClient {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::create_bucket`]. See the async method for parameters
@@ -1152,7 +1152,7 @@ impl crate::blocking::HFClientSync {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFBucketSync {
     /// Blocking counterpart of [`HFBucket::info`].

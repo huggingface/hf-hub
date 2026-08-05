@@ -123,7 +123,7 @@ impl HFClient {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFClientSync {
     /// Blocking counterpart of [`HFClient::scan_cache`].
