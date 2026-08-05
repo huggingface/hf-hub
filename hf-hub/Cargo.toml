@@ -39,6 +39,15 @@ blocking = ["tokio/rt"]
 rustls-tls = ["reqwest/rustls"]
 socks = ["reqwest/socks"]
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# Not used directly: raises the floor on reqwest's redirect middleware. Before
+# 0.6.9, tower-http resolved `Location` against the request URI with a strict
+# RFC 3986 parser and silently returned the 3xx unfollowed when the request
+# path contained characters the WHATWG `url` crate leaves unencoded but RFC
+# 3986 forbids (`[`, `]`, `^`, `|`), so downloads of such filenames failed
+# with a bare `302 Found`. reqwest itself only requires 0.6.8.
+tower-http = { version = "0.6.9", default-features = false }
+
 [target.'cfg(target_family = "wasm")'.dependencies]
 # `tokio-retry` -> `rand` 0.8 -> `rand_core` 0.6 -> `getrandom` 0.2 transitively
 # needs the `js` feature on wasm32 to compile.
@@ -46,7 +55,7 @@ getrandom = { version = "0.2", features = ["js"] }
 wasm-bindgen-futures = "0.4"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
 tempfile = "3"
 serial_test = "3"
 
