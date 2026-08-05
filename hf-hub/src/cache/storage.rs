@@ -9,6 +9,41 @@ pub(crate) struct CacheLock {
     _file: File,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PartialDownloadState {
+    Complete,
+    Resume(u64),
+    Restart,
+}
+
+pub(crate) fn incomplete_path(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.incomplete", path.display()))
+}
+
+pub(crate) fn partial_download_state(
+    path: &Path,
+    expected_size: u64,
+    force_download: bool,
+) -> crate::error::HFResult<PartialDownloadState> {
+    if force_download || expected_size == 0 {
+        return Ok(PartialDownloadState::Restart);
+    }
+
+    let len = match std::fs::metadata(path) {
+        Ok(meta) => meta.len(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(PartialDownloadState::Restart);
+        },
+        Err(err) => return Err(err.into()),
+    };
+
+    Ok(match len.cmp(&expected_size) {
+        std::cmp::Ordering::Equal => PartialDownloadState::Complete,
+        std::cmp::Ordering::Less if len > 0 => PartialDownloadState::Resume(len),
+        _ => PartialDownloadState::Restart,
+    })
+}
+
 pub(crate) async fn acquire_lock(cache_dir: &Path, repo_folder: &str, etag: &str) -> crate::error::HFResult<CacheLock> {
     let path = lock_path(cache_dir, repo_folder, etag);
     if let Some(parent) = path.parent() {
@@ -337,9 +372,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        acquire_lock, blob_path, create_pointer_symlink, is_commit_hash, lock_path, no_exist_path,
-        parse_repo_folder_name, read_commit_refs, read_ref, ref_path, repo_folder_name, scan_cache_dir, snapshot_path,
-        write_ref,
+        PartialDownloadState, acquire_lock, blob_path, create_pointer_symlink, is_commit_hash, lock_path,
+        no_exist_path, parse_repo_folder_name, partial_download_state, read_commit_refs, read_ref, ref_path,
+        repo_folder_name, scan_cache_dir, snapshot_path, write_ref,
     };
 
     #[test]
@@ -509,6 +544,25 @@ mod tests {
     #[test]
     fn test_parse_repo_folder_name_invalid() {
         assert_eq!(parse_repo_folder_name(".locks"), None);
+    }
+
+    #[test]
+    fn partial_download_state_classifies_resume_cases() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blob.incomplete");
+
+        assert_eq!(partial_download_state(&path, 10, false).unwrap(), PartialDownloadState::Restart);
+
+        std::fs::write(&path, b"abc").unwrap();
+        assert_eq!(partial_download_state(&path, 10, false).unwrap(), PartialDownloadState::Resume(3));
+
+        std::fs::write(&path, b"0123456789").unwrap();
+        assert_eq!(partial_download_state(&path, 10, false).unwrap(), PartialDownloadState::Complete);
+
+        assert_eq!(partial_download_state(&path, 10, true).unwrap(), PartialDownloadState::Restart);
+
+        std::fs::write(&path, b"01234567890").unwrap();
+        assert_eq!(partial_download_state(&path, 10, false).unwrap(), PartialDownloadState::Restart);
     }
 
     #[tokio::test]
