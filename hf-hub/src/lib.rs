@@ -41,16 +41,9 @@
 //!
 //! ## Creating a client
 //!
-//! [`HFClient::new()`] resolves configuration from the environment:
-//!
-//! | Variable | Purpose |
-//! |---|---|
-//! | `HF_TOKEN` | Authentication token (preferred source) |
-//! | `HF_TOKEN_PATH` | Path to a file containing the token |
-//! | `HF_ENDPOINT` | Override the Hub base URL |
-//! | `HF_HOME` | Root for Hugging Face state (defaults to `~/.cache/huggingface`) |
-//! | `HF_HUB_CACHE` | Cache directory for downloaded files |
-//! | `HF_HUB_DISABLE_IMPLICIT_TOKEN` | Ignore the ambient `HF_TOKEN`/token file |
+//! [`HFClient::new()`] uses the default Hub endpoint without an authentication token. The
+//! library does not read environment variables; configure credentials, endpoints, and cache
+//! locations explicitly with [`HFClient::builder()`].
 //!
 //! For explicit configuration use [`HFClient::builder()`]:
 //!
@@ -235,10 +228,11 @@ pub use blocking::{HFBucketSync, HFClientSync, HFRepositorySync};
 #[doc(inline)]
 pub use buckets::HFBucket;
 pub use client::{HFClient, HFClientBuilder, split_id};
-#[doc(hidden)]
-pub use constants::{hf_home, resolve_cache_dir};
 pub use error::{HFError, HFResult, XetOperation};
 #[doc(inline)]
 pub use repository::{
     HFRepository, RepoType, RepoTypeAny, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace,
 };
+
+/// Version of the `hf-hub` crate.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
