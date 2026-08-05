@@ -222,27 +222,25 @@ async fn main() -> hf_hub::HFResult<()> {
 }
 ```
 
-## Authentication
+## Authentication and configuration
 
-The client resolves authentication tokens in this order:
+`hf-hub` does not read environment variables. `HFClient::new()` uses the public Hub endpoint
+without authentication and caches files in `.cache/huggingface/hub` relative to the current
+working directory. Configure a token, endpoint, or cache location explicitly with
+`HFClient::builder()`:
 
-1. Explicit token via `HFClientBuilder::token()`
-2. `HF_TOKEN` environment variable
-3. Token file at the path specified by `HF_TOKEN_PATH`
-4. Default token file at `~/.cache/huggingface/token`
+```rust,no_run
+use hf_hub::HFClient;
 
-Set `HF_HUB_DISABLE_IMPLICIT_TOKEN` to any non-empty value to disable automatic token resolution.
+let client = HFClient::builder()
+    .token("hf_xxx")
+    .endpoint("https://huggingface.co")
+    .cache_dir("/tmp/hf-cache")
+    .build()?;
+# Ok::<(), hf_hub::HFError>(())
+```
 
-## Configuration
-
-| Environment Variable            | Description                                            |
-|---------------------------------|--------------------------------------------------------|
-| `HF_ENDPOINT`                   | Hub API endpoint (default: `https://huggingface.co`)   |
-| `HF_TOKEN`                      | Authentication token                                   |
-| `HF_TOKEN_PATH`                 | Path to token file                                     |
-| `HF_HOME`                       | Cache directory root (default: `~/.cache/huggingface`) |
-| `HF_HUB_DISABLE_IMPLICIT_TOKEN` | Disable automatic token loading                        |
-| `HF_HUB_USER_AGENT_ORIGIN`      | Custom User-Agent origin string                        |
+The `hfrs` CLI continues to support its existing environment-based configuration.
 
 ## Error Handling
 

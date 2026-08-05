@@ -29,14 +29,15 @@ async fn main() -> ExitCode {
     };
     init_logging(color, multi.as_ref());
 
-    let mut builder = HFClientBuilder::new();
-    if let Some(t) = cli.token {
-        debug!("using token from --token flag");
-        builder = builder.token(t);
+    let mut builder = HFClientBuilder::new()
+        .endpoint(util::config::resolve_endpoint(cli.endpoint))
+        .cache_dir(util::config::resolve_cache_dir());
+    if let Some(token) = util::config::resolve_token(cli.token) {
+        debug!("using configured authentication token");
+        builder = builder.token(token);
     }
-    if let Some(ref endpoint) = cli.endpoint {
-        debug!(endpoint = endpoint.as_str(), "using custom API endpoint");
-        builder = builder.endpoint(endpoint);
+    if let Some(user_agent) = util::config::resolve_user_agent() {
+        builder = builder.user_agent(user_agent);
     }
     if let Command::Download(ref args) = cli.command
         && let Some(ref cache_dir) = args.cache_dir

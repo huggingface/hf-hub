@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Args as ClapArgs;
-use hf_hub::{hf_home, resolve_cache_dir};
 
 use crate::output::CommandResult;
+use crate::util::config::{hf_home, resolve_cache_dir};
 
 #[derive(ClapArgs)]
 #[command(about = "Print information about the environment")]
