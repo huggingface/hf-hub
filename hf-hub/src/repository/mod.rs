@@ -513,6 +513,261 @@ pub struct KernelInfo {
     pub supported_driver_families: Option<Vec<String>>,
 }
 
+/// Repository metadata for a repo whose kind is only known at runtime, returned by
+/// [`HFRepository::<RepoTypeAny>::info`](HFRepository::info).
+///
+/// Wraps the same per-kind info structs the typed handles return ([`ModelInfo`],
+/// [`DatasetInfo`], [`SpaceInfo`], [`KernelInfo`]), tagged by the runtime repo kind.
+/// Match on the variant (or use the `as_*`/`into_*` converters) for kind-specific
+/// fields; the accessor methods read data shared across kinds without a match.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum RepoInfo {
+    /// Metadata for a model repository. Boxed because [`ModelInfo`] is much larger than the
+    /// other variants; field access auto-derefs, so `match` ergonomics are unaffected.
+    Model(Box<ModelInfo>),
+    /// Metadata for a dataset repository.
+    Dataset(DatasetInfo),
+    /// Metadata for a Space repository.
+    Space(SpaceInfo),
+    /// Metadata for a kernel repository.
+    Kernel(KernelInfo),
+}
+
+impl RepoInfo {
+    /// The repo kind this metadata describes, as a runtime-tagged [`RepoTypeAny`].
+    pub fn repo_type(&self) -> RepoTypeAny {
+        match self {
+            Self::Model(_) => RepoTypeAny::Model,
+            Self::Dataset(_) => RepoTypeAny::Dataset,
+            Self::Space(_) => RepoTypeAny::Space,
+            Self::Kernel(_) => RepoTypeAny::Kernel,
+        }
+    }
+
+    /// Repo ID, in the form `owner/name`.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Model(info) => &info.id,
+            Self::Dataset(info) => &info.id,
+            Self::Space(info) => &info.id,
+            Self::Kernel(info) => &info.id,
+        }
+    }
+
+    /// Internal Hub identifier (the API's `_id` field). Most callers should use [`id`](Self::id) instead.
+    pub fn internal_id(&self) -> Option<&str> {
+        match self {
+            Self::Model(info) => info.internal_id.as_deref(),
+            Self::Dataset(info) => info.internal_id.as_deref(),
+            Self::Space(info) => info.internal_id.as_deref(),
+            Self::Kernel(info) => info.internal_id.as_deref(),
+        }
+    }
+
+    /// Owner of the repo (the part before `/` in `id`).
+    pub fn author(&self) -> Option<&str> {
+        match self {
+            Self::Model(info) => info.author.as_deref(),
+            Self::Dataset(info) => info.author.as_deref(),
+            Self::Space(info) => info.author.as_deref(),
+            Self::Kernel(info) => info.author.as_deref(),
+        }
+    }
+
+    /// Git commit SHA at the revision the response describes.
+    pub fn sha(&self) -> Option<&str> {
+        match self {
+            Self::Model(info) => info.sha.as_deref(),
+            Self::Dataset(info) => info.sha.as_deref(),
+            Self::Space(info) => info.sha.as_deref(),
+            Self::Kernel(info) => info.sha.as_deref(),
+        }
+    }
+
+    /// Whether the repo is private.
+    pub fn private(&self) -> Option<bool> {
+        match self {
+            Self::Model(info) => info.private,
+            Self::Dataset(info) => info.private,
+            Self::Space(info) => info.private,
+            Self::Kernel(info) => info.private,
+        }
+    }
+
+    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"`
+    /// indicating the approval mode for access requests. Raw JSON because the field is union-typed.
+    pub fn gated(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Model(info) => info.gated.as_ref(),
+            Self::Dataset(info) => info.gated.as_ref(),
+            Self::Space(info) => info.gated.as_ref(),
+            Self::Kernel(info) => info.gated.as_ref(),
+        }
+    }
+
+    /// Number of likes on the repo.
+    pub fn likes(&self) -> Option<u64> {
+        match self {
+            Self::Model(info) => info.likes,
+            Self::Dataset(info) => info.likes,
+            Self::Space(info) => info.likes,
+            Self::Kernel(info) => info.likes,
+        }
+    }
+
+    /// ISO-8601 timestamp of the most recent commit to the repo.
+    pub fn last_modified(&self) -> Option<&str> {
+        match self {
+            Self::Model(info) => info.last_modified.as_deref(),
+            Self::Dataset(info) => info.last_modified.as_deref(),
+            Self::Space(info) => info.last_modified.as_deref(),
+            Self::Kernel(info) => info.last_modified.as_deref(),
+        }
+    }
+
+    /// Download count over the trailing window. Always `None` for Spaces — the Hub does not
+    /// report downloads for them.
+    pub fn downloads(&self) -> Option<u64> {
+        match self {
+            Self::Model(info) => info.downloads,
+            Self::Dataset(info) => info.downloads,
+            Self::Space(_) => None,
+            Self::Kernel(info) => info.downloads,
+        }
+    }
+
+    /// ISO-8601 timestamp of repo creation. Always `None` for kernels — the slim kernel info
+    /// shape does not include it.
+    pub fn created_at(&self) -> Option<&str> {
+        match self {
+            Self::Model(info) => info.created_at.as_deref(),
+            Self::Dataset(info) => info.created_at.as_deref(),
+            Self::Space(info) => info.created_at.as_deref(),
+            Self::Kernel(_) => None,
+        }
+    }
+
+    /// Tags attached to the repo. Always `None` for kernels — the slim kernel info shape
+    /// does not include them.
+    pub fn tags(&self) -> Option<&[String]> {
+        match self {
+            Self::Model(info) => info.tags.as_deref(),
+            Self::Dataset(info) => info.tags.as_deref(),
+            Self::Space(info) => info.tags.as_deref(),
+            Self::Kernel(_) => None,
+        }
+    }
+
+    /// Parsed repo card (README front matter) data. Always `None` for kernels — the slim
+    /// kernel info shape does not include it.
+    pub fn card_data(&self) -> Option<&serde_json::Value> {
+        match self {
+            Self::Model(info) => info.card_data.as_ref(),
+            Self::Dataset(info) => info.card_data.as_ref(),
+            Self::Space(info) => info.card_data.as_ref(),
+            Self::Kernel(_) => None,
+        }
+    }
+
+    /// Flat file listing of the repo. Always `None` for kernels — the slim kernel info shape
+    /// does not include it.
+    pub fn siblings(&self) -> Option<&[RepoSibling]> {
+        match self {
+            Self::Model(info) => info.siblings.as_deref(),
+            Self::Dataset(info) => info.siblings.as_deref(),
+            Self::Space(info) => info.siblings.as_deref(),
+            Self::Kernel(_) => None,
+        }
+    }
+
+    /// Trending score of the repo. Always `None` for kernels — the slim kernel info shape
+    /// does not include it.
+    pub fn trending_score(&self) -> Option<f64> {
+        match self {
+            Self::Model(info) => info.trending_score,
+            Self::Dataset(info) => info.trending_score,
+            Self::Space(info) => info.trending_score,
+            Self::Kernel(_) => None,
+        }
+    }
+
+    /// Storage used by the repo, in bytes. Always `None` for kernels — the slim kernel info
+    /// shape does not include it.
+    pub fn used_storage(&self) -> Option<u64> {
+        match self {
+            Self::Model(info) => info.used_storage,
+            Self::Dataset(info) => info.used_storage,
+            Self::Space(info) => info.used_storage,
+            Self::Kernel(_) => None,
+        }
+    }
+
+    /// Borrow the inner [`ModelInfo`], or `None` if this is not a model repo.
+    pub fn as_model(&self) -> Option<&ModelInfo> {
+        match self {
+            Self::Model(info) => Some(info),
+            _ => None,
+        }
+    }
+
+    /// Borrow the inner [`DatasetInfo`], or `None` if this is not a dataset repo.
+    pub fn as_dataset(&self) -> Option<&DatasetInfo> {
+        match self {
+            Self::Dataset(info) => Some(info),
+            _ => None,
+        }
+    }
+
+    /// Borrow the inner [`SpaceInfo`], or `None` if this is not a Space repo.
+    pub fn as_space(&self) -> Option<&SpaceInfo> {
+        match self {
+            Self::Space(info) => Some(info),
+            _ => None,
+        }
+    }
+
+    /// Borrow the inner [`KernelInfo`], or `None` if this is not a kernel repo.
+    pub fn as_kernel(&self) -> Option<&KernelInfo> {
+        match self {
+            Self::Kernel(info) => Some(info),
+            _ => None,
+        }
+    }
+
+    /// Consume the value and return the inner [`ModelInfo`], or `None` if this is not a model repo.
+    pub fn into_model(self) -> Option<ModelInfo> {
+        match self {
+            Self::Model(info) => Some(*info),
+            _ => None,
+        }
+    }
+
+    /// Consume the value and return the inner [`DatasetInfo`], or `None` if this is not a dataset repo.
+    pub fn into_dataset(self) -> Option<DatasetInfo> {
+        match self {
+            Self::Dataset(info) => Some(info),
+            _ => None,
+        }
+    }
+
+    /// Consume the value and return the inner [`SpaceInfo`], or `None` if this is not a Space repo.
+    pub fn into_space(self) -> Option<SpaceInfo> {
+        match self {
+            Self::Space(info) => Some(info),
+            _ => None,
+        }
+    }
+
+    /// Consume the value and return the inner [`KernelInfo`], or `None` if this is not a kernel repo.
+    pub fn into_kernel(self) -> Option<KernelInfo> {
+        match self {
+            Self::Kernel(info) => Some(info),
+            _ => None,
+        }
+    }
+}
+
 /// URL of a repository, returned by create/move endpoints.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RepoUrl {
@@ -1413,6 +1668,43 @@ impl HFRepository<RepoTypeKernel> {
     }
 }
 
+#[bon]
+impl HFRepository<RepoTypeAny> {
+    /// Fetch repo metadata, dispatching on the runtime repo kind and returning a
+    /// runtime-tagged [`RepoInfo`].
+    ///
+    /// Use the accessor methods on [`RepoInfo`] to read data shared across repo kinds
+    /// without matching, or match on the variant for the full kind-specific struct.
+    /// For kernel repos the Hub returns the same slim shape as
+    /// [`HFRepository::<RepoTypeKernel>::info`](HFRepository::info) and silently ignores
+    /// `expand`.
+    #[doc = info_method_doc!()]
+    #[builder(
+        finish_fn = send,
+        builder_type = HFAnyRepoInfoBuilder,
+        state_mod(name = hf_any_repo_info_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub async fn info(
+        &self,
+        /// Git revision (branch, tag, or commit SHA). Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// List of properties to expand in the response (e.g., `"trendingScore"`, `"cardData"`).
+        expand: Option<Vec<String>>,
+    ) -> HFResult<RepoInfo> {
+        match self.repo_type {
+            RepoTypeAny::Model => self
+                .fetch_repo_info(revision, expand)
+                .await
+                .map(|model_info| RepoInfo::Model(Box::new(model_info))),
+            RepoTypeAny::Dataset => self.fetch_repo_info(revision, expand).await.map(RepoInfo::Dataset),
+            RepoTypeAny::Space => self.fetch_repo_info(revision, expand).await.map(RepoInfo::Space),
+            RepoTypeAny::Kernel => self.fetch_repo_info(revision, expand).await.map(RepoInfo::Kernel),
+        }
+    }
+}
+
 /// Split "namespace/name" into (Some("namespace"), "name") or (None, "name")
 fn split_repo_id(repo_id: &str) -> (Option<&str>, &str) {
     match repo_id.split_once('/') {
@@ -1708,6 +2000,22 @@ impl crate::blocking::HFRepositorySync<RepoTypeKernel> {
     }
 }
 
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
+#[bon]
+impl crate::blocking::HFRepositorySync<RepoTypeAny> {
+    /// Blocking counterpart of [`HFRepository::<RepoTypeAny>::info`].
+    #[builder(
+        finish_fn = send,
+        builder_type = HFAnyRepoInfoSyncBuilder,
+        state_mod(name = hf_any_repo_info_sync_builder, vis = "pub(crate)"),
+        derive(Debug, Clone),
+    )]
+    pub fn info(&self, #[builder(into)] revision: Option<String>, expand: Option<Vec<String>>) -> HFResult<RepoInfo> {
+        self.runtime
+            .block_on(self.inner.info().maybe_revision(revision).maybe_expand(expand).send())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use futures::StreamExt;
@@ -1718,6 +2026,102 @@ mod tests {
         split_repo_id,
     };
     use crate::client::HFClient;
+
+    fn sample_repo_info(kind: super::RepoTypeAny) -> super::RepoInfo {
+        let body = serde_json::json!({
+            "id": "acme/thing",
+            "_id": "internal-123",
+            "author": "acme",
+            "sha": "abc123",
+            "private": false,
+            "gated": "manual",
+            "likes": 7,
+            "downloads": 42,
+            "lastModified": "2026-01-02T03:04:05.000Z",
+            "createdAt": "2025-01-02T03:04:05.000Z",
+            "tags": ["tag-a", "tag-b"],
+            "trendingScore": 1.5,
+            "usedStorage": 1024,
+            "siblings": [{"rfilename": "README.md"}],
+            "cardData": {"license": "mit"},
+        });
+        match kind {
+            super::RepoTypeAny::Model => super::RepoInfo::Model(Box::new(serde_json::from_value(body).unwrap())),
+            super::RepoTypeAny::Dataset => super::RepoInfo::Dataset(serde_json::from_value(body).unwrap()),
+            super::RepoTypeAny::Space => super::RepoInfo::Space(serde_json::from_value(body).unwrap()),
+            super::RepoTypeAny::Kernel => super::RepoInfo::Kernel(serde_json::from_value(body).unwrap()),
+        }
+    }
+
+    #[test]
+    fn repo_info_common_accessors_no_match_needed() {
+        for kind in [
+            super::RepoTypeAny::Model,
+            super::RepoTypeAny::Dataset,
+            super::RepoTypeAny::Space,
+            super::RepoTypeAny::Kernel,
+        ] {
+            let info = sample_repo_info(kind);
+            assert_eq!(info.repo_type(), kind);
+            assert_eq!(info.id(), "acme/thing");
+            assert_eq!(info.internal_id(), Some("internal-123"));
+            assert_eq!(info.author(), Some("acme"));
+            assert_eq!(info.sha(), Some("abc123"));
+            assert_eq!(info.private(), Some(false));
+            assert_eq!(info.gated(), Some(&serde_json::json!("manual")));
+            assert_eq!(info.likes(), Some(7));
+            assert_eq!(info.last_modified(), Some("2026-01-02T03:04:05.000Z"));
+        }
+    }
+
+    #[test]
+    fn repo_info_union_accessors_respect_kind_gaps() {
+        let model = sample_repo_info(super::RepoTypeAny::Model);
+        assert_eq!(model.downloads(), Some(42));
+        assert_eq!(model.created_at(), Some("2025-01-02T03:04:05.000Z"));
+        assert_eq!(model.tags(), Some(&["tag-a".to_string(), "tag-b".to_string()][..]));
+        assert_eq!(model.trending_score(), Some(1.5));
+        assert_eq!(model.used_storage(), Some(1024));
+        assert!(model.card_data().is_some());
+        assert_eq!(model.siblings().map(<[_]>::len), Some(1));
+
+        let space = sample_repo_info(super::RepoTypeAny::Space);
+        assert_eq!(space.downloads(), None);
+        assert_eq!(space.created_at(), Some("2025-01-02T03:04:05.000Z"));
+
+        let kernel = sample_repo_info(super::RepoTypeAny::Kernel);
+        assert_eq!(kernel.downloads(), Some(42));
+        assert_eq!(kernel.created_at(), None);
+        assert_eq!(kernel.tags(), None);
+        assert_eq!(kernel.card_data(), None);
+        assert!(kernel.siblings().is_none());
+        assert_eq!(kernel.trending_score(), None);
+        assert_eq!(kernel.used_storage(), None);
+    }
+
+    #[test]
+    fn repo_info_narrowing_conversions() {
+        let info = sample_repo_info(super::RepoTypeAny::Dataset);
+        assert!(info.as_dataset().is_some());
+        assert!(info.as_model().is_none());
+        assert!(info.as_space().is_none());
+        assert!(info.as_kernel().is_none());
+        assert!(info.clone().into_model().is_none());
+        let dataset = info.into_dataset().unwrap();
+        assert_eq!(dataset.id, "acme/thing");
+
+        let space = sample_repo_info(super::RepoTypeAny::Space);
+        assert!(space.as_space().is_some());
+        assert!(space.into_space().is_some());
+
+        let model = sample_repo_info(super::RepoTypeAny::Model);
+        assert!(model.as_model().is_some());
+        assert!(model.into_model().is_some());
+
+        let kernel = sample_repo_info(super::RepoTypeAny::Kernel);
+        assert!(kernel.as_kernel().is_some());
+        assert!(kernel.into_kernel().is_some());
+    }
 
     #[test]
     fn test_repo_path_and_accessors() {

@@ -105,6 +105,19 @@ fn test_sync_dataset_info() {
 }
 
 #[test]
+fn test_sync_repo_type_any_info() {
+    let Some(client) = prod_sync_api() else { return };
+    let kind: RepoTypeAny = "model".parse().unwrap();
+    let (owner, name) = split_id(TEST_MODEL_REPO);
+    let handle = client.repository(kind, owner, name);
+
+    let info = handle.info().send().unwrap();
+    assert_eq!(info.repo_type(), RepoTypeAny::Model);
+    assert_eq!(info.id(), TEST_MODEL_REPO);
+    assert!(info.as_model().is_some());
+}
+
+#[test]
 fn test_sync_repo_handle_info_and_file_exists() {
     let Some(client) = prod_sync_api() else { return };
     let model_repo = TEST_MODEL_REPO;
