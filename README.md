@@ -188,14 +188,15 @@ async fn main() -> hf_hub::HFResult<()> {
 ### Create a repository
 
 ```rust,no_run
-use hf_hub::HFClient;
+use hf_hub::{HFClient, RepoTypeDataset};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
 
     let url = client
-        .create_repo()
+        .create_repository()
+        .repo_type(RepoTypeDataset)
         .repo_id("your-username/new-model")
         .private(true)
         .exist_ok(true)
