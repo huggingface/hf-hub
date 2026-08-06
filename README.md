@@ -50,21 +50,16 @@ This builds in release mode by default. Once installed, run `hfrs --help` to see
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::repository::RepoInfo;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
 
     // Get model info
-    let RepoInfo::Model(info) = client
-        .model("openai-community", "gpt2")
-        .info()
-        .send()
-        .await?
-    else {
+    let Ok(info) = client.model("openai-community", "gpt2").info().send().await else {
         unreachable!("handle type guarantees the Model variant");
     };
+
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
     Ok(())
@@ -77,16 +72,11 @@ Requires the `blocking` feature. `HFClientSync` manages a dedicated tokio runtim
 
 ```rust,ignore
 use hf_hub::HFClientSync;
-use hf_hub::repository::RepoInfo;
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
 
-    let RepoInfo::Model(info) = client
-        .model("openai-community", "gpt2")
-        .info()
-        .send()?
-    else {
+    let Ok(info) = client.model("openai-community", "gpt2").info().send() else {
         unreachable!("handle type guarantees the Model variant");
     };
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
@@ -129,24 +119,19 @@ async fn main() -> hf_hub::HFResult<()> {
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::repository::RepoInfo;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
     let repo = client.model("openai-community", "gpt2");
 
-    let RepoInfo::Model(model_info) = repo.info().send().await? else {
+    let Ok(model_info) = repo.info().send().await else {
         println!("error, not a model");
         return Ok(());
     };
     println!("Model: {}", model_info.id);
 
-    let exists = repo
-        .file_exists()
-        .filename("config.json")
-        .send()
-        .await?;
+    let exists = repo.file_exists().filename("config.json").send().await?;
 
     println!("config.json exists: {exists}");
     Ok(())
@@ -189,13 +174,13 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .upload_file()
-        .source(AddSource::Bytes(b"Hello, world!".to_vec()))
+        .source(AddSource::Bytes(b"Hello, world!".to_vec().into()))
         .path_in_repo("greeting.txt")
         .commit_message("Add greeting file")
         .send()
         .await?;
 
-    println!("Committed: {:?}", commit.oid);
+    println!("Committed: {:?}", commit.commit_oid);
     Ok(())
 }
 ```
