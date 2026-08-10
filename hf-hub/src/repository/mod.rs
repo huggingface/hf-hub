@@ -259,27 +259,171 @@ pub struct EvalResultSource {
     pub org: Option<String>,
 }
 
-/// Parsed YAML metadata from a repo card (`README.md` front matter).
-///
-/// The schema varies by repo kind and by the libraries/tags a repo declares, so this wraps the
-/// raw JSON value rather than modeling every possible field. [`Deref`](std::ops::Deref) to
-/// [`serde_json::Value`] for field lookups (e.g. `card_data.get("license")`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct CardData(pub serde_json::Value);
-
-impl std::ops::Deref for CardData {
-    type Target = serde_json::Value;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+// Several repo-card YAML fields (`license`, `language`, `datasets`, ...) accept either a single
+// string or a list of strings; normalize both shapes to `Vec<String>`.
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        One(String),
+        Many(Vec<String>),
     }
+
+    Ok(Option::<StringOrVec>::deserialize(deserializer)?.map(|value| match value {
+        StringOrVec::One(s) => vec![s],
+        StringOrVec::Many(v) => v,
+    }))
 }
 
-impl From<serde_json::Value> for CardData {
-    fn from(value: serde_json::Value) -> Self {
-        Self(value)
-    }
+/// Model Card metadata parsed from a model repo's `README.md` YAML front matter.
+///
+/// Mirrors `huggingface_hub.ModelCardData`. Fields the card declares that aren't modeled above
+/// (e.g. `model-index`, `model_name`, or repo-specific custom keys) are preserved in `extra`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+pub struct ModelCardData {
+    /// Base model(s) this model derives from (e.g. a fine-tune or adapter).
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub base_model: Option<Vec<String>>,
+    /// Dataset(s) used to train this model.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub datasets: Option<Vec<String>>,
+    /// Language(s) of the model's training data, as ISO 639 codes or special values like "code".
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub language: Option<Vec<String>>,
+    /// Library used by this model (e.g. `"transformers"`, `"timm"`).
+    #[serde(default)]
+    pub library_name: Option<String>,
+    /// License identifier (e.g. `"apache-2.0"`), or `"other"` when using `license_name`/`license_link`.
+    #[serde(default)]
+    pub license: Option<String>,
+    /// Name of the license, when `license` is `"other"`.
+    #[serde(default)]
+    pub license_name: Option<String>,
+    /// Link to the license, when `license` is `"other"`.
+    #[serde(default)]
+    pub license_link: Option<String>,
+    /// Metric names used to evaluate this model.
+    #[serde(default)]
+    pub metrics: Option<Vec<String>>,
+    /// Pipeline tag associated with the model (e.g. `"text-classification"`).
+    #[serde(default)]
+    pub pipeline_tag: Option<String>,
+    /// Hub tags declared on the card.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// Fields present in the card's YAML front matter that aren't modeled above.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Dataset Card metadata parsed from a dataset repo's `README.md` YAML front matter.
+///
+/// Mirrors `huggingface_hub.DatasetCardData`. Fields the card declares that aren't modeled above
+/// (e.g. `train-eval-index`, `tags`, or repo-specific custom keys) are preserved in `extra`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+pub struct DatasetCardData {
+    /// Language(s) of the dataset's data or metadata.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub language: Option<Vec<String>>,
+    /// License(s) of the dataset.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub license: Option<Vec<String>>,
+    /// How the dataset's annotations were created (e.g. `"crowdsourced"`, `"expert-generated"`).
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub annotations_creators: Option<Vec<String>>,
+    /// How the dataset's text-based data was created.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub language_creators: Option<Vec<String>>,
+    /// Whether the dataset is monolingual, multilingual, a translation, or other.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub multilinguality: Option<Vec<String>>,
+    /// Order-of-magnitude bucket for the dataset's example count (e.g. `"1K<n<10K"`).
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub size_categories: Option<Vec<String>>,
+    /// Whether the dataset is original or extended from another dataset.
+    #[serde(default)]
+    pub source_datasets: Option<Vec<String>>,
+    /// Task categories the dataset supports (e.g. `"text-classification"`).
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub task_categories: Option<Vec<String>>,
+    /// Specific tasks the dataset supports.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub task_ids: Option<Vec<String>>,
+    /// ID of the dataset on PapersWithCode.
+    #[serde(default)]
+    pub paperswithcode_id: Option<String>,
+    /// Human-readable name for the dataset (e.g. `"Cats vs. Dogs"`).
+    #[serde(default)]
+    pub pretty_name: Option<String>,
+    /// Available dataset configs.
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub config_names: Option<Vec<String>>,
+    /// Fields present in the card's YAML front matter that aren't modeled above.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Space Card metadata parsed from a Space repo's `README.md` YAML front matter.
+///
+/// Mirrors `huggingface_hub.SpaceCardData`. Fields the card declares that aren't modeled above
+/// are preserved in `extra`. See <https://huggingface.co/docs/hub/spaces-config-reference>.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+pub struct SpaceCardData {
+    /// Title of the Space.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// SDK powering the Space (`"gradio"`, `"streamlit"`, `"docker"`, or `"static"`).
+    #[serde(default)]
+    pub sdk: Option<String>,
+    /// Version of the SDK in use (Gradio/Streamlit only).
+    #[serde(default)]
+    pub sdk_version: Option<String>,
+    /// Python version used in the Space (Gradio/Streamlit only).
+    #[serde(default)]
+    pub python_version: Option<String>,
+    /// Path to the main application file, relative to the repo root.
+    #[serde(default)]
+    pub app_file: Option<String>,
+    /// Port the application listens on (Docker SDK only).
+    #[serde(default)]
+    pub app_port: Option<u32>,
+    /// License of the Space.
+    #[serde(default)]
+    pub license: Option<String>,
+    /// ID of the original Space, if this one was duplicated.
+    #[serde(default)]
+    pub duplicated_from: Option<String>,
+    /// Models related to this Space.
+    #[serde(default)]
+    pub models: Option<Vec<String>>,
+    /// Datasets related to this Space.
+    #[serde(default)]
+    pub datasets: Option<Vec<String>>,
+    /// Hub tags declared on the card.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// Fields present in the card's YAML front matter that aren't modeled above.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Repo-card metadata for a repo whose kind is only known at runtime, returned by
+/// [`RepoInfo::card_data`].
+///
+/// Wraps the same per-kind card-data structs the typed handles return ([`ModelCardData`],
+/// [`DatasetCardData`], [`SpaceCardData`]), tagged by the runtime repo kind.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum CardData {
+    /// Card metadata for a model repository.
+    Model(ModelCardData),
+    /// Card metadata for a dataset repository.
+    Dataset(DatasetCardData),
+    /// Card metadata for a Space repository.
+    Space(SpaceCardData),
 }
 
 /// Metadata for a model repository on the Hub.
@@ -301,7 +445,7 @@ pub struct ModelInfo {
     #[serde(default)]
     pub base_models: Option<Vec<String>>,
     /// Parsed YAML metadata from the model card (`README.md` front matter).
-    pub card_data: Option<CardData>,
+    pub card_data: Option<ModelCardData>,
     /// Number of children (derived) models.
     pub children_model_count: Option<u64>,
     /// Model configuration (e.g., parsed `config.json` for Transformers models).
@@ -415,7 +559,7 @@ pub struct DatasetInfo {
     /// is set on each entry. See [`RepoSibling`].
     pub siblings: Option<Vec<RepoSibling>>,
     /// Parsed YAML metadata from the dataset card (`README.md` front matter).
-    pub card_data: Option<CardData>,
+    pub card_data: Option<DatasetCardData>,
     /// Citation information for the dataset.
     pub citation: Option<String>,
     /// Papers-with-code identifier, when the dataset is registered there.
@@ -467,7 +611,7 @@ pub struct SpaceInfo {
     /// is set on each entry. See [`RepoSibling`].
     pub siblings: Option<Vec<RepoSibling>>,
     /// Parsed YAML metadata from the Space card (`README.md` front matter).
-    pub card_data: Option<CardData>,
+    pub card_data: Option<SpaceCardData>,
     /// SDK powering the Space (e.g., `"gradio"`, `"streamlit"`, `"docker"`, `"static"`).
     pub sdk: Option<String>,
     /// Trending score used to rank the Space on the Hub's trending lists.
@@ -679,11 +823,11 @@ impl RepoInfo {
 
     /// Parsed repo card (README front matter) data. Always `None` for kernels — the slim
     /// kernel info shape does not include it.
-    pub fn card_data(&self) -> Option<&CardData> {
+    pub fn card_data(&self) -> Option<CardData> {
         match self {
-            Self::Model(info) => info.card_data.as_ref(),
-            Self::Dataset(info) => info.card_data.as_ref(),
-            Self::Space(info) => info.card_data.as_ref(),
+            Self::Model(info) => info.card_data.clone().map(CardData::Model),
+            Self::Dataset(info) => info.card_data.clone().map(CardData::Dataset),
+            Self::Space(info) => info.card_data.clone().map(CardData::Space),
             Self::Kernel(_) => None,
         }
     }
@@ -2076,9 +2220,9 @@ mod tests {
     use futures::StreamExt;
 
     use super::{
-        DatasetInfo, EvalResultEntry, GatedApprovalMode, HFRepository, InferenceProviderMapping, KernelInfo, ModelInfo,
-        RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace, SafeTensorsInfo, SpaceInfo,
-        TransformersInfo, split_repo_id,
+        CardData, DatasetInfo, EvalResultEntry, GatedApprovalMode, HFRepository, InferenceProviderMapping, KernelInfo,
+        ModelCardData, ModelInfo, RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace,
+        SafeTensorsInfo, SpaceInfo, TransformersInfo, split_repo_id,
     };
     use crate::client::HFClient;
 
@@ -2137,7 +2281,13 @@ mod tests {
         assert_eq!(model.tags(), Some(&["tag-a".to_string(), "tag-b".to_string()][..]));
         assert_eq!(model.trending_score(), Some(1.5));
         assert_eq!(model.used_storage(), Some(1024));
-        assert!(model.card_data().is_some());
+        assert_eq!(
+            model.card_data(),
+            Some(CardData::Model(ModelCardData {
+                license: Some("mit".to_string()),
+                ..Default::default()
+            }))
+        );
         assert_eq!(model.siblings().map(<[_]>::len), Some(1));
 
         let space = sample_repo_info(super::RepoTypeAny::Space);
@@ -2332,6 +2482,23 @@ mod tests {
         let json = r#"{"id":"o/m","modelId":"o/m","brandNewField":42}"#;
         let info: ModelInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.id, "o/m");
+    }
+
+    #[test]
+    fn model_card_data_normalizes_string_or_vec_and_keeps_extra_fields() {
+        let json = serde_json::json!({
+            "license": "mit",
+            "language": "en",
+            "datasets": ["squad", "glue"],
+            "tags": ["nlp"],
+            "custom_field": "keep me",
+        });
+        let card: ModelCardData = serde_json::from_value(json).unwrap();
+        assert_eq!(card.license.as_deref(), Some("mit"));
+        assert_eq!(card.language, Some(vec!["en".to_string()]));
+        assert_eq!(card.datasets, Some(vec!["squad".to_string(), "glue".to_string()]));
+        assert_eq!(card.tags, Some(vec!["nlp".to_string()]));
+        assert_eq!(card.extra.get("custom_field"), Some(&serde_json::json!("keep me")));
     }
 
     /// Real `/api/kernels/{repo_id}` response shape (slim — no `tags`,
