@@ -53,7 +53,8 @@ use crate::{constants, retry};
 ///
 /// Controls whether users must request access and how requests are approved.
 /// Serializes as `false` when [`GatedApprovalMode::Disabled`], or as the lowercase mode string otherwise.
-#[derive(Debug, Clone)]
+/// Deserializes from the same shapes (the Hub's `gated` field is a JSON boolean or string union).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatedApprovalMode {
     /// Access is open; no request is required.
     Disabled,
@@ -258,6 +259,29 @@ pub struct EvalResultSource {
     pub org: Option<String>,
 }
 
+/// Parsed YAML metadata from a repo card (`README.md` front matter).
+///
+/// The schema varies by repo kind and by the libraries/tags a repo declares, so this wraps the
+/// raw JSON value rather than modeling every possible field. [`Deref`](std::ops::Deref) to
+/// [`serde_json::Value`] for field lookups (e.g. `card_data.get("license")`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CardData(pub serde_json::Value);
+
+impl std::ops::Deref for CardData {
+    type Target = serde_json::Value;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<serde_json::Value> for CardData {
+    fn from(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+}
+
 /// Metadata for a model repository on the Hub.
 ///
 /// Returned by [`HFClient::list_models`] and by
@@ -276,9 +300,8 @@ pub struct ModelInfo {
     /// Base models this model is derived from.
     #[serde(default)]
     pub base_models: Option<Vec<String>>,
-    /// Parsed YAML metadata from the model card (`README.md` front matter). Modeled as raw JSON
-    /// because the schema varies by library.
-    pub card_data: Option<serde_json::Value>,
+    /// Parsed YAML metadata from the model card (`README.md` front matter).
+    pub card_data: Option<CardData>,
     /// Number of children (derived) models.
     pub children_model_count: Option<u64>,
     /// Model configuration (e.g., parsed `config.json` for Transformers models).
@@ -295,9 +318,8 @@ pub struct ModelInfo {
     /// Evaluation results parsed from the model's `.eval_results/*.yaml` files.
     #[serde(default, rename = "evalResults")]
     pub eval_results: Option<Vec<EvalResultEntry>>,
-    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"` indicating
-    /// the approval mode for access requests. Modeled as raw JSON because the field is union-typed.
-    pub gated: Option<serde_json::Value>,
+    /// Gated-access state.
+    pub gated: Option<GatedApprovalMode>,
     /// GGUF-specific metadata, when the repo contains GGUF files.
     pub gguf: Option<serde_json::Value>,
     /// Inference-providers status. Currently, `Some("warm")` when the model is served by at least
@@ -372,9 +394,8 @@ pub struct DatasetInfo {
     pub sha: Option<String>,
     /// Whether the repo is private.
     pub private: Option<bool>,
-    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"` indicating
-    /// the approval mode for access requests. Modeled as raw JSON because the field is union-typed.
-    pub gated: Option<serde_json::Value>,
+    /// Gated-access state.
+    pub gated: Option<GatedApprovalMode>,
     /// Whether the repo is disabled.
     pub disabled: Option<bool>,
     /// Number of downloads over the last 30 days.
@@ -394,7 +415,7 @@ pub struct DatasetInfo {
     /// is set on each entry. See [`RepoSibling`].
     pub siblings: Option<Vec<RepoSibling>>,
     /// Parsed YAML metadata from the dataset card (`README.md` front matter).
-    pub card_data: Option<serde_json::Value>,
+    pub card_data: Option<CardData>,
     /// Citation information for the dataset.
     pub citation: Option<String>,
     /// Papers-with-code identifier, when the dataset is registered there.
@@ -429,9 +450,8 @@ pub struct SpaceInfo {
     pub sha: Option<String>,
     /// Whether the repo is private.
     pub private: Option<bool>,
-    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"` indicating
-    /// the approval mode for access requests. Modeled as raw JSON because the field is union-typed.
-    pub gated: Option<serde_json::Value>,
+    /// Gated-access state.
+    pub gated: Option<GatedApprovalMode>,
     /// Whether the Space is disabled.
     pub disabled: Option<bool>,
     /// Number of likes on the Space.
@@ -447,7 +467,7 @@ pub struct SpaceInfo {
     /// is set on each entry. See [`RepoSibling`].
     pub siblings: Option<Vec<RepoSibling>>,
     /// Parsed YAML metadata from the Space card (`README.md` front matter).
-    pub card_data: Option<serde_json::Value>,
+    pub card_data: Option<CardData>,
     /// SDK powering the Space (e.g., `"gradio"`, `"streamlit"`, `"docker"`, `"static"`).
     pub sdk: Option<String>,
     /// Trending score used to rank the Space on the Hub's trending lists.
@@ -496,9 +516,8 @@ pub struct KernelInfo {
     pub sha: Option<String>,
     /// Whether the repo is private.
     pub private: Option<bool>,
-    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"` indicating
-    /// the approval mode for access requests. Modeled as raw JSON because the field is union-typed.
-    pub gated: Option<serde_json::Value>,
+    /// Gated-access state.
+    pub gated: Option<GatedApprovalMode>,
     /// Total downloads of this kernel.
     pub downloads: Option<u64>,
     /// Number of likes on the kernel.
@@ -595,9 +614,8 @@ impl RepoInfo {
         }
     }
 
-    /// Gated-access state. Either the boolean `false` (open) or the string `"auto"`/`"manual"`
-    /// indicating the approval mode for access requests. Raw JSON because the field is union-typed.
-    pub fn gated(&self) -> Option<&serde_json::Value> {
+    /// Gated-access state.
+    pub fn gated(&self) -> Option<&GatedApprovalMode> {
         match self {
             Self::Model(info) => info.gated.as_ref(),
             Self::Dataset(info) => info.gated.as_ref(),
@@ -661,7 +679,7 @@ impl RepoInfo {
 
     /// Parsed repo card (README front matter) data. Always `None` for kernels — the slim
     /// kernel info shape does not include it.
-    pub fn card_data(&self) -> Option<&serde_json::Value> {
+    pub fn card_data(&self) -> Option<&CardData> {
         match self {
             Self::Model(info) => info.card_data.as_ref(),
             Self::Dataset(info) => info.card_data.as_ref(),
@@ -840,6 +858,43 @@ impl FromStr for GatedApprovalMode {
                 "unknown gated approval mode: {s:?}. Expected 'auto', 'manual', or 'false'"
             ))),
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for GatedApprovalMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct GatedApprovalModeVisitor;
+
+        impl serde::de::Visitor<'_> for GatedApprovalModeVisitor {
+            type Value = GatedApprovalMode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("`false` or one of the strings \"auto\", \"manual\"")
+            }
+
+            fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if v {
+                    Err(E::invalid_value(serde::de::Unexpected::Bool(v), &self))
+                } else {
+                    Ok(GatedApprovalMode::Disabled)
+                }
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                v.parse().map_err(|_| E::invalid_value(serde::de::Unexpected::Str(v), &self))
+            }
+        }
+
+        deserializer.deserialize_any(GatedApprovalModeVisitor)
     }
 }
 
@@ -2021,9 +2076,9 @@ mod tests {
     use futures::StreamExt;
 
     use super::{
-        DatasetInfo, EvalResultEntry, HFRepository, InferenceProviderMapping, KernelInfo, ModelInfo, RepoType,
-        RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace, SafeTensorsInfo, SpaceInfo, TransformersInfo,
-        split_repo_id,
+        DatasetInfo, EvalResultEntry, GatedApprovalMode, HFRepository, InferenceProviderMapping, KernelInfo, ModelInfo,
+        RepoType, RepoTypeDataset, RepoTypeKernel, RepoTypeModel, RepoTypeSpace, SafeTensorsInfo, SpaceInfo,
+        TransformersInfo, split_repo_id,
     };
     use crate::client::HFClient;
 
@@ -2068,7 +2123,7 @@ mod tests {
             assert_eq!(info.author(), Some("acme"));
             assert_eq!(info.sha(), Some("abc123"));
             assert_eq!(info.private(), Some(false));
-            assert_eq!(info.gated(), Some(&serde_json::json!("manual")));
+            assert_eq!(info.gated(), Some(&GatedApprovalMode::Manual));
             assert_eq!(info.likes(), Some(7));
             assert_eq!(info.last_modified(), Some("2026-01-02T03:04:05.000Z"));
         }
@@ -2308,8 +2363,7 @@ mod tests {
         assert_eq!(info.likes, Some(6));
         assert_eq!(info.trusted_publisher, Some(false));
         assert_eq!(info.supported_driver_families.as_deref(), Some(&["cuda".into(), "xpu".into(), "cpu".into()][..]));
-        // `gated: false` is kept as JSON (consistent with ModelInfo/SpaceInfo).
-        assert_eq!(info.gated.as_ref().and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(info.gated, Some(GatedApprovalMode::Disabled));
     }
 
     /// `supportedDriverFamilies` is absent on some kernels — must remain optional.
