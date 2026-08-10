@@ -141,11 +141,13 @@ pub struct RepoTypeKernel;
 /// All the standard file, commit, and repo-management APIs are available on
 /// `HFRepository<RepoTypeAny>` — uploads/downloads, tree listings, commit history and diffs,
 /// branches, tags, settings, and existence checks all work identically to a typed handle and
-/// hit the right Hub endpoint for the runtime variant. The kind-specific
-/// [`HFRepository::<RepoTypeModel>::info`](super::HFRepository::info) (and its per-kind
-/// siblings) and the Space-only runtime helpers (`runtime`, `pause`, `restart`, secrets,
-/// variables, hardware, duplicate) are *not* available — they live on the per-kind typed
-/// handles.
+/// hit the right Hub endpoint for the runtime variant.
+/// [`HFRepository::<RepoTypeAny>::info`](super::HFRepository::info) dispatches on the runtime
+/// variant and returns a runtime-tagged [`RepoInfo`](super::RepoInfo) — its accessor methods
+/// read fields shared across kinds without matching, and matching on the variant yields the
+/// same per-kind struct the typed handles return. The Space-only runtime helpers (`runtime`,
+/// `pause`, `restart`, secrets, variables, hardware, duplicate) are *not* available — they
+/// live on `HFRepository<RepoTypeSpace>`.
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RepoTypeAny {
     #[default]
