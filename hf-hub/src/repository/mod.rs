@@ -27,7 +27,7 @@ pub mod listing;
 pub mod repo_type;
 pub mod upload;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 
 use bon::bon;
@@ -316,7 +316,7 @@ pub struct ModelCardData {
     pub tags: Option<Vec<String>>,
     /// Fields present in the card's YAML front matter that aren't modeled above.
     #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// Dataset Card metadata parsed from a dataset repo's `README.md` YAML front matter.
@@ -363,7 +363,7 @@ pub struct DatasetCardData {
     pub config_names: Option<Vec<String>>,
     /// Fields present in the card's YAML front matter that aren't modeled above.
     #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// Space Card metadata parsed from a Space repo's `README.md` YAML front matter.
@@ -407,7 +407,7 @@ pub struct SpaceCardData {
     pub tags: Option<Vec<String>>,
     /// Fields present in the card's YAML front matter that aren't modeled above.
     #[serde(flatten)]
-    pub extra: serde_json::Map<String, serde_json::Value>,
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// Repo-card metadata for a repo whose kind is only known at runtime, returned by
