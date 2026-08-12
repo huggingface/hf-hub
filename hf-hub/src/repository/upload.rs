@@ -718,6 +718,41 @@ fn collect_files_recursive(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    #[tokio::test]
+    async fn create_pr_calls_preupload_url() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            let mut request_line = String::new();
+            socket.read_line(&mut request_line).await.unwrap();
+            socket
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\n{\"files\":[]}")
+                .await
+                .unwrap();
+            request_line
+        });
+
+        crate::HFClient::builder()
+            .endpoint(endpoint)
+            .build()
+            .unwrap()
+            .model("owner", "repo")
+            .fetch_upload_modes("owner/repo", "models", "main", &[], true)
+            .await
+            .unwrap();
+
+        let request_line = server.await.unwrap();
+        assert_eq!(request_line, "POST /api/models/owner/repo/preupload/main?create_pr=1 HTTP/1.1\r\n");
+    }
+}
+
 #[bon]
 impl<T: RepoType> HFRepository<T> {
     /// Create a commit with multiple operations.
