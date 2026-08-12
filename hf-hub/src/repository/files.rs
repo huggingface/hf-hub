@@ -146,7 +146,8 @@ pub struct CommitInfo {
     #[serde(default)]
     pub commit_oid: Option<String>,
     /// Pull-request URL, when `create_pr` was enabled and a PR was opened.
-    #[serde(default)]
+    // the Hub response uses `pullRequestUrl`, matching https://github.com/huggingface/huggingface_hub/blob/ca9284561d5b7049496797992cf01d0bb139ce52/src/huggingface_hub/hf_api.py#L5139.
+    #[serde(default, alias = "pullRequestUrl")]
     pub pr_url: Option<String>,
     /// Pull-request number, when `create_pr` was enabled and a PR was opened.
     #[serde(default)]
@@ -476,6 +477,17 @@ mod tests {
         assert_eq!(info.commit_oid.as_deref(), Some("abc123"));
         assert_eq!(info.pr_url.as_deref(), Some("https://huggingface.co/owner/repo/discussions/7"));
         assert_eq!(info.pr_num, Some(7));
+    }
+
+    #[test]
+    fn test_commit_info_with_create_pr_response() {
+        let json = r#"{
+            "commitUrl":"https://huggingface.co/owner/repo/commit/abc123",
+            "commitOid":"abc123",
+            "pullRequestUrl":"https://huggingface.co/owner/repo/discussions/7"
+        }"#;
+        let info: CommitInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.pr_url.as_deref(), Some("https://huggingface.co/owner/repo/discussions/7"));
     }
 
     #[test]

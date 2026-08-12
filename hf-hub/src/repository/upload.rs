@@ -401,6 +401,7 @@ impl<T: RepoType> HFRepository<T> {
                     .iter()
                     .map(|(path, size, sample, _, _)| (path.as_str(), *size, sample.as_slice()))
                     .collect::<Vec<_>>(),
+                params.create_pr,
             )
             .await?;
         tracing::info!(?upload_modes, "preupload classification complete");
@@ -434,6 +435,7 @@ impl<T: RepoType> HFRepository<T> {
         api_segment: &str,
         revision: &str,
         files: &[(&str, u64, &[u8])],
+        create_pr: bool,
     ) -> HFResult<HashMap<String, String>> {
         let url = format!("{}/preupload/{}", self.hf_client.api_url(api_segment, repo_id), encode_ref(revision));
 
@@ -452,12 +454,11 @@ impl<T: RepoType> HFRepository<T> {
 
         let headers = self.hf_client.auth_headers();
         let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client
-                .http_client()
-                .post(&url)
-                .headers(headers.clone())
-                .json(&body)
-                .send()
+            let mut req = self.hf_client.http_client().post(&url).headers(headers.clone()).json(&body);
+            if create_pr {
+                req = req.query(&[("create_pr", "1")]);
+            }
+            req.send()
         })
         .await?;
 
@@ -495,8 +496,10 @@ impl<T: RepoType> HFRepository<T> {
 
         let repo_path = self.repo_path();
         tracing::info!("calling LFS batch endpoint for transfer negotiation");
+        // PR uploads omit the target branch ref because contributors may not have write access to it.
+        let transfer_revision = if params.create_pr { None } else { Some(revision) };
         let chosen_transfer = self
-            .post_lfs_batch_info(&repo_path, self.repo_type.url_prefix(), revision, &objects)
+            .post_lfs_batch_info(&repo_path, self.repo_type.url_prefix(), transfer_revision, &objects)
             .await?;
         tracing::info!(?chosen_transfer, "LFS batch transfer negotiation complete");
 
@@ -514,7 +517,8 @@ impl<T: RepoType> HFRepository<T> {
             .map(|(path, _, _, source)| (path.clone(), (*source).clone()))
             .collect();
 
-        self.xet_upload(&xet_files, revision, &params.progress).await?;
+        self.xet_upload(&xet_files, revision, params.create_pr, &params.progress)
+            .await?;
 
         let result: HashMap<String, (String, u64)> = lfs_with_sha
             .into_iter()
@@ -530,7 +534,7 @@ impl<T: RepoType> HFRepository<T> {
         &self,
         repo_id: &str,
         url_prefix: &str,
-        revision: &str,
+        revision: Option<&str>,
         objects: &[(&str, u64)],
     ) -> HFResult<Option<String>> {
         let url = format!("{}/{}{}.git/info/lfs/objects/batch", self.hf_client.endpoint(), url_prefix, repo_id);
@@ -545,13 +549,15 @@ impl<T: RepoType> HFRepository<T> {
             })
             .collect();
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "operation": "upload",
             "transfers": ["basic", "multipart", "xet"],
             "objects": objects_payload,
             "hash_algo": "sha256",
-            "ref": { "name": revision },
         });
+        if let Some(revision) = revision {
+            body["ref"] = serde_json::json!({ "name": revision });
+        }
 
         let mut headers = self.hf_client.auth_headers();
         headers.insert(reqwest::header::ACCEPT, "application/vnd.git-lfs+json".parse().unwrap());
