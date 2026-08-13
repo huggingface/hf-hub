@@ -789,10 +789,17 @@ impl<T: RepoType> HFRepository<T> {
         &self,
         files: &[(String, crate::repository::AddSource)],
         revision: &str,
+        create_pr: bool,
         progress: &Option<crate::progress::Progress>,
     ) -> HFResult<Vec<XetFileInfo>> {
         let repo_path = self.repo_path();
-        let token_url = repo_xet_token_url(&self.hf_client, "write", &repo_path, self.repo_type.plural(), revision);
+        // with create_pr=1, the Hub resolves the destination to a new refs/pr/N ref.
+        let token_revision = if create_pr { "None" } else { revision };
+        let mut token_url =
+            repo_xet_token_url(&self.hf_client, "write", &repo_path, self.repo_type.plural(), token_revision);
+        if create_pr {
+            token_url.push_str("?create_pr=1");
+        }
         xet_upload_inner(
             &self.hf_client,
             files,
