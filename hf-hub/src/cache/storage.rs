@@ -9,6 +9,10 @@ pub(crate) struct CacheLock {
     _file: File,
 }
 
+pub(crate) struct PointerResult {
+    pub(crate) references_blob: bool,
+}
+
 pub(crate) async fn acquire_lock(cache_dir: &Path, repo_folder: &str, etag: &str) -> crate::error::HFResult<CacheLock> {
     let path = lock_path(cache_dir, repo_folder, etag);
     if let Some(parent) = path.parent() {
@@ -58,13 +62,14 @@ pub(crate) async fn read_ref(
 }
 
 pub(crate) async fn create_pointer_symlink(
+    _lock: &CacheLock,
     cache_dir: &Path,
     repo_folder: &str,
     commit_hash: &str,
     filename: &str,
     etag: &str,
     new_blob: bool,
-) -> crate::error::HFResult<()> {
+) -> crate::error::HFResult<PointerResult> {
     let pointer = snapshot_path(cache_dir, repo_folder, commit_hash, filename);
     if let Some(parent) = pointer.parent() {
         std::fs::create_dir_all(parent)?;
@@ -79,30 +84,35 @@ pub(crate) async fn create_pointer_symlink(
     #[cfg(not(windows))]
     {
         match std::os::unix::fs::symlink(&relative, &pointer) {
-            Ok(()) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
-            Err(e) => return Err(e.into()),
+            Ok(()) => Ok(PointerResult { references_blob: true }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(PointerResult { references_blob: true }),
+            Err(e) => Err(e.into()),
         }
     }
     #[cfg(windows)]
     {
         match std::os::windows::fs::symlink_file(&relative, &pointer) {
-            Ok(()) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {},
-            Err(_) => create_pointer_without_symlink(&blob, &pointer, new_blob)?,
+            Ok(()) => Ok(PointerResult { references_blob: true }),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(PointerResult {
+                references_blob: pointer.symlink_metadata()?.file_type().is_symlink(),
+            }),
+            Err(_) => create_pointer_without_symlink(&blob, &pointer, new_blob),
         }
     }
-    Ok(())
 }
 
 #[cfg(any(windows, test))]
-fn create_pointer_without_symlink(blob: &Path, pointer: &Path, new_blob: bool) -> crate::error::HFResult<()> {
+fn create_pointer_without_symlink(
+    blob: &Path,
+    pointer: &Path,
+    new_blob: bool,
+) -> crate::error::HFResult<PointerResult> {
     if new_blob {
         std::fs::rename(blob, pointer)?;
     } else {
         std::fs::copy(blob, pointer)?;
     }
-    Ok(())
+    Ok(PointerResult { references_blob: false })
 }
 
 pub(crate) fn is_commit_hash(revision: &str) -> bool {
@@ -453,7 +463,8 @@ mod tests {
         let blob = blob_path(cache, "models--gpt2", "abc123");
         std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
         std::fs::write(&blob, b"file content").unwrap();
-        create_pointer_symlink(cache, "models--gpt2", "def456", "config.json", "abc123", false)
+        let lock = acquire_lock(cache, "models--gpt2", "abc123").await.unwrap();
+        create_pointer_symlink(&lock, cache, "models--gpt2", "def456", "config.json", "abc123", false)
             .await
             .unwrap();
         let pointer = snapshot_path(cache, "models--gpt2", "def456", "config.json");
@@ -471,7 +482,8 @@ mod tests {
         let blob = blob_path(cache, "models--gpt2", "abc123");
         std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
         std::fs::write(&blob, b"nested content").unwrap();
-        create_pointer_symlink(cache, "models--gpt2", "def456", "subdir/model.bin", "abc123", false)
+        let lock = acquire_lock(cache, "models--gpt2", "abc123").await.unwrap();
+        create_pointer_symlink(&lock, cache, "models--gpt2", "def456", "subdir/model.bin", "abc123", false)
             .await
             .unwrap();
         let pointer = snapshot_path(cache, "models--gpt2", "def456", "subdir/model.bin");
@@ -492,8 +504,9 @@ mod tests {
         std::fs::create_dir_all(pointer.parent().unwrap()).unwrap();
         std::fs::write(&blob, b"cached content").unwrap();
 
-        create_pointer_without_symlink(&blob, &pointer, false).unwrap();
+        let result = create_pointer_without_symlink(&blob, &pointer, false).unwrap();
 
+        assert!(!result.references_blob);
         assert_eq!(std::fs::read(&blob).unwrap(), b"cached content");
         assert_eq!(std::fs::read(&pointer).unwrap(), b"cached content");
     }
@@ -512,8 +525,9 @@ mod tests {
         std::fs::create_dir_all(pointer.parent().unwrap()).unwrap();
         std::fs::write(&blob, b"new content").unwrap();
 
-        create_pointer_without_symlink(&blob, &pointer, true).unwrap();
+        let result = create_pointer_without_symlink(&blob, &pointer, true).unwrap();
 
+        assert!(!result.references_blob);
         assert!(!blob.exists());
         assert_eq!(std::fs::read(&pointer).unwrap(), b"new content");
     }
