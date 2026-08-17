@@ -353,9 +353,17 @@ pub(super) fn extract_commit_hash(response: &reqwest::Response) -> Option<String
 
 pub(crate) fn extract_file_size(response: &reqwest::Response) -> Option<u64> {
     let headers = response.headers();
+    if let Some(linked_size) = headers.get(constants::HEADER_X_LINKED_SIZE) {
+        return linked_size.to_str().ok().and_then(|value| value.parse().ok());
+    }
+
+    // A redirect's Content-Length describes its body, not the target file.
+    if response.status().is_redirection() {
+        return None;
+    }
+
     headers
-        .get(constants::HEADER_X_LINKED_SIZE)
-        .or_else(|| headers.get(reqwest::header::CONTENT_LENGTH))
+        .get(reqwest::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
 }
@@ -380,7 +388,48 @@ pub(super) fn matches_any_glob(patterns: &[String], path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BlobSecurityInfo, CommitInfo, FileMetadataInfo, RepoTreeEntry};
+    use super::{BlobSecurityInfo, CommitInfo, FileMetadataInfo, RepoTreeEntry, extract_file_size};
+
+    fn response_with(status: u16, headers: &[(&str, &str)]) -> reqwest::Response {
+        let mut builder = http::Response::builder().status(status);
+        for (k, v) in headers {
+            builder = builder.header(*k, *v);
+        }
+        reqwest::Response::from(builder.body("").unwrap())
+    }
+
+    #[test]
+    fn extract_file_size_prefers_linked_size() {
+        let resp = response_with(200, &[("x-linked-size", "818"), ("content-length", "341")]);
+        assert_eq!(extract_file_size(&resp), Some(818));
+    }
+
+    #[test]
+    fn extract_file_size_uses_content_length_for_non_redirect() {
+        let resp = response_with(200, &[("content-length", "818")]);
+        assert_eq!(extract_file_size(&resp), Some(818));
+    }
+
+    #[test]
+    fn extract_file_size_ignores_content_length_on_redirect() {
+        // A 307 from the `resolve` endpoint carries a `content-length` for the
+        // redirect body, not the target file. Without `x-linked-size` we must
+        // not trust it, otherwise the post-download size check fails.
+        let resp = response_with(307, &[("content-length", "341")]);
+        assert_eq!(extract_file_size(&resp), None);
+    }
+
+    #[test]
+    fn extract_file_size_trusts_linked_size_on_redirect() {
+        let resp = response_with(307, &[("x-linked-size", "818"), ("content-length", "341")]);
+        assert_eq!(extract_file_size(&resp), Some(818));
+    }
+
+    #[test]
+    fn extract_file_size_does_not_fallback_when_linked_size_is_invalid() {
+        let resp = response_with(200, &[("x-linked-size", "invalid"), ("content-length", "341")]);
+        assert_eq!(extract_file_size(&resp), None);
+    }
 
     #[test]
     fn test_repo_tree_entry_deserialize_file() {
