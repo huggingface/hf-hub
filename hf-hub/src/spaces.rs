@@ -490,7 +490,7 @@ impl HFRepository<RepoTypeSpace> {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl crate::blocking::HFRepositorySync<RepoTypeSpace> {
     /// Blocking counterpart of [`HFRepository::runtime`]. See the async method for parameters and

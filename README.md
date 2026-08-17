@@ -50,21 +50,16 @@ This builds in release mode by default. Once installed, run `hfrs --help` to see
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::repository::RepoInfo;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
 
     // Get model info
-    let RepoInfo::Model(info) = client
-        .model("openai-community", "gpt2")
-        .info()
-        .send()
-        .await?
-    else {
+    let Ok(info) = client.model("openai-community", "gpt2").info().send().await else {
         unreachable!("handle type guarantees the Model variant");
     };
+
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
 
     Ok(())
@@ -77,16 +72,11 @@ Requires the `blocking` feature. `HFClientSync` manages a dedicated tokio runtim
 
 ```rust,ignore
 use hf_hub::HFClientSync;
-use hf_hub::repository::RepoInfo;
 
 fn main() -> hf_hub::HFResult<()> {
     let client = HFClientSync::new()?;
 
-    let RepoInfo::Model(info) = client
-        .model("openai-community", "gpt2")
-        .info()
-        .send()?
-    else {
+    let Ok(info) = client.model("openai-community", "gpt2").info().send() else {
         unreachable!("handle type guarantees the Model variant");
     };
     println!("Model: {} (downloads: {:?})", info.id, info.downloads);
@@ -129,24 +119,19 @@ async fn main() -> hf_hub::HFResult<()> {
 
 ```rust,no_run
 use hf_hub::HFClient;
-use hf_hub::repository::RepoInfo;
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
     let repo = client.model("openai-community", "gpt2");
 
-    let RepoInfo::Model(model_info) = repo.info().send().await? else {
+    let Ok(model_info) = repo.info().send().await else {
         println!("error, not a model");
         return Ok(());
     };
     println!("Model: {}", model_info.id);
 
-    let exists = repo
-        .file_exists()
-        .filename("config.json")
-        .send()
-        .await?;
+    let exists = repo.file_exists().filename("config.json").send().await?;
 
     println!("config.json exists: {exists}");
     Ok(())
@@ -189,13 +174,13 @@ async fn main() -> hf_hub::HFResult<()> {
 
     let commit = repo
         .upload_file()
-        .source(AddSource::Bytes(b"Hello, world!".to_vec()))
+        .source(AddSource::Bytes(b"Hello, world!".to_vec().into()))
         .path_in_repo("greeting.txt")
         .commit_message("Add greeting file")
         .send()
         .await?;
 
-    println!("Committed: {:?}", commit.oid);
+    println!("Committed: {:?}", commit.commit_oid);
     Ok(())
 }
 ```
@@ -203,14 +188,15 @@ async fn main() -> hf_hub::HFResult<()> {
 ### Create a repository
 
 ```rust,no_run
-use hf_hub::HFClient;
+use hf_hub::{HFClient, RepoTypeDataset};
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
     let client = HFClient::new()?;
 
     let url = client
-        .create_repo()
+        .create_repository()
+        .repo_type(RepoTypeDataset)
         .repo_id("your-username/new-model")
         .private(true)
         .exist_ok(true)
@@ -222,27 +208,25 @@ async fn main() -> hf_hub::HFResult<()> {
 }
 ```
 
-## Authentication
+## Authentication and configuration
 
-The client resolves authentication tokens in this order:
+`hf-hub` does not read environment variables. `HFClient::new()` uses the public Hub endpoint
+without authentication and caches files in `.cache/huggingface/hub` relative to the current
+working directory. Configure a token, endpoint, or cache location explicitly with
+`HFClient::builder()`:
 
-1. Explicit token via `HFClientBuilder::token()`
-2. `HF_TOKEN` environment variable
-3. Token file at the path specified by `HF_TOKEN_PATH`
-4. Default token file at `~/.cache/huggingface/token`
+```rust,no_run
+use hf_hub::HFClient;
 
-Set `HF_HUB_DISABLE_IMPLICIT_TOKEN` to any non-empty value to disable automatic token resolution.
+let client = HFClient::builder()
+    .token("hf_xxx")
+    .endpoint("https://huggingface.co")
+    .cache_dir("/tmp/hf-cache")
+    .build()?;
+# Ok::<(), hf_hub::HFError>(())
+```
 
-## Configuration
-
-| Environment Variable            | Description                                            |
-|---------------------------------|--------------------------------------------------------|
-| `HF_ENDPOINT`                   | Hub API endpoint (default: `https://huggingface.co`)   |
-| `HF_TOKEN`                      | Authentication token                                   |
-| `HF_TOKEN_PATH`                 | Path to token file                                     |
-| `HF_HOME`                       | Cache directory root (default: `~/.cache/huggingface`) |
-| `HF_HUB_DISABLE_IMPLICIT_TOKEN` | Disable automatic token loading                        |
-| `HF_HUB_USER_AGENT_ORIGIN`      | Custom User-Agent origin string                        |
+The `hfrs` CLI continues to support its existing environment-based configuration.
 
 ## Error Handling
 

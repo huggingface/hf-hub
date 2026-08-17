@@ -141,6 +141,29 @@ async fn test_dataset_info() {
 }
 
 #[tokio::test]
+async fn test_repo_type_any_info() {
+    let Some(client) = prod_api() else { return };
+
+    for (kind_str, repo_id) in [("model", TEST_MODEL_REPO), ("dataset", TEST_DATASET_REPO)] {
+        let kind: RepoTypeAny = kind_str.parse().unwrap();
+        let (owner, name) = split_id(repo_id);
+        let handle = client.repository(kind, owner, name);
+
+        let info = handle.info().send().await.unwrap();
+        assert_eq!(info.repo_type(), kind);
+        assert_eq!(info.id(), repo_id);
+        assert!(info.sha().is_some());
+        assert!(info.last_modified().is_some());
+
+        match kind {
+            RepoTypeAny::Model => assert!(info.as_model().is_some()),
+            RepoTypeAny::Dataset => assert!(info.as_dataset().is_some()),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_repo_exists() {
     let Some(client) = prod_api() else { return };
     assert!(repo(&client, TEST_MODEL_REPO).exists().send().await.unwrap());

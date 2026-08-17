@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue, USER_AGENT};
-use tracing::debug;
 use url::Url;
 
 use crate::constants;
@@ -85,7 +84,7 @@ fn is_relative_location(location: &str) -> bool {
 /// ```rust,no_run
 /// use hf_hub::HFClient;
 ///
-/// // Reads token and settings from the environment (HF_TOKEN, HF_ENDPOINT, …).
+/// // Uses the default endpoint with no authentication token.
 /// let client = HFClient::new()?;
 ///
 /// // Or configure explicitly:
@@ -164,14 +163,13 @@ impl HFClientBuilder {
         }
     }
 
-    /// Overrides the Hub base URL (default: `https://huggingface.co`, or `HF_ENDPOINT` env var).
+    /// Overrides the Hub base URL (default: `https://huggingface.co`).
     pub fn endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.endpoint = Some(endpoint.into());
         self
     }
 
-    /// Sets the authentication token. Without this, the client falls back to the `HF_TOKEN` env
-    /// var and the cached token file written by `huggingface-cli login`.
+    /// Sets the authentication token. By default, requests are unauthenticated.
     pub fn token(mut self, token: impl Into<String>) -> Self {
         self.token = Some(token.into());
         self
@@ -198,8 +196,8 @@ impl HFClientBuilder {
         self
     }
 
-    /// Sets the local cache directory. Defaults to `HF_HUB_CACHE` → `$HF_HOME/hub` →
-    /// `~/.cache/huggingface/hub`.
+    /// Sets the local cache directory. Defaults to `.cache/huggingface/hub` relative to the
+    /// current working directory.
     pub fn cache_dir(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.cache_dir = Some(path.into());
         self
@@ -230,26 +228,21 @@ impl HFClientBuilder {
     /// Returns an error if the endpoint URL is not a valid URL or if the `reqwest` client
     /// cannot be constructed (e.g., an invalid `User-Agent` string was provided).
     pub fn build(self) -> HFResult<HFClient> {
-        let endpoint = self
-            .endpoint
-            .or_else(|| std::env::var(constants::HF_ENDPOINT).ok())
-            .unwrap_or_else(|| constants::DEFAULT_HF_ENDPOINT.to_string());
+        let endpoint = self.endpoint.unwrap_or_else(|| constants::DEFAULT_HF_ENDPOINT.to_string());
 
         let _ = url::Url::parse(&endpoint)?;
 
-        let token = self.token.or_else(resolve_token);
+        let token = self.token;
 
-        let cache_dir = self.cache_dir.unwrap_or_else(constants::resolve_cache_dir);
+        let cache_dir = self
+            .cache_dir
+            .unwrap_or_else(|| std::path::PathBuf::from(".cache/huggingface/hub"));
 
         let mut default_headers = self.headers.unwrap_or_default();
 
-        let user_agent = self.user_agent.unwrap_or_else(|| {
-            let ua_origin = std::env::var(constants::HF_HUB_USER_AGENT_ORIGIN).ok();
-            match ua_origin {
-                Some(origin) => format!("hf-hub/{}; {origin}", env!("CARGO_PKG_VERSION")),
-                None => format!("hf-hub/{}", env!("CARGO_PKG_VERSION")),
-            }
-        });
+        let user_agent = self
+            .user_agent
+            .unwrap_or_else(|| format!("hf-hub/{}", env!("CARGO_PKG_VERSION")));
         default_headers.insert(
             USER_AGENT,
             HeaderValue::from_str(&user_agent)
@@ -297,7 +290,7 @@ impl HFClientBuilder {
     /// Returns an error if the endpoint URL is not a valid URL, if the `reqwest` client
     /// cannot be constructed (e.g., an invalid `User-Agent` string was provided), or if the
     /// tokio runtime handle could not be correctly created for the blocking client.
-    #[cfg(feature = "blocking")]
+    #[cfg(all(feature = "blocking", not(target_family = "wasm")))]
     #[cfg_attr(docsrs, doc(cfg(feature = "blocking")))]
     pub fn build_sync(self) -> HFResult<crate::blocking::HFClientSync> {
         let async_client = self.build()?;
@@ -313,8 +306,8 @@ impl Default for HFClientBuilder {
 }
 
 impl HFClient {
-    /// Creates a client with default settings, reading the token and endpoint from the
-    /// environment. Equivalent to `HFClient::builder().build()`.
+    /// Creates an unauthenticated client with default settings. Equivalent to
+    /// `HFClient::builder().build()`.
     ///
     /// # Errors
     ///
@@ -344,8 +337,7 @@ impl HFClient {
     /// Hub base URL this client targets, with any trailing slash trimmed.
     ///
     /// Resolved at [`build`](HFClientBuilder::build) time from
-    /// [`HFClientBuilder::endpoint`] → `HF_ENDPOINT` → the default
-    /// (`https://huggingface.co`).
+    /// [`HFClientBuilder::endpoint`] or the default (`https://huggingface.co`).
     pub fn endpoint(&self) -> &str {
         &self.inner.endpoint
     }
@@ -353,9 +345,9 @@ impl HFClient {
     /// Local cache directory used for downloaded files.
     ///
     /// Resolved at [`build`](HFClientBuilder::build) time from
-    /// [`HFClientBuilder::cache_dir`] → `HF_HUB_CACHE` → `$HF_HOME/hub` →
-    /// `~/.cache/huggingface/hub`. Returned even when caching is disabled —
-    /// see [`cache_enabled`](Self::cache_enabled) to check that.
+    /// [`HFClientBuilder::cache_dir`] or `.cache/huggingface/hub` relative to the current
+    /// working directory. Returned even when caching is disabled — see
+    /// [`cache_enabled`](Self::cache_enabled) to check that.
     pub fn cache_dir(&self) -> &std::path::Path {
         &self.inner.cache_dir
     }
@@ -555,53 +547,45 @@ impl HFClient {
     }
 }
 
-/// Resolve token from environment or a token file.
-/// Priority: HF_TOKEN env → HF_TOKEN_PATH file → $HF_HOME/token file.
-fn resolve_token() -> Option<String> {
-    if let Ok(val) = std::env::var(constants::HF_HUB_DISABLE_IMPLICIT_TOKEN)
-        && !val.is_empty()
-    {
-        debug!("implicit token disabled via HF_HUB_DISABLE_IMPLICIT_TOKEN");
-        return None;
-    }
-
-    if let Ok(token) = std::env::var(constants::HF_TOKEN)
-        && !token.is_empty()
-    {
-        debug!("resolved token from HF_TOKEN env var");
-        return Some(token);
-    }
-
-    if let Ok(path) = std::env::var(constants::HF_TOKEN_PATH)
-        && let Ok(token) = std::fs::read_to_string(&path)
-    {
-        let token = token.trim().to_string();
-        if !token.is_empty() {
-            debug!("resolved token from HF_TOKEN_PATH file");
-            return Some(token);
-        }
-    }
-
-    let hf_home = constants::hf_home();
-    let token_path = hf_home.join(constants::TOKEN_FILENAME);
-    if let Ok(token) = std::fs::read_to_string(&token_path) {
-        let token = token.trim().to_string();
-        if !token.is_empty() {
-            debug!("resolved token from stored token file");
-            return Some(token);
-        }
-    }
-
-    debug!("no token found");
-    None
-}
-
 #[cfg(test)]
 mod tests {
-    use serial_test::serial;
     use url::Url;
 
     use super::{HFClientBuilder, append_path_segments, encode_ref, is_relative_location, split_id};
+
+    /// A `resolve` URL built from a bracketed filename must still be redirect-followable.
+    /// reqwest delegates redirect handling to `tower-http`, which before 0.6.9 resolved
+    /// `Location` against the request URI with a strict RFC 3986 parser and silently
+    /// returned the 3xx unfollowed when the request path contained characters the WHATWG
+    /// URL standard leaves unencoded but RFC 3986 forbids (`[`, `]`, `^`, `|`) — the
+    /// caller saw a bare `302 Found` instead of the file. Guards the `tower-http >= 0.6.9`
+    /// floor in Cargo.toml.
+    #[tokio::test]
+    async fn redirect_is_followed_for_a_filename_with_brackets() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let responses = [
+                format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://{addr}/cdn\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+                "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\npayload!".to_string(),
+            ];
+            for response in responses {
+                let (mut sock, _) = listener.accept().await.unwrap();
+                let _ = tokio::io::AsyncReadExt::read(&mut sock, &mut [0u8; 2048]).await;
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            }
+        });
+
+        let mut url = Url::parse(&format!("http://{addr}/datasets/owner/repo/resolve/main")).unwrap();
+        append_path_segments(&mut url, "[artist] name.png").unwrap();
+
+        let response = reqwest::Client::new().get(url.as_str()).send().await.unwrap();
+        assert_eq!(response.status(), 200, "redirect was not followed, landed on {}", response.url());
+        assert_eq!(response.text().await.unwrap(), "payload!");
+    }
 
     #[test]
     fn append_path_segments_encodes_special_chars() {
@@ -729,14 +713,10 @@ mod tests {
         assert_eq!(client.cache_dir(), std::path::Path::new("/tmp/my-cache"));
     }
 
-    // `#[serial]` because the precedence tests below mutate `HF_HOME`, and the default
-    // cache dir is derived from it.
     #[test]
-    #[serial]
     fn test_builder_cache_dir_default() {
         let client = HFClientBuilder::new().build().unwrap();
-        let path_str = client.cache_dir().to_string_lossy();
-        assert!(path_str.contains("huggingface") && path_str.ends_with("hub"));
+        assert_eq!(client.cache_dir(), std::path::Path::new(".cache/huggingface/hub"));
     }
 
     #[test]
@@ -848,146 +828,15 @@ mod tests {
         assert!(s2.new_file_download_group().is_ok());
     }
 
-    /// Token resolution precedence tests.
-    ///
-    /// These tests mutate process-wide environment variables, so they must run
-    /// serially. Each test isolates `HF_HOME` to a tempdir so the developer's
-    /// real `~/.cache/huggingface/token` cannot leak into the result.
-    mod token_precedence {
-        use std::io::Write;
+    #[test]
+    fn test_builder_without_token_is_unauthenticated() {
+        let client = HFClientBuilder::new().build().unwrap();
+        assert!(client.inner.token.is_none());
+    }
 
-        use serial_test::serial;
-        use tempfile::TempDir;
-
-        use super::HFClientBuilder;
-        use crate::constants::{HF_HOME, HF_HUB_DISABLE_IMPLICIT_TOKEN, HF_TOKEN, HF_TOKEN_PATH, TOKEN_FILENAME};
-
-        struct EnvGuard {
-            saved: Vec<(&'static str, Option<String>)>,
-            _hf_home: TempDir,
-        }
-
-        impl EnvGuard {
-            fn new() -> Self {
-                let hf_home = tempfile::tempdir().expect("tempdir for HF_HOME");
-                let keys = [HF_TOKEN, HF_TOKEN_PATH, HF_HOME, HF_HUB_DISABLE_IMPLICIT_TOKEN];
-                let saved = keys.iter().map(|k| (*k, std::env::var(*k).ok())).collect();
-                for k in keys {
-                    unsafe { std::env::remove_var(k) };
-                }
-                unsafe { std::env::set_var(HF_HOME, hf_home.path()) };
-                Self {
-                    saved,
-                    _hf_home: hf_home,
-                }
-            }
-        }
-
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                for (k, v) in &self.saved {
-                    match v {
-                        Some(val) => unsafe { std::env::set_var(k, val) },
-                        None => unsafe { std::env::remove_var(k) },
-                    }
-                }
-            }
-        }
-
-        fn write_token_file(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
-            let path = dir.join(name);
-            let mut f = std::fs::File::create(&path).unwrap();
-            f.write_all(contents.as_bytes()).unwrap();
-            path
-        }
-
-        #[test]
-        #[serial]
-        fn test_explicit_token_overrides_env() {
-            let _g = EnvGuard::new();
-            unsafe { std::env::set_var(HF_TOKEN, "env-token") };
-
-            let client = HFClientBuilder::new().token("explicit-token").build().unwrap();
-            assert_eq!(client.inner.token.as_deref(), Some("explicit-token"));
-        }
-
-        #[test]
-        #[serial]
-        fn test_env_token_used_when_no_explicit() {
-            let _g = EnvGuard::new();
-            unsafe { std::env::set_var(HF_TOKEN, "env-token") };
-
-            let client = HFClientBuilder::new().build().unwrap();
-            assert_eq!(client.inner.token.as_deref(), Some("env-token"));
-        }
-
-        #[test]
-        #[serial]
-        fn test_env_token_overrides_token_path_file() {
-            let g = EnvGuard::new();
-            let dir = tempfile::tempdir().unwrap();
-            let token_file = write_token_file(dir.path(), "tok", "file-token");
-            unsafe { std::env::set_var(HF_TOKEN, "env-token") };
-            unsafe { std::env::set_var(HF_TOKEN_PATH, &token_file) };
-
-            let client = HFClientBuilder::new().build().unwrap();
-            assert_eq!(client.inner.token.as_deref(), Some("env-token"));
-            drop(g);
-        }
-
-        #[test]
-        #[serial]
-        fn test_token_path_file_used_when_no_env() {
-            let _g = EnvGuard::new();
-            let dir = tempfile::tempdir().unwrap();
-            let token_file = write_token_file(dir.path(), "tok", "file-token\n");
-            unsafe { std::env::set_var(HF_TOKEN_PATH, &token_file) };
-
-            let client = HFClientBuilder::new().build().unwrap();
-            assert_eq!(client.inner.token.as_deref(), Some("file-token"));
-        }
-
-        #[test]
-        #[serial]
-        fn test_token_from_hf_home_file() {
-            let g = EnvGuard::new();
-            // HF_HOME was set to a tempdir by EnvGuard. Place a token file inside it.
-            let hf_home = std::env::var(HF_HOME).unwrap();
-            write_token_file(std::path::Path::new(&hf_home), TOKEN_FILENAME, "home-token");
-
-            let client = HFClientBuilder::new().build().unwrap();
-            assert_eq!(client.inner.token.as_deref(), Some("home-token"));
-            drop(g);
-        }
-
-        #[test]
-        #[serial]
-        fn test_disable_implicit_token_returns_none() {
-            let _g = EnvGuard::new();
-            unsafe { std::env::set_var(HF_TOKEN, "env-token") };
-            unsafe { std::env::set_var(HF_HUB_DISABLE_IMPLICIT_TOKEN, "1") };
-
-            let client = HFClientBuilder::new().build().unwrap();
-            assert!(client.inner.token.is_none());
-        }
-
-        #[test]
-        #[serial]
-        fn test_disable_implicit_token_does_not_block_explicit() {
-            let _g = EnvGuard::new();
-            unsafe { std::env::set_var(HF_HUB_DISABLE_IMPLICIT_TOKEN, "1") };
-
-            let client = HFClientBuilder::new().token("explicit-token").build().unwrap();
-            assert_eq!(client.inner.token.as_deref(), Some("explicit-token"));
-        }
-
-        #[test]
-        #[serial]
-        fn test_no_token_anywhere_is_none() {
-            let _g = EnvGuard::new();
-            // EnvGuard isolates HF_HOME to a fresh tempdir with no token file inside.
-            let client = HFClientBuilder::new().build().unwrap();
-            assert!(client.inner.token.is_none());
-        }
+    #[test]
+    fn test_explicit_token_is_used() {
+        let client = HFClientBuilder::new().token("explicit-token").build().unwrap();
+        assert_eq!(client.inner.token.as_deref(), Some("explicit-token"));
     }
 }

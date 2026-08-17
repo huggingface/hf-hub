@@ -25,7 +25,7 @@ pub struct TokenEntry {
 }
 
 fn hf_home() -> PathBuf {
-    hf_hub::hf_home()
+    crate::util::config::hf_home()
 }
 
 fn token_file_path() -> PathBuf {

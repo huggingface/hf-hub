@@ -13,7 +13,7 @@ const STYLES: Styles = Styles::styled()
 #[command(name = "hfrs", about = "Hugging Face Hub CLI (Rust)", version, styles = STYLES)]
 pub struct Cli {
     /// Authentication token (overrides HF_TOKEN env var and stored credentials)
-    #[arg(long, env = "HF_TOKEN", global = true, hide_env_values = true)]
+    #[arg(long, global = true, hide_env_values = true)]
     pub token: Option<String>,
 
     /// API endpoint override

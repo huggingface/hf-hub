@@ -122,7 +122,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
-            .download_url(T::default().url_prefix(), &repo_path, revision, filename)?;
+            .download_url(self.repo_type.url_prefix(), &repo_path, revision, filename)?;
         let headers = self.hf_client.auth_headers();
         let head_response = retry::retry(self.hf_client.retry_config(), || {
             self.hf_client.http_client().head(&url).headers(headers.clone()).send()
@@ -1323,7 +1323,7 @@ impl<T: RepoType> HFRepository<T> {
     }
 }
 
-#[cfg(feature = "blocking")]
+#[cfg(all(feature = "blocking", not(target_family = "wasm")))]
 #[bon]
 impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::download_file`]. See the async method for
