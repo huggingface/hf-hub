@@ -16,7 +16,7 @@ targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [dependencies]
 bytes = "1"
-reqwest = { version = "0.13", features = ["json", "stream", "multipart", "query"] }
+reqwest = { version = "0.13", features = ["json", "stream", "multipart", "query"], default-features = false }
 hyper = "1"
 tokio = { version = "1", features = ["io-util"] }
 tokio-retry = "0.3"
@@ -32,13 +32,14 @@ pathdiff = "0.2"
 percent-encoding = "2"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
-hf-xet = "1.6"
+hf-xet = { version = "1.6", default-features = false }
 sha2 = "0.11"
 
 [features]
-default = []
+default = ["rustls-tls"]
 blocking = ["tokio/rt"]
-rustls-tls = ["reqwest/rustls"]
+native-tls = ["reqwest/native-tls", "hf-xet/native-tls"]
+rustls-tls = ["reqwest/rustls", "hf-xet/rustls-tls"]
 socks = ["reqwest/socks"]
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
