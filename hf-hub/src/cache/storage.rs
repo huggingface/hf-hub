@@ -5,7 +5,12 @@ use std::time::SystemTime;
 
 use super::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
 
-pub(crate) struct CacheLock {
+/// RAII guard for the per-blob lock at `<cache>/.locks/<repo_folder>/<etag>.lock`.
+///
+/// This is the same lock the downloader holds while writing a blob into the cache. Holding it —
+/// for example via [`crate::HFClient::acquire_blob_lock`] — prevents concurrent writes to that
+/// blob, which is useful when deleting a blob out of band. Dropping the guard releases the lock.
+pub struct CacheLock {
     _file: File,
 }
 

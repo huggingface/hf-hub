@@ -22,6 +22,8 @@ use crate::error::HFResult;
 
 pub(crate) mod storage;
 
+pub use storage::CacheLock;
+
 /// A single file in a cached revision.
 ///
 /// `file_path` is the pointer in the `snapshots/` tree (a symlink on Unix);
@@ -121,6 +123,24 @@ impl HFClient {
     pub async fn scan_cache(&self) -> HFResult<HFCacheInfo> {
         storage::scan_cache_dir(self.cache_dir()).await
     }
+
+    /// Acquire the per-blob lock at `<cache>/.locks/<repo_folder>/<etag>.lock`.
+    ///
+    /// This is the same lock the downloader holds while writing a blob into the cache. Holding
+    /// it prevents concurrent writes to that blob — for example, while deleting a blob from the
+    /// cache out of band. Dropping the returned [`CacheLock`] releases the lock.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn acquire_blob_lock(
+        &self,
+        /// Cache folder name for the repo, e.g. `models--gpt2`.
+        #[builder(into)]
+        repo_folder: String,
+        /// Blob identifier (etag) whose lock file should be acquired.
+        #[builder(into)]
+        etag: String,
+    ) -> HFResult<CacheLock> {
+        storage::acquire_lock(self.cache_dir(), &repo_folder, &etag).await
+    }
 }
 
 #[cfg(all(feature = "blocking", not(target_family = "wasm")))]
@@ -130,5 +150,69 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn scan_cache(&self) -> HFResult<HFCacheInfo> {
         self.runtime.block_on(self.inner.scan_cache().send())
+    }
+
+    /// Blocking counterpart of [`HFClient::acquire_blob_lock`].
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn acquire_blob_lock(
+        &self,
+        #[builder(into)] repo_folder: String,
+        #[builder(into)] etag: String,
+    ) -> HFResult<CacheLock> {
+        self.runtime
+            .block_on(self.inner.acquire_blob_lock().repo_folder(repo_folder).etag(etag).send())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use tokio::sync::oneshot;
+
+    use super::HFClient;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_acquire_blob_lock_serializes_concurrent_acquisitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = HFClient::builder().cache_dir(dir.path()).build().unwrap();
+
+        let (acquired_tx, acquired_rx) = oneshot::channel();
+        let released = Arc::new(AtomicBool::new(false));
+        let released_clone = Arc::clone(&released);
+
+        let holder_client = client.clone();
+        let holder = tokio::spawn(async move {
+            let lock = holder_client
+                .acquire_blob_lock()
+                .repo_folder("models--gpt2")
+                .etag("abc123")
+                .send()
+                .await
+                .unwrap();
+            acquired_tx.send(()).unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            released_clone.store(true, Ordering::SeqCst);
+            drop(lock);
+        });
+
+        acquired_rx.await.unwrap();
+
+        let waiter = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.acquire_blob_lock().repo_folder("models--gpt2").etag("abc123").send(),
+        )
+        .await
+        .expect("second acquisition timed out waiting for the first guard to drop")
+        .unwrap();
+
+        assert!(
+            released.load(Ordering::SeqCst),
+            "second acquisition should not have succeeded before the first guard was dropped"
+        );
+        drop(waiter);
+        holder.await.unwrap();
     }
 }
