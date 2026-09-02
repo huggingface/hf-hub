@@ -526,11 +526,14 @@ mod tests {
         assert_eq!(result.size_on_disk, 0);
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_scan_cache_runs_concurrently_with_other_tasks() {
+    // Deliberately a default (current-thread) runtime: on a single-threaded executor, an inline
+    // synchronous walk would monopolize the only worker thread and starve the timer below, so
+    // this only passes if the walk actually runs off-thread via `spawn_blocking`.
+    #[tokio::test]
+    async fn test_scan_cache_does_not_block_the_runtime() {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path();
-        for i in 0..20 {
+        for i in 0..200 {
             let repo_folder = format!("models--org{i}--repo{i}");
             let blob_dir = cache.join(&repo_folder).join("blobs");
             std::fs::create_dir_all(&blob_dir).unwrap();
@@ -549,10 +552,19 @@ mod tests {
             ticked_clone.store(true, std::sync::atomic::Ordering::SeqCst);
         };
 
-        let (result, ()) = tokio::join!(scan_cache_dir(cache), ticker);
-        let info = result.unwrap();
-        assert_eq!(info.repos.len(), 20);
-        assert!(ticked.load(std::sync::atomic::Ordering::SeqCst));
+        tokio::select! {
+            result = scan_cache_dir(cache) => {
+                let info = result.unwrap();
+                assert_eq!(info.repos.len(), 200);
+                panic!(
+                    "scan_cache_dir completed before the 1ms ticker fired — the scan appears to be \
+                     running inline on the runtime thread instead of via spawn_blocking"
+                );
+            }
+            () = ticker => {
+                assert!(ticked.load(std::sync::atomic::Ordering::SeqCst));
+            }
+        }
     }
 
     #[tokio::test]
