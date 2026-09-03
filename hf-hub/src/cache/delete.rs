@@ -462,7 +462,14 @@ mod tests {
         let plan_result = plan(dir.path(), "models--o--n", "aaa").unwrap();
         let outcome = apply(plan_result).unwrap();
 
+        // On Unix the pointer is a symlink with no bytes of its own, so only the blob is
+        // counted. On Windows it is a plain copy, so its bytes are counted when the snapshot
+        // goes and the blob's bytes are counted again when the emptied repo folder goes —
+        // both really are on disk, so both really are freed.
+        #[cfg(unix)]
         assert_eq!(outcome.freed, 7);
+        #[cfg(not(unix))]
+        assert_eq!(outcome.freed, 14);
         assert!(outcome.repo_removed);
         assert!(!repo.exists());
     }
