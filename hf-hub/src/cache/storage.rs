@@ -231,6 +231,13 @@ fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFile
 }
 
 pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<HFCacheInfo> {
+    let cache_dir = cache_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || scan_cache_dir_blocking(&cache_dir))
+        .await
+        .map_err(|e| crate::error::HFError::Other(format!("Cache scan task failed: {e}")))?
+}
+
+fn scan_cache_dir_blocking(cache_dir: &Path) -> crate::error::HFResult<HFCacheInfo> {
     let mut repos = Vec::new();
     let mut warnings = Vec::new();
     let mut total_size: u64 = 0;
@@ -517,6 +524,47 @@ mod tests {
         let result = scan_cache_dir(dir.path()).await.unwrap();
         assert_eq!(result.repos.len(), 0);
         assert_eq!(result.size_on_disk, 0);
+    }
+
+    // Deliberately a default (current-thread) runtime: on a single-threaded executor, an inline
+    // synchronous walk would monopolize the only worker thread and starve the timer below, so
+    // this only passes if the walk actually runs off-thread via `spawn_blocking`.
+    #[tokio::test]
+    async fn test_scan_cache_does_not_block_the_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path();
+        for i in 0..200 {
+            let repo_folder = format!("models--org{i}--repo{i}");
+            let blob_dir = cache.join(&repo_folder).join("blobs");
+            std::fs::create_dir_all(&blob_dir).unwrap();
+            std::fs::write(blob_dir.join("abc123"), b"hello world").unwrap();
+
+            let snap_dir = cache.join(&repo_folder).join("snapshots").join("commit1");
+            std::fs::create_dir_all(&snap_dir).unwrap();
+            #[cfg(not(windows))]
+            std::os::unix::fs::symlink("../../blobs/abc123", snap_dir.join("file.txt")).unwrap();
+        }
+
+        let ticked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ticked_clone = std::sync::Arc::clone(&ticked);
+        let ticker = async move {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            ticked_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+        };
+
+        tokio::select! {
+            result = scan_cache_dir(cache) => {
+                let info = result.unwrap();
+                assert_eq!(info.repos.len(), 200);
+                panic!(
+                    "scan_cache_dir completed before the 1ms ticker fired — the scan appears to be \
+                     running inline on the runtime thread instead of via spawn_blocking"
+                );
+            }
+            () = ticker => {
+                assert!(ticked.load(std::sync::atomic::Ordering::SeqCst));
+            }
+        }
     }
 
     #[tokio::test]
