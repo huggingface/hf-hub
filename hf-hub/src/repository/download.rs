@@ -251,11 +251,19 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     async fn download_file_to_bytes_impl(&self, params: DownloadFileStreamParams) -> HFResult<bytes::Bytes> {
-        let (content_length, stream) = self.download_file_stream_impl(params).await?;
+        let (_, stream) = self.download_file_stream_impl(params).await?;
         futures::pin_mut!(stream);
 
-        let capacity = content_length.unwrap_or(0) as usize;
-        let mut buf = bytes::BytesMut::with_capacity(capacity);
+        // SECURITY: the destination buffer must NOT be pre-sized from the server-declared
+        // `content_length`. That value is read straight from the `Content-Length` /
+        // `X-Linked-Size` response header (see `extract_file_size`) and is fully attacker-controlled
+        // whenever the client talks to an untrusted endpoint — a malicious mirror, an `HF_ENDPOINT`
+        // override, or a MITM. A hostile server can advertise a multi-gigabyte size while shipping
+        // only a handful of bytes, which used to trigger `BytesMut::with_capacity(content_length)`:
+        // an unbounded *upfront* allocation (CWE-770 / CWE-400) that aborts the process on
+        // allocation failure or exhausts memory long before any body is read. Grow the buffer from
+        // the bytes that actually arrive instead; the final `Bytes` is identical either way.
+        let mut buf = bytes::BytesMut::new();
         while let Some(chunk) = stream.next().await {
             buf.extend_from_slice(&chunk?);
         }
