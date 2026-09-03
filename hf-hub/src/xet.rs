@@ -126,15 +126,30 @@ fn emit_remaining_completes(progress: &Option<Progress>, tracked: &[TrackedDownl
     }
 }
 
+/// Owns a spawned task's [`JoinHandle`](tokio::task::JoinHandle) and aborts it on drop.
+///
+/// Used to tie a detached poller task's lifetime to a local variable: if the enclosing future
+/// (e.g. a download call) is dropped or aborted before it explicitly tears the poller down, this
+/// guard's `Drop` still runs and cancels the task, so the poller cannot outlive its download.
+#[cfg(not(target_family = "wasm"))]
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+#[cfg(not(target_family = "wasm"))]
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn spawn_download_progress_poller(
     progress: &Option<Progress>,
     group: &xet::xet_session::XetFileDownloadGroup,
     tracked: Arc<Vec<TrackedDownload>>,
-) -> Option<tokio::task::JoinHandle<()>> {
+) -> Option<AbortOnDrop> {
     let handler = progress.as_ref()?.clone();
     let group = group.clone();
-    Some(tokio::spawn(async move {
+    Some(AbortOnDrop(tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -193,7 +208,7 @@ fn spawn_download_progress_poller(
                 handler.emit(DownloadEvent::Progress { files });
             }
         }
-    }))
+    })))
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -618,9 +633,7 @@ impl<T: RepoType> HFRepository<T> {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
+        drop(poll_handle);
         result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
         emit_remaining_completes(progress, &tracked);
 
@@ -688,9 +701,7 @@ impl<T: RepoType> HFRepository<T> {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
+        drop(poll_handle);
         result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
         emit_remaining_completes(progress, &tracked);
 
@@ -767,9 +778,7 @@ impl<T: RepoType> HFRepository<T> {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
+        drop(poll_handle);
         result.map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
         emit_remaining_completes(progress, &tracked);
 
@@ -901,9 +910,7 @@ impl crate::buckets::HFBucket {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
+        drop(poll_handle);
         result.map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
         emit_remaining_completes(progress, &tracked);
 
@@ -1093,5 +1100,27 @@ mod tests {
             HFError::Xet { operation, .. } => assert_eq!(operation, XetOperation::Download),
             other => panic!("expected HFError::Xet, got {other:?}"),
         }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn test_abort_on_drop_aborts_task_when_dropped() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            let _tx = tx; // dropped only when this task's future is torn down.
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        });
+
+        let guard = AbortOnDrop(handle);
+        drop(guard);
+
+        // Tearing down the task's future drops `_tx`, closing the channel; `rx` resolves (with a
+        // `RecvError`, since nothing was ever sent) as soon as that happens. If the guard failed
+        // to abort the task, this would hang until the timeout fires instead.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+            .await
+            .expect("task should have been aborted (dropping its future) shortly after the guard was dropped");
     }
 }
