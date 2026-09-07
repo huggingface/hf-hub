@@ -480,11 +480,11 @@ pub struct ModelInfo {
     /// Library this model is associated with (e.g., `"transformers"`, `"diffusers"`).
     #[serde(rename = "library_name")]
     pub library_name: Option<String>,
+    /// Number of likes on the repo.
+    pub likes: Option<u64>,
     /// Whether the authenticated caller has liked the repo.
     #[serde(rename = "isLikedByUser")]
     pub liked_by_user: Option<bool>,
-    /// Number of likes on the repo.
-    pub likes: Option<u64>,
     /// Mask token used by the model (for fill-mask tasks).
     #[serde(rename = "mask_token")]
     pub mask_token: Option<String>,
@@ -2631,32 +2631,44 @@ mod tests {
         assert_eq!(serde_json::from_str::<SpaceInfo>(json).unwrap().liked_by_user, None);
     }
 
-    #[tokio::test]
-    async fn unlike_repo_deletes_the_like_endpoint() {
+    /// Bind a loopback listener that answers one request with `status_line` and an empty
+    /// body, and return the endpoint to point a client at plus a handle yielding the full
+    /// request head it saw.
+    async fn serve_one_request(status_line: &'static str) -> (String, tokio::task::JoinHandle<String>) {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            let mut head = String::new();
+            loop {
+                let mut line = String::new();
+                if socket.read_line(&mut line).await.unwrap() == 0 || line == "\r\n" {
+                    break;
+                }
+                head.push_str(&line);
+            }
+            let response = format!("{status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            socket.get_mut().write_all(response.as_bytes()).await.unwrap();
+            head
+        });
+        (endpoint, server)
+    }
+
+    #[tokio::test]
+    async fn unlike_repo_deletes_the_like_endpoint() {
         for (kind, expected) in [
             (super::RepoTypeAny::Model, "DELETE /api/models/acme/thing/like HTTP/1.1\r\n"),
             (super::RepoTypeAny::Dataset, "DELETE /api/datasets/acme/thing/like HTTP/1.1\r\n"),
             (super::RepoTypeAny::Space, "DELETE /api/spaces/acme/thing/like HTTP/1.1\r\n"),
         ] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let endpoint = format!("http://{}", listener.local_addr().unwrap());
-            let server = tokio::spawn(async move {
-                let (socket, _) = listener.accept().await.unwrap();
-                let mut socket = BufReader::new(socket);
-                let mut request_line = String::new();
-                socket.read_line(&mut request_line).await.unwrap();
-                socket
-                    .get_mut()
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                    .await
-                    .unwrap();
-                request_line
-            });
+            let (endpoint, server) = serve_one_request("HTTP/1.1 200 OK").await;
 
             HFClient::builder()
                 .endpoint(endpoint)
+                .token("hf_test_token")
                 .build()
                 .unwrap()
                 .unlike_repo()
@@ -2666,7 +2678,31 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert_eq!(server.await.unwrap(), expected);
+            let head = server.await.unwrap();
+            assert!(head.starts_with(expected), "unexpected request line in {head:?}");
+            assert!(
+                head.to_lowercase().contains("authorization: bearer hf_test_token\r\n"),
+                "missing authorization header in {head:?}"
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn unlike_repo_surfaces_a_not_found_response() {
+        let (endpoint, server) = serve_one_request("HTTP/1.1 404 Not Found").await;
+
+        let result = HFClient::builder()
+            .endpoint(endpoint)
+            .build()
+            .unwrap()
+            .unlike_repo()
+            .repo_type(super::RepoTypeAny::Model)
+            .repo_id("acme/thing")
+            .send()
+            .await;
+
+        assert!(result.is_err(), "a 404 must not be reported as success");
+        let head = server.await.unwrap();
+        assert!(head.starts_with("DELETE /api/models/acme/thing/like HTTP/1.1\r\n"), "unexpected request {head:?}");
     }
 }
