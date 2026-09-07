@@ -32,7 +32,8 @@
 //! - **Files** — list, download (with optional local cache or `local_dir`), upload single files or whole folders, and
 //!   build multi-operation commits.
 //! - **Commits & refs** — paginate commit history, compute diffs between revisions, and manage branches and tags.
-//! - **Users & orgs** — `whoami`, authentication checks, profile lookup, and follower/following lists.
+//! - **Users & orgs** — `whoami`, authentication checks, profile lookup, follower/following lists, and per-repo storage
+//!   usage.
 //! - **Spaces** — runtime, hardware, secrets, variables, pause/restart.
 //! - **Buckets** — namespaced storage buckets, tree listings, and bucket sync plans.
 //! - **Xet transfers** — high-performance chunk-deduplicated uploads and downloads integrated transparently into the
@@ -218,6 +219,7 @@ pub mod buckets;
 pub mod cache;
 pub mod progress;
 pub mod repository;
+pub mod settings;
 pub mod spaces;
 pub mod users;
 pub(crate) mod xet;

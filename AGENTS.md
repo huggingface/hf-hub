@@ -197,10 +197,12 @@ hf-hub/
 │   │   │   │                       #   snapshot_download (private helper structs live here)
 │   │   │   └── upload.rs           # upload_file, upload_folder, create_commit, delete_file/folder
 │   │   │                           #   (private helper structs live here)
+│   │   ├── settings.rs             # Settings component: RepoStorageEntry + list_settings_repositories
 │   │   ├── spaces.rs               # Spaces component: HFSpace handle, SpaceRuntime, SpaceVariable,
 │   │   │                           #   runtime/hardware/secrets/variables/duplicate
-│   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
-│   │   │                           #   user+org lookup, followers/following
+│   │   ├── users.rs                # Users component: User/Organization/OrgMembership/AuthInfo/
+│   │   │                           #   LikedRepoEntry, whoami, user+org lookup, followers/following,
+│   │   │                           #   likes
 │   │   ├── xet.rs                  # Xet component (pub(crate)): XetConnectionInfo + xet transfer
 │   │   │                           #   plumbing. Most methods are native-only (cached session, fs);
 │   │   │                           #   the wasm `xet_download_stream` builds a fresh session per call
