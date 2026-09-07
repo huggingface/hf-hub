@@ -6,8 +6,9 @@
 //! - [`HFClient::whoami`] — identify the caller and verify that the current token is valid.
 //! - [`HFClient::user_overview`] / [`HFClient::organization_overview`] — fetch a public profile by username or
 //!   organization name.
-//! - [`HFClient::list_user_followers`] / [`HFClient::list_user_following`] / [`HFClient::list_organization_members`] —
-//!   paginated listings that yield [`User`] entries one page at a time.
+//! - [`HFClient::list_user_followers`] / [`HFClient::list_user_following`] / [`HFClient::list_organization_members`] /
+//!   [`HFClient::list_organization_followers`] — paginated listings that yield [`User`] entries one page at a time.
+//! - [`HFClient::list_user_likes`] — paginated listing of the repos a user has liked.
 
 use bon::bon;
 use futures::Stream;
@@ -73,6 +74,37 @@ pub struct User {
     /// Organizations the authenticated user belongs to. Only populated by
     /// `whoami` for the caller themselves.
     pub orgs: Option<Vec<OrgMembership>>,
+    /// Details about the token used for the request — only returned by `whoami`.
+    pub auth: Option<AuthInfo>,
+}
+
+/// The token that authenticated a `whoami` request.
+///
+/// Returned inside [`User::auth`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthInfo {
+    /// The access token the request was made with, when the request used one.
+    pub access_token: Option<AccessTokenInfo>,
+}
+
+/// Metadata about the access token that authenticated a `whoami` request.
+///
+/// Returned inside [`AuthInfo::access_token`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessTokenInfo {
+    /// Name the token was given when it was created.
+    pub display_name: Option<String>,
+    /// Token role, typically `"read"`, `"write"`, or `"fineGrained"`.
+    pub role: Option<String>,
+    /// ISO-8601 timestamp when the token was created.
+    pub created_at: Option<String>,
+    /// Fine-grained permission scopes, present only for fine-grained tokens. Left untyped
+    /// because the Hub's shape here is not stable; most callers only need to know whether
+    /// it is set.
+    #[serde(default)]
+    pub fine_grained: Option<serde_json::Value>,
 }
 
 /// Summary entry for an organization the authenticated user belongs to.
@@ -89,6 +121,35 @@ pub struct OrgMembership {
     pub fullname: Option<String>,
     /// URL to the organization's avatar image.
     pub avatar_url: Option<String>,
+    /// The caller's role in the organization, typically `"admin"`, `"write"`, `"contributor"`,
+    /// or `"read"`.
+    #[serde(rename = "roleInOrg")]
+    pub role_in_org: Option<String>,
+}
+
+/// A repository a user has liked.
+///
+/// Returned inside [`LikedRepoEntry::repo`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LikedRepoRef {
+    /// Repo ID, in the form `owner/name`.
+    pub name: String,
+    /// Repo kind, one of `"model"`, `"dataset"`, or `"space"`.
+    #[serde(rename = "type")]
+    pub repo_type: String,
+}
+
+/// One entry in a user's list of liked repositories.
+///
+/// Yielded by [`HFClient::list_user_likes`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LikedRepoEntry {
+    /// ISO-8601 timestamp when the like was recorded.
+    pub created_at: Option<String>,
+    /// The liked repository.
+    pub repo: LikedRepoRef,
 }
 
 /// A Hugging Face Hub organization.
@@ -238,6 +299,27 @@ impl HFClient {
         Ok(self.paginate(url, vec![], limit))
     }
 
+    /// Stream the repositories a user has liked.
+    ///
+    /// Endpoint: `GET /api/users/{username}/likes`.
+    ///
+    /// # Parameters
+    ///
+    /// - `username` (required): Hub handle of the user.
+    /// - `limit`: cap on the total number of items yielded.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn list_user_likes(
+        &self,
+        /// Hub handle of the user.
+        #[builder(into)]
+        username: String,
+        /// Cap on the total number of items yielded.
+        limit: Option<usize>,
+    ) -> HFResult<impl Stream<Item = HFResult<LikedRepoEntry>> + '_> {
+        let url = Url::parse(&format!("{}/api/users/{}/likes", self.endpoint(), username))?;
+        Ok(self.paginate(url, vec![], limit))
+    }
+
     /// Stream the members of an organization.
     ///
     /// Endpoint: `GET /api/organizations/{organization}/members`.
@@ -256,6 +338,27 @@ impl HFClient {
         limit: Option<usize>,
     ) -> HFResult<impl Stream<Item = HFResult<User>> + '_> {
         let url = Url::parse(&format!("{}/api/organizations/{}/members", self.endpoint(), organization))?;
+        Ok(self.paginate(url, vec![], limit))
+    }
+
+    /// Stream the followers of an organization.
+    ///
+    /// Endpoint: `GET /api/organizations/{organization}/followers`.
+    ///
+    /// # Parameters
+    ///
+    /// - `organization` (required): Hub handle of the organization.
+    /// - `limit`: cap on the total number of items yielded.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn list_organization_followers(
+        &self,
+        /// Hub handle of the organization.
+        #[builder(into)]
+        organization: String,
+        /// Cap on the total number of items yielded.
+        limit: Option<usize>,
+    ) -> HFResult<impl Stream<Item = HFResult<User>> + '_> {
+        let url = Url::parse(&format!("{}/api/organizations/{}/followers", self.endpoint(), organization))?;
         Ok(self.paginate(url, vec![], limit))
     }
 }
@@ -316,6 +419,26 @@ impl crate::blocking::HFClientSync {
         })
     }
 
+    /// Blocking counterpart of [`HFClient::list_user_likes`]. Collects the stream into a
+    /// `Vec<LikedRepoEntry>`. See the async method for parameters and behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn list_user_likes(
+        &self,
+        #[builder(into)] username: String,
+        limit: Option<usize>,
+    ) -> HFResult<Vec<LikedRepoEntry>> {
+        use futures::StreamExt;
+        self.runtime.block_on(async move {
+            let stream = self.inner.list_user_likes().username(username).maybe_limit(limit).send()?;
+            futures::pin_mut!(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item?);
+            }
+            Ok(items)
+        })
+    }
+
     /// Blocking counterpart of [`HFClient::list_organization_members`]. Collects the stream into a
     /// `Vec<User>`. See the async method for parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
@@ -340,11 +463,61 @@ impl crate::blocking::HFClientSync {
             Ok(items)
         })
     }
+
+    /// Blocking counterpart of [`HFClient::list_organization_followers`]. Collects the stream into a
+    /// `Vec<User>`. See the async method for parameters and behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn list_organization_followers(
+        &self,
+        #[builder(into)] organization: String,
+        limit: Option<usize>,
+    ) -> HFResult<Vec<User>> {
+        use futures::StreamExt;
+        self.runtime.block_on(async move {
+            let stream = self
+                .inner
+                .list_organization_followers()
+                .organization(organization)
+                .maybe_limit(limit)
+                .send()?;
+            futures::pin_mut!(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item?);
+            }
+            Ok(items)
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Organization, User};
+    use futures::StreamExt;
+
+    use super::{LikedRepoEntry, OrgMembership, Organization, User};
+    use crate::client::HFClient;
+
+    /// Bind a loopback listener that answers one request with `body`, and return the
+    /// endpoint to point a client at plus a handle yielding the request line it saw.
+    async fn serve_one_json(body: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            let mut request_line = String::new();
+            socket.read_line(&mut request_line).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.get_mut().write_all(response.as_bytes()).await.unwrap();
+            request_line
+        });
+        (endpoint, server)
+    }
 
     #[test]
     fn test_user_full_profile() {
@@ -411,5 +584,104 @@ mod tests {
         assert_eq!(org.num_followers, Some(100));
         assert_eq!(org.num_papers, Some(5));
         assert_eq!(org.plan.as_deref(), Some("enterprise"));
+    }
+
+    #[test]
+    fn test_whoami_auth_block() {
+        let json = r#"{
+            "name":"alice",
+            "auth":{
+                "accessToken":{
+                    "displayName":"laptop",
+                    "role":"fineGrained",
+                    "createdAt":"2026-01-02T03:04:05.000Z",
+                    "fineGrained":{"scoped":[{"entity":{"type":"user","name":"alice"}}]}
+                }
+            }
+        }"#;
+        let user: User = serde_json::from_str(json).unwrap();
+        let token = user.auth.unwrap().access_token.unwrap();
+        assert_eq!(token.display_name.as_deref(), Some("laptop"));
+        assert_eq!(token.role.as_deref(), Some("fineGrained"));
+        assert_eq!(token.created_at.as_deref(), Some("2026-01-02T03:04:05.000Z"));
+        assert!(token.fine_grained.is_some());
+    }
+
+    #[test]
+    fn test_whoami_auth_block_absent_and_partial() {
+        let user: User = serde_json::from_str(r#"{"name":"alice"}"#).unwrap();
+        assert!(user.auth.is_none());
+
+        let user: User = serde_json::from_str(r#"{"name":"alice","auth":{}}"#).unwrap();
+        assert!(user.auth.unwrap().access_token.is_none());
+
+        let user: User = serde_json::from_str(r#"{"name":"alice","auth":{"accessToken":{"role":"read"}}}"#).unwrap();
+        let token = user.auth.unwrap().access_token.unwrap();
+        assert_eq!(token.role.as_deref(), Some("read"));
+        assert!(token.display_name.is_none());
+        assert!(token.fine_grained.is_none());
+    }
+
+    #[test]
+    fn test_org_membership_role_in_org() {
+        let json = r#"{"name":"acme","fullname":"Acme Corp","roleInOrg":"admin"}"#;
+        let membership: OrgMembership = serde_json::from_str(json).unwrap();
+        assert_eq!(membership.name.as_deref(), Some("acme"));
+        assert_eq!(membership.role_in_org.as_deref(), Some("admin"));
+
+        let membership: OrgMembership = serde_json::from_str(r#"{"name":"acme"}"#).unwrap();
+        assert!(membership.role_in_org.is_none());
+    }
+
+    #[test]
+    fn test_liked_repo_entry_deserialization() {
+        let json = r#"{"createdAt":"2026-01-02T03:04:05.000Z","repo":{"name":"acme/thing","type":"dataset"}}"#;
+        let entry: LikedRepoEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.created_at.as_deref(), Some("2026-01-02T03:04:05.000Z"));
+        assert_eq!(entry.repo.name, "acme/thing");
+        assert_eq!(entry.repo.repo_type, "dataset");
+
+        let entry: LikedRepoEntry = serde_json::from_str(r#"{"repo":{"name":"o/m","type":"model"}}"#).unwrap();
+        assert!(entry.created_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_user_likes_streams_entries_and_honors_limit() {
+        let body = r#"[
+            {"createdAt":"2026-01-02T03:04:05.000Z","repo":{"name":"acme/thing","type":"dataset"}},
+            {"createdAt":"2026-01-03T03:04:05.000Z","repo":{"name":"o/m","type":"model"}},
+            {"createdAt":"2026-01-04T03:04:05.000Z","repo":{"name":"o/s","type":"space"}}
+        ]"#;
+        let (endpoint, server) = serve_one_json(body).await;
+
+        let client = HFClient::builder().endpoint(endpoint).build().unwrap();
+        let stream = client.list_user_likes().username("alice").limit(2_usize).send().unwrap();
+        futures::pin_mut!(stream);
+        let mut entries = Vec::new();
+        while let Some(entry) = stream.next().await {
+            entries.push(entry.unwrap());
+        }
+
+        assert_eq!(server.await.unwrap(), "GET /api/users/alice/likes HTTP/1.1\r\n");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].repo.name, "acme/thing");
+        assert_eq!(entries[0].repo.repo_type, "dataset");
+        assert_eq!(entries[1].repo.name, "o/m");
+    }
+
+    #[tokio::test]
+    async fn list_organization_followers_requests_the_followers_endpoint() {
+        let (endpoint, server) = serve_one_json(r#"[{"user":"alice"},{"user":"bob"}]"#).await;
+
+        let client = HFClient::builder().endpoint(endpoint).build().unwrap();
+        let stream = client.list_organization_followers().organization("acme").send().unwrap();
+        futures::pin_mut!(stream);
+        let mut usernames = Vec::new();
+        while let Some(user) = stream.next().await {
+            usernames.push(user.unwrap().username);
+        }
+
+        assert_eq!(server.await.unwrap(), "GET /api/organizations/acme/followers HTTP/1.1\r\n");
+        assert_eq!(usernames, ["alice", "bob"]);
     }
 }

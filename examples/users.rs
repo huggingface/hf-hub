@@ -55,5 +55,30 @@ async fn main() -> hf_hub::HFResult<()> {
         }
     }
 
+    let org_followers = client
+        .list_organization_followers()
+        .organization("huggingface")
+        .limit(3_usize)
+        .send()?;
+    futures::pin_mut!(org_followers);
+    println!("\nFollowers of huggingface:");
+    while let Some(Ok(follower)) = org_followers.next().await {
+        println!("  - {}", follower.username);
+    }
+
+    let likes = client.list_user_likes().username("julien-c").limit(3_usize).send()?;
+    futures::pin_mut!(likes);
+    println!("\njulien-c likes:");
+    while let Some(Ok(like)) = likes.next().await {
+        println!("  - {} ({})", like.repo.name, like.repo.repo_type);
+    }
+
+    let repositories = client.list_settings_repositories().limit(3_usize).send()?;
+    futures::pin_mut!(repositories);
+    println!("\nYour storage usage:");
+    while let Some(Ok(entry)) = repositories.next().await {
+        println!("  - {} ({}): {:?} bytes", entry.id, entry.visibility, entry.storage);
+    }
+
     Ok(())
 }

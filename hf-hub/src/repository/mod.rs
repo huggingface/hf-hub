@@ -480,6 +480,9 @@ pub struct ModelInfo {
     /// Library this model is associated with (e.g., `"transformers"`, `"diffusers"`).
     #[serde(rename = "library_name")]
     pub library_name: Option<String>,
+    /// Whether the authenticated caller has liked the repo.
+    #[serde(rename = "isLikedByUser")]
+    pub liked_by_user: Option<bool>,
     /// Number of likes on the repo.
     pub likes: Option<u64>,
     /// Mask token used by the model (for fill-mask tasks).
@@ -548,6 +551,9 @@ pub struct DatasetInfo {
     pub downloads_all_time: Option<u64>,
     /// Number of likes on the repo.
     pub likes: Option<u64>,
+    /// Whether the authenticated caller has liked the repo.
+    #[serde(rename = "isLikedByUser")]
+    pub liked_by_user: Option<bool>,
     /// Hub tags declared on the dataset.
     pub tags: Option<Vec<String>>,
     /// ISO-8601 timestamp when the repo was created. The earliest possible value is
@@ -600,6 +606,9 @@ pub struct SpaceInfo {
     pub disabled: Option<bool>,
     /// Number of likes on the Space.
     pub likes: Option<u64>,
+    /// Whether the authenticated caller has liked the repo.
+    #[serde(rename = "isLikedByUser")]
+    pub liked_by_user: Option<bool>,
     /// Hub tags declared on the Space.
     pub tags: Option<Vec<String>>,
     /// ISO-8601 timestamp when the repo was created. The earliest possible value is
@@ -1509,6 +1518,37 @@ impl HFClient {
             url: format!("{}/{}{}", self.endpoint(), repo_type.url_prefix(), to_id),
         })
     }
+
+    /// Remove the authenticated user's like from a repository.
+    /// Endpoint: `DELETE /api/{models|datasets|spaces}/{repo_id}/like`.
+    ///
+    /// There is no `like_repo` counterpart: liking a repo is not part of the public
+    /// Hub client surface.
+    ///
+    /// # Parameters
+    ///
+    /// - `repo_type` (required): the repo kind, as a runtime-tagged [`RepoTypeAny`].
+    /// - `repo_id` (required): repository ID in `"owner/name"` or `"name"` format.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub async fn unlike_repo(
+        &self,
+        /// The repo kind, as a runtime-tagged [`RepoTypeAny`].
+        repo_type: RepoTypeAny,
+        /// Repository ID in `"owner/name"` or `"name"` format.
+        #[builder(into)]
+        repo_id: String,
+    ) -> HFResult<()> {
+        let url = format!("{}/like", self.api_url(repo_type.plural(), &repo_id));
+
+        let headers = self.auth_headers();
+        let response =
+            retry::retry(self.retry_config(), || self.http_client().delete(&url).headers(headers.clone()).send())
+                .await?;
+
+        self.check_response(response, Some(&repo_id), crate::error::NotFoundContext::Repo)
+            .await?;
+        Ok(())
+    }
 }
 
 impl<T: RepoType> HFRepository<T> {
@@ -2075,6 +2115,14 @@ impl crate::blocking::HFClientSync {
                 .send(),
         )
     }
+
+    /// Blocking counterpart of [`HFClient::unlike_repo`]. See the async method for parameters and
+    /// behavior.
+    #[builder(finish_fn = send, derive(Debug, Clone))]
+    pub fn unlike_repo(&self, repo_type: RepoTypeAny, #[builder(into)] repo_id: String) -> HFResult<()> {
+        self.runtime
+            .block_on(self.inner.unlike_repo().repo_type(repo_type).repo_id(repo_id).send())
+    }
 }
 
 #[cfg(all(feature = "blocking", not(target_family = "wasm")))]
@@ -2568,5 +2616,57 @@ mod tests {
         assert_eq!(info.models.as_deref(), Some(&["org/model-a".to_string(), "org/model-b".to_string()][..]));
         assert_eq!(info.datasets.as_deref(), Some(&["org/dataset".to_string()][..]));
         assert!(info.resource_group.is_some());
+    }
+
+    #[test]
+    fn test_is_liked_by_user_parses_for_every_repo_kind() {
+        let json = r#"{"id":"u/r","isLikedByUser":true}"#;
+        assert_eq!(serde_json::from_str::<ModelInfo>(json).unwrap().liked_by_user, Some(true));
+        assert_eq!(serde_json::from_str::<DatasetInfo>(json).unwrap().liked_by_user, Some(true));
+        assert_eq!(serde_json::from_str::<SpaceInfo>(json).unwrap().liked_by_user, Some(true));
+
+        let json = r#"{"id":"u/r"}"#;
+        assert_eq!(serde_json::from_str::<ModelInfo>(json).unwrap().liked_by_user, None);
+        assert_eq!(serde_json::from_str::<DatasetInfo>(json).unwrap().liked_by_user, None);
+        assert_eq!(serde_json::from_str::<SpaceInfo>(json).unwrap().liked_by_user, None);
+    }
+
+    #[tokio::test]
+    async fn unlike_repo_deletes_the_like_endpoint() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        for (kind, expected) in [
+            (super::RepoTypeAny::Model, "DELETE /api/models/acme/thing/like HTTP/1.1\r\n"),
+            (super::RepoTypeAny::Dataset, "DELETE /api/datasets/acme/thing/like HTTP/1.1\r\n"),
+            (super::RepoTypeAny::Space, "DELETE /api/spaces/acme/thing/like HTTP/1.1\r\n"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket = BufReader::new(socket);
+                let mut request_line = String::new();
+                socket.read_line(&mut request_line).await.unwrap();
+                socket
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+                request_line
+            });
+
+            HFClient::builder()
+                .endpoint(endpoint)
+                .build()
+                .unwrap()
+                .unlike_repo()
+                .repo_type(kind)
+                .repo_id("acme/thing")
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(server.await.unwrap(), expected);
+        }
     }
 }
