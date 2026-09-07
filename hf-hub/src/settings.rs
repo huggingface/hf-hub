@@ -43,13 +43,13 @@ impl HFClient {
     ///
     /// # Parameters
     ///
-    /// - `namespace`: Hub handle of an organization. Omit it to list the caller's own repositories.
+    /// - `namespace`: Hub handle of an organization. Omit it to list the caller's own repositories. For a value that is
+    ///   already an `Option<String>` at runtime, pass it through `maybe_namespace(opt)`.
     /// - `limit`: cap on the total number of items yielded.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_settings_repositories(
         &self,
         /// Hub handle of an organization. Omit it to list the caller's own repositories.
-        #[builder(into)]
         namespace: Option<String>,
         /// Cap on the total number of items yielded.
         limit: Option<usize>,
@@ -72,7 +72,7 @@ impl crate::blocking::HFClientSync {
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_settings_repositories(
         &self,
-        #[builder(into)] namespace: Option<String>,
+        namespace: Option<String>,
         limit: Option<usize>,
     ) -> HFResult<Vec<RepoStorageEntry>> {
         use futures::StreamExt;
@@ -168,11 +168,28 @@ mod tests {
         let (endpoint, server) = serve_one_json(BODY).await;
 
         let client = HFClient::builder().endpoint(endpoint).build().unwrap();
-        let stream = client.list_settings_repositories().namespace("acme").send().unwrap();
+        let stream = client
+            .list_settings_repositories()
+            .namespace("acme".to_string())
+            .send()
+            .unwrap();
         futures::pin_mut!(stream);
         let entry = stream.next().await.unwrap().unwrap();
 
         assert_eq!(server.await.unwrap(), "GET /api/organizations/acme/settings/repositories HTTP/1.1\r\n");
         assert_eq!(entry.id, "alice/thing");
+    }
+
+    #[tokio::test]
+    async fn list_settings_repositories_accepts_a_runtime_optional_namespace() {
+        let (endpoint, server) = serve_one_json(BODY).await;
+        let namespace: Option<String> = Some("acme".to_string());
+
+        let client = HFClient::builder().endpoint(endpoint).build().unwrap();
+        let stream = client.list_settings_repositories().maybe_namespace(namespace).send().unwrap();
+        futures::pin_mut!(stream);
+        stream.next().await.unwrap().unwrap();
+
+        assert_eq!(server.await.unwrap(), "GET /api/organizations/acme/settings/repositories HTTP/1.1\r\n");
     }
 }
