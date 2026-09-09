@@ -158,10 +158,9 @@ impl HFBucket {
             crate::client::append_path_segments(&mut url, prefix)?;
         }
 
-        let mut query = vec![];
-        if recursive {
-            query.push(("recursive".to_string(), "true".to_string()));
-        }
+        // The endpoint defaults to a recursive listing, so the flag has to be sent even when
+        // it is false: omitting it returns every nested file flat, with no directory entries.
+        let query = vec![("recursive".to_string(), recursive.to_string())];
 
         Ok(self.hf_client.paginate(url, query, None))
     }
@@ -1256,7 +1255,69 @@ impl crate::blocking::HFBucketSync {
 
 #[cfg(test)]
 mod tests {
-    use super::{BucketCopyFile, BucketCopySourceType, HFBucket};
+    use futures::TryStreamExt;
+
+    use super::{BucketCopyFile, BucketCopySourceType, BucketTreeEntry, HFBucket};
+
+    /// Serves one empty JSON page and hands back the request target it was asked for.
+    async fn capture_tree_request(recursive: bool) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let served = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let read = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+            let response =
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]";
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            request.lines().next().unwrap_or_default().to_string()
+        });
+
+        let client = crate::HFClient::builder().endpoint(format!("http://{addr}")).build().unwrap();
+        let bucket = HFBucket::new(client, "my-org", "my-bucket");
+        let entries: Vec<BucketTreeEntry> = bucket
+            .list_tree()
+            .prefix("data")
+            .recursive(recursive)
+            .send()
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(entries.is_empty());
+
+        served.await.unwrap()
+    }
+
+    /// The Hub's bucket tree endpoint lists recursively unless it is told not to, so a
+    /// non-recursive listing has to send `recursive=false` rather than omit the parameter.
+    /// Omitting it collapses the tree: every nested file comes back flat and the caller
+    /// never sees a directory entry to descend into.
+    #[tokio::test]
+    async fn non_recursive_list_tree_sends_the_flag_explicitly() {
+        let request = capture_tree_request(false).await;
+        assert!(
+            request.contains("recursive=false"),
+            "expected recursive=false in the request target, got: {request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recursive_list_tree_sends_the_flag() {
+        let request = capture_tree_request(true).await;
+        assert!(request.contains("recursive=true"), "expected recursive=true in the request target, got: {request}");
+    }
+
+    #[tokio::test]
+    async fn list_tree_puts_the_prefix_in_the_path() {
+        let request = capture_tree_request(false).await;
+        assert!(
+            request.contains("/api/buckets/my-org/my-bucket/tree/data"),
+            "expected the prefix as a path segment, got: {request}"
+        );
+    }
 
     #[test]
     fn test_bucket_accessors() {
