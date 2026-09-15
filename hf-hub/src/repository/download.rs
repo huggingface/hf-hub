@@ -13,6 +13,7 @@
 
 #[cfg(not(target_family = "wasm"))]
 use std::{
+    collections::HashMap,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -65,6 +66,16 @@ struct DownloadFileStreamParams {
     revision: Option<String>,
     range: Option<std::ops::Range<u64>>,
     progress: Option<Progress>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct CachedFileTarget<'a> {
+    cache_dir: &'a Path,
+    repo_folder: &'a str,
+    revision: &'a str,
+    commit_hash: &'a str,
+    filename: &'a str,
+    etag: &'a str,
 }
 
 /// Internal options struct used by `snapshot_download_impl`.
@@ -379,8 +390,8 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     /// Resolve the cached etag for a file by reading the symlink target in snapshots/.
-    /// On Windows, where copies are used instead of symlinks, `read_link` will fail
-    /// and this returns `None`, disabling conditional-request (If-None-Match) optimization.
+    /// If the snapshot is a regular file because symlinks are unavailable,
+    /// `read_link` returns `None` and conditional requests are skipped.
     #[cfg(not(target_family = "wasm"))]
     fn find_cached_etag(&self, repo_folder: &str, revision: &str, filename: &str) -> Option<String> {
         let cache_dir = self.hf_client.cache_dir();
@@ -474,14 +485,27 @@ impl<T: RepoType> HFRepository<T> {
         if status == reqwest::StatusCode::NOT_MODIFIED {
             let etag = cached_etag
                 .ok_or_else(|| HFError::malformed_response_at("304 Not Modified without cached ETag", url.clone()))?;
-            let commit_hash = if cache::is_commit_hash(revision) {
-                revision.to_string()
-            } else {
-                cache::read_ref(cache_dir, repo_folder, revision).await?.ok_or_else(|| {
+            let commit_hash = match extract_commit_hash(&head_response) {
+                Some(commit_hash) => commit_hash,
+                None if cache::is_commit_hash(revision) => revision.to_string(),
+                None => cache::read_ref(cache_dir, repo_folder, revision).await?.ok_or_else(|| {
                     HFError::malformed_response_at("304 Not Modified without cached commit hash", url.clone())
-                })?
+                })?,
             };
-            return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await;
+            let lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
+            return finalize_cached_file(
+                &lock,
+                CachedFileTarget {
+                    cache_dir,
+                    repo_folder,
+                    revision,
+                    commit_hash: &commit_hash,
+                    filename: &params.filename,
+                    etag: &etag,
+                },
+                false,
+            )
+            .await;
         }
 
         let etag = extract_etag(&head_response)
@@ -515,24 +539,88 @@ impl<T: RepoType> HFRepository<T> {
             total_bytes: file_size,
         });
 
+        let snapshot_path = cache::snapshot_path(cache_dir, repo_folder, &commit_hash, &params.filename);
+        if snapshot_path.exists() && !force_download {
+            if !cache::is_commit_hash(revision)
+                && let Err(error) = cache::write_ref(cache_dir, repo_folder, revision, &commit_hash).await
+            {
+                tracing::debug!(%error, revision, %commit_hash, "failed to update cache ref for existing snapshot");
+            }
+            params.progress.emit(DownloadEvent::Progress {
+                files: vec![FileProgress {
+                    filename: params.filename.clone(),
+                    bytes_completed: file_size,
+                    total_bytes: file_size,
+                    status: FileStatus::Complete,
+                }],
+            });
+            return Ok(snapshot_path);
+        }
+
         if has_xet_hash {
             let xet_hash =
                 xet_hash.ok_or_else(|| HFError::malformed_response_at("missing X-Xet-Hash header", url.clone()))?;
             let blob = cache::blob_path(cache_dir, repo_folder, &etag);
-            if !blob.exists() || force_download {
+            let lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
+            if snapshot_path.exists() && !force_download {
+                if !cache::is_commit_hash(revision)
+                    && let Err(error) = cache::write_ref(cache_dir, repo_folder, revision, &commit_hash).await
+                {
+                    tracing::debug!(%error, revision, %commit_hash, "failed to update cache ref for existing snapshot");
+                }
+                params.progress.emit(DownloadEvent::Progress {
+                    files: vec![FileProgress {
+                        filename: params.filename.clone(),
+                        bytes_completed: file_size,
+                        total_bytes: file_size,
+                        status: FileStatus::Complete,
+                    }],
+                });
+                return Ok(snapshot_path);
+            }
+            let new_blob = !blob.exists();
+            if new_blob || force_download {
                 if let Some(parent) = blob.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
-
                 self.xet_download_to_blob(revision, &params.filename, &xet_hash, file_size, &blob, &params.progress)
                     .await?;
             }
 
-            return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await;
+            return finalize_cached_file(
+                &lock,
+                CachedFileTarget {
+                    cache_dir,
+                    repo_folder,
+                    revision,
+                    commit_hash: &commit_hash,
+                    filename: &params.filename,
+                    etag: &etag,
+                },
+                new_blob,
+            )
+            .await;
         }
 
         let blob = cache::blob_path(cache_dir, repo_folder, &etag);
+        let lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
+
+        if snapshot_path.exists() && !force_download {
+            if !cache::is_commit_hash(revision)
+                && let Err(error) = cache::write_ref(cache_dir, repo_folder, revision, &commit_hash).await
+            {
+                tracing::debug!(%error, revision, %commit_hash, "failed to update cache ref for existing snapshot");
+            }
+            params.progress.emit(DownloadEvent::Progress {
+                files: vec![FileProgress {
+                    filename: params.filename.clone(),
+                    bytes_completed: file_size,
+                    total_bytes: file_size,
+                    status: FileStatus::Complete,
+                }],
+            });
+            return Ok(snapshot_path);
+        }
 
         if blob.exists() && !force_download {
             params.progress.emit(DownloadEvent::Progress {
@@ -543,10 +631,22 @@ impl<T: RepoType> HFRepository<T> {
                     status: FileStatus::Complete,
                 }],
             });
-            return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await;
+            return finalize_cached_file(
+                &lock,
+                CachedFileTarget {
+                    cache_dir,
+                    repo_folder,
+                    revision,
+                    commit_hash: &commit_hash,
+                    filename: &params.filename,
+                    etag: &etag,
+                },
+                false,
+            )
+            .await;
         }
 
-        let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
+        let new_blob = !blob.exists();
         let incomplete_path = PathBuf::from(format!("{}.incomplete", blob.display()));
         if let Some(parent) = incomplete_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -575,7 +675,19 @@ impl<T: RepoType> HFRepository<T> {
         });
         std::fs::rename(&incomplete_path, &blob)?;
 
-        finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await
+        finalize_cached_file(
+            &lock,
+            CachedFileTarget {
+                cache_dir,
+                repo_folder,
+                revision,
+                commit_hash: &commit_hash,
+                filename: &params.filename,
+                etag: &etag,
+            },
+            new_blob,
+        )
+        .await
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -822,9 +934,8 @@ impl<T: RepoType> HFRepository<T> {
         let mut cached_progress: Vec<FileProgress> = Vec::new();
         for meta in file_metas {
             let blob = cache::blob_path(cache_dir, &repo_folder, &meta.etag);
-            if blob.exists() && !force {
-                cache::create_pointer_symlink(cache_dir, &repo_folder, &meta.commit_hash, &meta.filename, &meta.etag)
-                    .await?;
+            let pointer = cache::snapshot_path(cache_dir, &repo_folder, &meta.commit_hash, &meta.filename);
+            if pointer.exists() && !force {
                 cached_progress.push(FileProgress {
                     filename: meta.filename.clone(),
                     bytes_completed: meta.file_size,
@@ -832,6 +943,30 @@ impl<T: RepoType> HFRepository<T> {
                     status: FileStatus::Complete,
                 });
                 continue;
+            }
+            if blob.exists() && !force {
+                let lock = cache::acquire_lock(cache_dir, &repo_folder, &meta.etag).await?;
+                if pointer.exists() || blob.exists() {
+                    if !pointer.exists() {
+                        cache::create_pointer_symlink(
+                            &lock,
+                            cache_dir,
+                            &repo_folder,
+                            &meta.commit_hash,
+                            &meta.filename,
+                            &meta.etag,
+                            false,
+                        )
+                        .await?;
+                    }
+                    cached_progress.push(FileProgress {
+                        filename: meta.filename.clone(),
+                        bytes_completed: meta.file_size,
+                        total_bytes: meta.file_size,
+                        status: FileStatus::Complete,
+                    });
+                    continue;
+                }
             }
             if meta.xet_hash.is_some() {
                 xet_metas.push(meta);
@@ -847,24 +982,108 @@ impl<T: RepoType> HFRepository<T> {
             if xet_metas.is_empty() {
                 return Ok::<_, HFError>(());
             }
-            let mut locks = Vec::with_capacity(xet_metas.len());
-            for m in &xet_metas {
-                locks.push(cache::acquire_lock(cache_dir, &repo_folder, &m.etag).await?);
+
+            let mut groups: HashMap<String, Vec<FileMetadataInfo>> = HashMap::new();
+            for meta in xet_metas {
+                groups.entry(meta.etag.clone()).or_default().push(meta);
             }
-            let batch_files: Vec<crate::xet::XetBatchFile> = xet_metas
-                .iter()
-                .map(|m| crate::xet::XetBatchFile {
-                    hash: m.xet_hash.as_ref().unwrap().clone(),
-                    file_size: m.file_size,
-                    path: cache::blob_path(cache_dir, &repo_folder, &m.etag),
-                    filename: m.filename.clone(),
-                })
-                .collect();
+
+            let mut etags: Vec<String> = groups.keys().cloned().collect();
+            etags.sort_unstable();
+            let mut locks = HashMap::with_capacity(etags.len());
+            for etag in &etags {
+                locks.insert(etag.clone(), cache::acquire_lock(cache_dir, &repo_folder, etag).await?);
+            }
+
+            let mut batch_files = Vec::new();
+            let mut pending_groups = Vec::new();
+            let mut locked_cached_progress = Vec::new();
+            for etag in etags {
+                let metas = groups.remove(&etag).unwrap_or_default();
+                let missing_metas: Vec<FileMetadataInfo> = metas
+                    .into_iter()
+                    .filter(|meta| {
+                        force
+                            || !cache::snapshot_path(cache_dir, &repo_folder, &meta.commit_hash, &meta.filename)
+                                .exists()
+                    })
+                    .collect();
+                if missing_metas.is_empty() {
+                    continue;
+                }
+
+                let blob = cache::blob_path(cache_dir, &repo_folder, &etag);
+                let lock = locks
+                    .get(&etag)
+                    .ok_or_else(|| HFError::Other(format!("missing cache lock for Xet ETag {etag}")))?;
+                if blob.exists() && !force {
+                    for meta in missing_metas {
+                        cache::create_pointer_symlink(
+                            lock,
+                            cache_dir,
+                            &repo_folder,
+                            &meta.commit_hash,
+                            &meta.filename,
+                            &meta.etag,
+                            false,
+                        )
+                        .await?;
+                        locked_cached_progress.push(FileProgress {
+                            filename: meta.filename,
+                            bytes_completed: meta.file_size,
+                            total_bytes: meta.file_size,
+                            status: FileStatus::Complete,
+                        });
+                    }
+                    continue;
+                }
+
+                let new_blob = !blob.exists();
+                let representative = missing_metas
+                    .first()
+                    .ok_or_else(|| HFError::Other(format!("missing Xet metadata for ETag {etag}")))?;
+                let xet_hash = representative.xet_hash.clone().ok_or_else(|| {
+                    HFError::malformed_response(format!("missing Xet hash for {}", representative.filename))
+                })?;
+                batch_files.push(crate::xet::XetBatchFile {
+                    hash: xet_hash,
+                    file_size: representative.file_size,
+                    path: blob,
+                    filename: representative.filename.clone(),
+                });
+                pending_groups.push((etag, new_blob, missing_metas));
+            }
+
+            if !locked_cached_progress.is_empty() {
+                params.progress.emit(DownloadEvent::Progress {
+                    files: locked_cached_progress,
+                });
+            }
             self.xet_download_batch(&commit_hash, &batch_files, &params.progress).await?;
-            for m in &xet_metas {
-                cache::create_pointer_symlink(cache_dir, &repo_folder, &m.commit_hash, &m.filename, &m.etag).await?;
+
+            for (etag, new_blob, metas) in pending_groups {
+                let lock = locks
+                    .get(&etag)
+                    .ok_or_else(|| HFError::Other(format!("missing cache lock for Xet ETag {etag}")))?;
+                let mut blob_must_be_preserved = !new_blob;
+                let last_index = metas.len().saturating_sub(1);
+                for (index, meta) in metas.into_iter().enumerate() {
+                    let move_blob = new_blob && !blob_must_be_preserved && index == last_index;
+                    let result = cache::create_pointer_symlink(
+                        lock,
+                        cache_dir,
+                        &repo_folder,
+                        &meta.commit_hash,
+                        &meta.filename,
+                        &meta.etag,
+                        move_blob,
+                    )
+                    .await?;
+                    if result.references_blob {
+                        blob_must_be_preserved = true;
+                    }
+                }
             }
-            drop(locks);
             Ok(())
         };
 
@@ -920,18 +1139,24 @@ async fn mark_no_exist_and_return_error(
 
 #[cfg(not(target_family = "wasm"))]
 async fn finalize_cached_file(
-    cache_dir: &Path,
-    repo_folder: &str,
-    revision: &str,
-    commit_hash: &str,
-    filename: &str,
-    etag: &str,
+    lock: &cache::CacheLock,
+    target: CachedFileTarget<'_>,
+    new_blob: bool,
 ) -> HFResult<PathBuf> {
-    if !cache::is_commit_hash(revision) {
-        cache::write_ref(cache_dir, repo_folder, revision, commit_hash).await?;
+    cache::create_pointer_symlink(
+        lock,
+        target.cache_dir,
+        target.repo_folder,
+        target.commit_hash,
+        target.filename,
+        target.etag,
+        new_blob,
+    )
+    .await?;
+    if !cache::is_commit_hash(target.revision) {
+        cache::write_ref(target.cache_dir, target.repo_folder, target.revision, target.commit_hash).await?;
     }
-    cache::create_pointer_symlink(cache_dir, repo_folder, commit_hash, filename, etag).await?;
-    Ok(cache::snapshot_path(cache_dir, repo_folder, commit_hash, filename))
+    Ok(cache::snapshot_path(target.cache_dir, target.repo_folder, target.commit_hash, target.filename))
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -1089,6 +1314,193 @@ pub(crate) fn wrap_stream_with_progress(
         }
     });
     Box::new(Box::pin(wrapped))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use crate::HFClientBuilder;
+    use crate::cache::storage as cache;
+
+    const TEST_COMMIT: &str = "0123456789012345678901234567890123456789";
+    const OLD_COMMIT: &str = "1111111111111111111111111111111111111111";
+    const TEST_ETAG: &str = "etag-http";
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn not_modified_uses_response_commit_and_updates_ref() {
+        let saw_conditional_header = Arc::new(AtomicBool::new(false));
+        let endpoint = start_not_modified_server(Arc::clone(&saw_conditional_header)).await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo_folder = "models--owner--repo";
+        let blob = cache::blob_path(dir.path(), repo_folder, TEST_ETAG);
+        std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        std::fs::write(&blob, b"unchanged content").unwrap();
+        let lock = cache::acquire_lock(dir.path(), repo_folder, TEST_ETAG).await.unwrap();
+        cache::create_pointer_symlink(&lock, dir.path(), repo_folder, OLD_COMMIT, "model.bin", TEST_ETAG, false)
+            .await
+            .unwrap();
+        drop(lock);
+        cache::write_ref(dir.path(), repo_folder, "main", OLD_COMMIT).await.unwrap();
+
+        let client = HFClientBuilder::new().endpoint(endpoint).cache_dir(dir.path()).build().unwrap();
+        let path = client
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .revision("main")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(path, cache::snapshot_path(dir.path(), repo_folder, TEST_COMMIT, "model.bin"));
+        assert_eq!(std::fs::read(path).unwrap(), b"unchanged content");
+        assert_eq!(cache::read_ref(dir.path(), repo_folder, "main").await.unwrap().as_deref(), Some(TEST_COMMIT));
+        assert!(saw_conditional_header.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn cache_download_reuses_regular_snapshot_and_updates_ref() {
+        let get_count = Arc::new(AtomicUsize::new(0));
+        let endpoint = start_metadata_server(Arc::clone(&get_count)).await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot = cache::snapshot_path(dir.path(), "models--owner--repo", TEST_COMMIT, "model.bin");
+        std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        std::fs::write(&snapshot, b"cached without symlink").unwrap();
+
+        let client = HFClientBuilder::new().endpoint(endpoint).cache_dir(dir.path()).build().unwrap();
+        let path = client
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .revision("main")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(path, snapshot);
+        assert_eq!(std::fs::read(path).unwrap(), b"cached without symlink");
+        assert_eq!(get_count.load(Ordering::Relaxed), 0);
+
+        let offline_path = client
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .revision("main")
+            .local_files_only(true)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(offline_path, snapshot);
+    }
+
+    #[tokio::test]
+    async fn concurrent_cache_downloads_recheck_after_lock() {
+        let get_count = Arc::new(AtomicUsize::new(0));
+        let endpoint = start_metadata_server(Arc::clone(&get_count)).await;
+        let dir = tempfile::tempdir().unwrap();
+        let client = HFClientBuilder::new().endpoint(endpoint).cache_dir(dir.path()).build().unwrap();
+
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let client = client.clone();
+            handles.push(tokio::spawn(async move {
+                client.model("owner", "repo").download_file().filename("model.bin").send().await
+            }));
+        }
+
+        let mut paths = Vec::new();
+        for handle in handles {
+            paths.push(handle.await.unwrap().unwrap());
+        }
+
+        assert!(paths.iter().all(|path| path == &paths[0]));
+        assert_eq!(std::fs::read(&paths[0]).unwrap(), b"downloaded");
+        assert_eq!(get_count.load(Ordering::Relaxed), 1);
+    }
+
+    async fn start_metadata_server(get_count: Arc<AtomicUsize>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let get_count = Arc::clone(&get_count);
+                tokio::spawn(async move {
+                    let mut request = vec![0; 4096];
+                    let Ok(read) = socket.read(&mut request).await else {
+                        return;
+                    };
+                    let request = String::from_utf8_lossy(&request[..read]);
+                    let is_get = request.starts_with("GET ");
+                    if is_get {
+                        get_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    let body = if is_get {
+                        b"downloaded".as_slice()
+                    } else {
+                        b"".as_slice()
+                    };
+                    if is_get {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                    let response = response_bytes(body);
+                    let _ = socket.write_all(&response).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn start_not_modified_server(saw_conditional_header: Arc<AtomicBool>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut request = vec![0; 4096];
+            let Ok(read) = socket.read(&mut request).await else {
+                return;
+            };
+            let request = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
+            saw_conditional_header
+                .store(request.contains(&format!("if-none-match: \"{TEST_ETAG}\"")), Ordering::Relaxed);
+            let response = format!(
+                "HTTP/1.1 304 Not Modified\r\n\
+                 X-Repo-Commit: {TEST_COMMIT}\r\n\
+                 Connection: close\r\n\
+                 \r\n"
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+        format!("http://{addr}")
+    }
+
+    fn response_bytes(body: &[u8]) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 200 OK\r\n\
+             ETag: \"{TEST_ETAG}\"\r\n\
+             X-Repo-Commit: {TEST_COMMIT}\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\
+             \r\n",
+            body.len()
+        )
+        .into_bytes()
+        .into_iter()
+        .chain(body.iter().copied())
+        .collect()
+    }
 }
 
 #[bon]
