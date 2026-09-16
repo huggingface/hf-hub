@@ -105,7 +105,9 @@ impl<T: RepoType> HFRepository<T> {
     // Determine whether the file is xet-backed and learn its size.
     //
     // Native: HEAD the resolve URL and read `X-Xet-Hash` /
-    // `Content-Length` / `X-Linked-Size` from the response headers.
+    // `Content-Length` / `X-Linked-Size` from the response headers. Stop at the
+    // first absolute redirect: the Hub sets those headers on the 302 itself and
+    // the CDN response it points at has none of them.
     //
     // Wasm: the resolve URL 302-redirects to a CAS blob URL, and the Fetch
     // spec only surfaces the final response's headers when following
@@ -1404,47 +1406,8 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::TcpListener;
-    use tokio::task::JoinHandle;
-
-    use crate::{HFClient, HFError};
-
-    async fn mock_hub(routes: &[(&str, &str)]) -> (HFClient, JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let routes: Vec<_> = routes
-            .iter()
-            .map(|(request, response)| (request.to_string(), response.replace("{endpoint}", &endpoint)))
-            .collect();
-        let server = tokio::spawn(async move {
-            loop {
-                let (socket, _) = listener.accept().await.unwrap();
-                let mut socket = BufReader::new(socket);
-                let mut request = String::new();
-                socket.read_line(&mut request).await.unwrap();
-                loop {
-                    let mut header = String::new();
-                    if socket.read_line(&mut header).await.unwrap() == 0 || header == "\r\n" {
-                        break;
-                    }
-                }
-                let response = routes
-                    .iter()
-                    .find(|(expected, _)| request.trim_end() == expected)
-                    .map(|(_, response)| response.as_str())
-                    .unwrap_or("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                socket.get_mut().write_all(response.as_bytes()).await.unwrap();
-            }
-        });
-        let client = HFClient::builder()
-            .endpoint(endpoint)
-            .token("test-token")
-            .retry_max_attempts(0)
-            .build()
-            .unwrap();
-        (client, server)
-    }
+    use crate::HFError;
+    use crate::test_support::mock_hub;
 
     #[tokio::test]
     async fn stream_metadata_preserves_xet_headers_on_redirects() {
