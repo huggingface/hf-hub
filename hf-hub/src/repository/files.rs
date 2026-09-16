@@ -29,10 +29,13 @@ use crate::error::HFResult;
 
 /// LFS metadata attached to a repository file, when the file is stored in Git LFS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BlobLfsInfo {
     /// Original file size in bytes, when reported by the Hub.
     pub size: Option<u64>,
-    /// SHA-256 object id of the LFS payload.
+    /// SHA-256 object id of the LFS payload. The Hub names this `oid` on `tree` and
+    /// `paths-info` responses.
+    #[serde(alias = "oid")]
     pub sha256: Option<String>,
     /// Size in bytes of the LFS pointer file stored in git.
     pub pointer_size: Option<u64>,
@@ -546,6 +549,24 @@ mod tests {
         assert_eq!(info.commit_url.as_deref(), Some("https://huggingface.co/owner/repo/commit/abc"));
         assert!(info.pr_url.is_none());
         assert!(info.pr_num.is_none());
+    }
+
+    /// The Hub spells the LFS object id `oid` and the pointer size `pointerSize`, so a
+    /// plain snake_case derive silently left both fields `None`.
+    #[test]
+    fn blob_lfs_info_reads_the_hub_field_names() {
+        let entry: RepoTreeEntry = serde_json::from_str(
+            r#"{"type":"file","oid":"blobsha","size":42,
+                "lfs":{"oid":"realsha","size":42,"pointerSize":134},"path":"model.bin"}"#,
+        )
+        .unwrap();
+        let RepoTreeEntry::File { lfs, .. } = entry else {
+            panic!("expected a file entry");
+        };
+        let lfs = lfs.expect("lfs metadata");
+        assert_eq!(lfs.sha256.as_deref(), Some("realsha"));
+        assert_eq!(lfs.pointer_size, Some(134));
+        assert_eq!(lfs.size, Some(42));
     }
 
     #[test]
