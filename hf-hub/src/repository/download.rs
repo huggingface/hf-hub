@@ -262,11 +262,10 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     async fn download_file_to_bytes_impl(&self, params: DownloadFileStreamParams) -> HFResult<bytes::Bytes> {
-        let (content_length, stream) = self.download_file_stream_impl(params).await?;
+        let (_, stream) = self.download_file_stream_impl(params).await?;
         futures::pin_mut!(stream);
 
-        let capacity = content_length.unwrap_or(0) as usize;
-        let mut buf = bytes::BytesMut::with_capacity(capacity);
+        let mut buf = bytes::BytesMut::new();
         while let Some(chunk) = stream.next().await {
             buf.extend_from_slice(&chunk?);
         }
