@@ -12,6 +12,7 @@ use bon::bon;
 use futures::stream::Stream;
 use reqwest::Url;
 
+#[cfg(not(target_family = "wasm"))]
 use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash};
 use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
 use crate::client::encode_ref;
@@ -132,6 +133,14 @@ impl<T: RepoType> HFRepository<T> {
     ///
     /// Endpoint: `HEAD {endpoint}/{prefix}{repo_id}/resolve/{revision}/{filepath}`.
     ///
+    /// For LFS- and Xet-backed files the Hub sets `X-Repo-Commit`, `X-Linked-Etag`,
+    /// `X-Linked-Size` and `X-Xet-Hash` on the 302 to the CDN, not on the CDN response,
+    /// so native targets stop at the first absolute redirect and read them off it.
+    /// The browser owns redirect handling on wasm and only exposes the final response's
+    /// headers, so there this dispatches to `paths-info` plus a revision lookup instead:
+    /// two requests rather than one, and `location` is the resolve URL rather than the CDN
+    /// URL the redirect would have named.
+    ///
     /// # Parameters
     ///
     /// - `filepath` (required): path of the file to inspect within the repository.
@@ -145,22 +154,37 @@ impl<T: RepoType> HFRepository<T> {
         /// Git revision. Defaults to the main branch.
         revision: Option<&str>,
     ) -> HFResult<FileMetadataInfo> {
-        let filename = filepath;
         let revision = revision.unwrap_or(constants::DEFAULT_REVISION);
+
+        #[cfg(target_family = "wasm")]
+        return self.file_metadata_via_paths_info(filepath, revision).await;
+
+        #[cfg(not(target_family = "wasm"))]
+        self.file_metadata_via_head(filepath, revision).await
+    }
+
+    /// HEAD the resolve URL and read the metadata off the response headers, stopping at the
+    /// first absolute redirect so the Hub's headers survive.
+    #[cfg(not(target_family = "wasm"))]
+    async fn file_metadata_via_head(&self, filename: String, revision: &str) -> HFResult<FileMetadataInfo> {
         let repo_path = self.repo_path();
         let url = self
             .hf_client
             .download_url(self.repo_type.url_prefix(), &repo_path, revision, &filename)?;
 
         let headers = self.hf_client.auth_headers();
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
-        })
-        .await?;
-        let response = self
-            .hf_client
-            .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Entry { path: filename.clone() })
-            .await?;
+        let response = self.hf_client.head_with_relative_redirects(&url, &headers).await?;
+        let response = if response.status().is_redirection() {
+            response
+        } else {
+            self.hf_client
+                .check_response(
+                    response,
+                    Some(&repo_path),
+                    crate::error::NotFoundContext::Entry { path: filename.clone() },
+                )
+                .await?
+        };
 
         let etag = extract_etag(&response).ok_or_else(|| {
             HFError::malformed_response_at(format!("missing ETag header for {filename}"), url.to_string())
@@ -176,7 +200,13 @@ impl<T: RepoType> HFRepository<T> {
             );
             0
         });
-        let location = Some(response.url().to_string());
+        let location = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| response.url().join(value).ok())
+            .map(|resolved| resolved.to_string())
+            .or_else(|| Some(response.url().to_string()));
 
         Ok(FileMetadataInfo {
             filename,
@@ -185,6 +215,64 @@ impl<T: RepoType> HFRepository<T> {
             xet_hash,
             file_size,
             location,
+        })
+    }
+
+    /// Assemble the same metadata from non-redirecting JSON endpoints, for targets that
+    /// cannot see a redirect's headers. `paths-info` carries everything but the revision's
+    /// commit, which the repo info endpoint supplies.
+    ///
+    /// Only wasm dispatches here, but it stays compiled everywhere so the native test suite
+    /// can cover it — CI never executes wasm tests.
+    #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+    async fn file_metadata_via_paths_info(&self, filename: String, revision: &str) -> HFResult<FileMetadataInfo> {
+        #[derive(serde::Deserialize)]
+        struct RevisionSha {
+            sha: String,
+        }
+
+        let entries = self
+            .get_paths_info()
+            .paths(vec![filename.clone()])
+            .revision(revision.to_string())
+            .send()
+            .await?;
+        let entry = entries
+            .into_iter()
+            .find(|entry| matches!(entry, RepoTreeEntry::File { path, .. } if *path == filename));
+        let (oid, size, lfs, xet_hash) = match entry {
+            Some(RepoTreeEntry::File {
+                oid,
+                size,
+                lfs,
+                xet_hash,
+                ..
+            }) => (oid, size, lfs, xet_hash),
+            _ => {
+                return Err(HFError::EntryNotFound {
+                    path: filename,
+                    repo_id: self.repo_path(),
+                    context: None,
+                });
+            },
+        };
+
+        let commit_hash = self.fetch_repo_info::<RevisionSha>(Some(revision.to_string()), None).await?.sha;
+
+        Ok(FileMetadataInfo {
+            // The Hub serves `X-Linked-Etag` (the LFS object's sha256) for LFS-backed files
+            // and the git blob oid otherwise; `paths-info` reports both separately.
+            etag: lfs.and_then(|lfs| lfs.sha256).unwrap_or(oid),
+            commit_hash,
+            xet_hash,
+            file_size: size,
+            location: Some(self.hf_client.download_url(
+                self.repo_type.url_prefix(),
+                &self.repo_path(),
+                revision,
+                &filename,
+            )?),
+            filename,
         })
     }
 }
@@ -252,5 +340,145 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .maybe_revision(revision)
                 .send(),
         )
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    use crate::test_support::mock_hub;
+
+    const XET_REDIRECT: &str = "HTTP/1.1 302 Found\r\nLocation: {endpoint}/cdn\r\nX-Repo-Commit: deadbeef\r\nX-Linked-Etag: \"realsha\"\r\nX-Linked-Size: 42\r\nX-Xet-Hash: abc123\r\nETag: \"hubetag\"\r\nContent-Length: 1102\r\nConnection: close\r\n\r\n";
+    const CDN_OK: &str = "HTTP/1.1 200 OK\r\nETag: \"cdnetag\"\r\nContent-Length: 42\r\nConnection: close\r\n\r\n";
+
+    #[tokio::test]
+    async fn file_metadata_reads_headers_from_the_cdn_redirect() {
+        let (client, server) = mock_hub(&[
+            ("HEAD /owner/repo/resolve/main/model.bin HTTP/1.1", XET_REDIRECT),
+            ("HEAD /cdn HTTP/1.1", CDN_OK),
+        ])
+        .await;
+        let metadata = client
+            .model("owner", "repo")
+            .get_file_metadata()
+            .filepath("model.bin")
+            .send()
+            .await;
+        server.abort();
+
+        let metadata = metadata.unwrap();
+        assert_eq!(metadata.xet_hash.as_deref(), Some("abc123"));
+        assert_eq!(metadata.commit_hash, "deadbeef");
+        assert_eq!(metadata.etag, "realsha");
+        assert_eq!(metadata.file_size, 42);
+        assert!(metadata.location.unwrap().ends_with("/cdn"));
+    }
+
+    #[tokio::test]
+    async fn file_metadata_reads_headers_from_a_direct_response() {
+        let (client, server) = mock_hub(&[(
+            "HEAD /owner/repo/resolve/main/config.json HTTP/1.1",
+            "HTTP/1.1 200 OK\r\nX-Repo-Commit: deadbeef\r\nETag: \"abc\"\r\nContent-Length: 570\r\nConnection: close\r\n\r\n",
+        )])
+        .await;
+        let metadata = client
+            .model("owner", "repo")
+            .get_file_metadata()
+            .filepath("config.json")
+            .send()
+            .await;
+        server.abort();
+
+        let metadata = metadata.unwrap();
+        assert!(metadata.xet_hash.is_none());
+        assert_eq!(metadata.commit_hash, "deadbeef");
+        assert_eq!(metadata.etag, "abc");
+        assert_eq!(metadata.file_size, 570);
+        assert!(metadata.location.unwrap().ends_with("/owner/repo/resolve/main/config.json"));
+    }
+
+    #[tokio::test]
+    async fn file_metadata_surfaces_missing_file_errors() {
+        let (client, server) = mock_hub(&[]).await;
+        let result = client
+            .model("owner", "repo")
+            .get_file_metadata()
+            .filepath("missing.bin")
+            .send()
+            .await;
+        server.abort();
+        assert!(
+            matches!(result, Err(crate::HFError::EntryNotFound { repo_id, path, .. }) if repo_id == "owner/repo" && path == "missing.bin")
+        );
+    }
+
+    // The wasm dispatch is exercised here because CI never runs wasm tests; the helper
+    // itself is target-independent.
+    #[tokio::test]
+    async fn paths_info_fallback_matches_the_header_path_for_an_lfs_file() {
+        let (client, server) = mock_hub(&[
+            (
+                "POST /api/models/owner/repo/paths-info/main HTTP/1.1",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 133\r\nConnection: close\r\n\r\n[{\"type\":\"file\",\"oid\":\"blobsha\",\"size\":42,\"lfs\":{\"oid\":\"realsha\",\"size\":42,\"pointerSize\":134},\"xetHash\":\"abc123\",\"path\":\"model.bin\"}]",
+            ),
+            (
+                "GET /api/models/owner/repo/revision/main HTTP/1.1",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"sha\":\"deadbeef\"}",
+            ),
+        ])
+        .await;
+        let metadata = client
+            .model("owner", "repo")
+            .file_metadata_via_paths_info("model.bin".to_string(), "main")
+            .await;
+        server.abort();
+
+        let metadata = metadata.unwrap();
+        // Same values the redirect-header path produces for the equivalent file.
+        assert_eq!(metadata.xet_hash.as_deref(), Some("abc123"));
+        assert_eq!(metadata.commit_hash, "deadbeef");
+        assert_eq!(metadata.etag, "realsha");
+        assert_eq!(metadata.file_size, 42);
+    }
+
+    #[tokio::test]
+    async fn paths_info_fallback_uses_the_blob_oid_for_a_plain_file() {
+        let (client, server) = mock_hub(&[
+            (
+                "POST /api/models/owner/repo/paths-info/main HTTP/1.1",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 65\r\nConnection: close\r\n\r\n[{\"type\":\"file\",\"oid\":\"blobsha\",\"size\":570,\"path\":\"config.json\"}]",
+            ),
+            (
+                "GET /api/models/owner/repo/revision/main HTTP/1.1",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"sha\":\"deadbeef\"}",
+            ),
+        ])
+        .await;
+        let metadata = client
+            .model("owner", "repo")
+            .file_metadata_via_paths_info("config.json".to_string(), "main")
+            .await;
+        server.abort();
+
+        let metadata = metadata.unwrap();
+        assert_eq!(metadata.etag, "blobsha");
+        assert!(metadata.xet_hash.is_none());
+        assert_eq!(metadata.file_size, 570);
+    }
+
+    #[tokio::test]
+    async fn paths_info_fallback_surfaces_missing_file_errors() {
+        let (client, server) = mock_hub(&[(
+            "POST /api/models/owner/repo/paths-info/main HTTP/1.1",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]",
+        )])
+        .await;
+        let result = client
+            .model("owner", "repo")
+            .file_metadata_via_paths_info("missing.bin".to_string(), "main")
+            .await;
+        server.abort();
+        assert!(
+            matches!(result, Err(crate::HFError::EntryNotFound { repo_id, path, .. }) if repo_id == "owner/repo" && path == "missing.bin")
+        );
     }
 }
