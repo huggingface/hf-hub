@@ -116,7 +116,9 @@ impl<T: RepoType> HFRepository<T> {
     // Determine whether the file is xet-backed and learn its size.
     //
     // Native: HEAD the resolve URL and read `X-Xet-Hash` /
-    // `Content-Length` / `X-Linked-Size` from the response headers.
+    // `Content-Length` / `X-Linked-Size` from the response headers. Stop at the
+    // first absolute redirect: the Hub sets those headers on the 302 itself and
+    // the CDN response it points at has none of them.
     //
     // Wasm: the resolve URL 302-redirects to a CAS blob URL, and the Fetch
     // spec only surfaces the final response's headers when following
@@ -135,20 +137,20 @@ impl<T: RepoType> HFRepository<T> {
             .hf_client
             .download_url(self.repo_type.url_prefix(), &repo_path, revision, filename)?;
         let headers = self.hf_client.auth_headers();
-        let head_response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().head(&url).headers(headers.clone()).send()
-        })
-        .await?;
-        let head_response = self
-            .hf_client
-            .check_response(
-                head_response,
-                Some(&repo_path),
-                crate::error::NotFoundContext::Entry {
-                    path: filename.to_string(),
-                },
-            )
-            .await?;
+        let head_response = self.hf_client.head_with_relative_redirects(&url, &headers).await?;
+        let head_response = if head_response.status().is_redirection() {
+            head_response
+        } else {
+            self.hf_client
+                .check_response(
+                    head_response,
+                    Some(&repo_path),
+                    crate::error::NotFoundContext::Entry {
+                        path: filename.to_string(),
+                    },
+                )
+                .await?
+        };
         Ok((extract_xet_hash(&head_response), extract_file_size(&head_response)))
     }
 
@@ -1315,15 +1317,16 @@ pub(crate) fn wrap_stream_with_progress(
     Box::new(Box::pin(wrapped))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    use crate::HFClientBuilder;
     use crate::cache::storage as cache;
+    use crate::test_support::mock_hub;
+    use crate::{HFClientBuilder, HFError};
 
     const TEST_COMMIT: &str = "0123456789012345678901234567890123456789";
     const OLD_COMMIT: &str = "1111111111111111111111111111111111111111";
@@ -1499,6 +1502,90 @@ mod tests {
         .into_iter()
         .chain(body.iter().copied())
         .collect()
+    }
+
+    #[tokio::test]
+    async fn stream_metadata_preserves_xet_headers_on_redirects() {
+        let xet_redirect = "HTTP/1.1 302 Found\r\nLocation: {endpoint}/cdn\r\nX-Xet-Hash: abc123\r\nX-Linked-Size: 42\r\nContent-Length: 123\r\nConnection: close\r\n\r\n";
+        for initial_response in [
+            xet_redirect,
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: /renamed/repo/resolve/main/model.bin\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        ] {
+            let (client, server) = mock_hub(&[
+                ("HEAD /owner/repo/resolve/main/model.bin HTTP/1.1", initial_response),
+                ("HEAD /renamed/repo/resolve/main/model.bin HTTP/1.1", xet_redirect),
+                ("HEAD /cdn HTTP/1.1", "HTTP/1.1 200 OK\r\nContent-Length: 42\r\nConnection: close\r\n\r\n"),
+            ])
+            .await;
+            let result = client
+                .model("owner", "repo")
+                .resolve_xet_hash_and_size("main", "model.bin")
+                .await;
+            server.abort();
+            assert_eq!(result.unwrap(), (Some("abc123".to_string()), Some(42)));
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_requests_xet_token_after_metadata_redirect() {
+        let (client, server) = mock_hub(&[
+            (
+                "HEAD /owner/repo/resolve/main/model.bin HTTP/1.1",
+                "HTTP/1.1 302 Found\r\nLocation: {endpoint}/cdn\r\nX-Xet-Hash: abc123\r\nX-Linked-Size: 42\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            ),
+            ("HEAD /cdn HTTP/1.1", "HTTP/1.1 200 OK\r\nContent-Length: 42\r\nConnection: close\r\n\r\n"),
+            (
+                "GET /api/models/owner/repo/xet-read-token/main HTTP/1.1",
+                "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            ),
+        ])
+        .await;
+        let result = client
+            .model("owner", "repo")
+            .download_file_stream()
+            .filename("model.bin")
+            .send()
+            .await;
+        server.abort();
+        assert!(
+            matches!(result, Err(HFError::AuthRequired { context }) if context.url.ends_with("/xet-read-token/main"))
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_downloads_plain_http_files() {
+        let (client, server) = mock_hub(&[
+            (
+                "HEAD /owner/repo/resolve/main/config.json HTTP/1.1",
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n",
+            ),
+            (
+                "GET /owner/repo/resolve/main/config.json HTTP/1.1",
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+            ),
+        ])
+        .await;
+        let result = client
+            .model("owner", "repo")
+            .download_file_to_bytes()
+            .filename("config.json")
+            .send()
+            .await;
+        server.abort();
+        assert_eq!(result.unwrap().as_ref(), b"{}");
+    }
+
+    #[tokio::test]
+    async fn stream_metadata_preserves_missing_file_errors() {
+        let (client, server) = mock_hub(&[]).await;
+        let result = client
+            .model("owner", "repo")
+            .resolve_xet_hash_and_size("main", "missing.bin")
+            .await;
+        server.abort();
+        assert!(
+            matches!(result, Err(HFError::EntryNotFound { repo_id, path, .. }) if repo_id == "owner/repo" && path == "missing.bin")
+        );
     }
 }
 
