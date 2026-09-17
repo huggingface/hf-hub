@@ -138,7 +138,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
       - name: Install wasm-bindgen-cli 0.2.121
-        run: cargo install -f wasm-bindgen-cli --version 0.2.121
+        run: cargo install -f wasm-bindgen-cli --version 0.2.121 --locked
 
       # ubuntu-latest runners ship Chrome + chromedriver preinstalled; expose
       # chromedriver via the CHROMEDRIVER env var so wasm-bindgen-test-runner
@@ -199,7 +199,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
 
       - name: Install cargo audit
-        run: cargo install cargo-audit
+        run: cargo install cargo-audit --locked
 
       - name: Run audit
         run: cargo audit -D warnings
