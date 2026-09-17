@@ -26,7 +26,7 @@ jobs:
     runs-on:
       group: aws-general-8-plus
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Mark check run in progress
         if: inputs.check_run_id != ''
@@ -40,14 +40,14 @@ jobs:
             -f "output[summary]=Compiling and running benchmarks..."
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # v1
         with:
           toolchain: stable
 
       - name: Set up HF registry proxies
         uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
 
       - name: Run benchmarks
         run: cargo bench --bench sync_api -- --output-format bencher 2>&1 | tee bench_output.txt
@@ -63,7 +63,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Compare against baseline
-        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372  # v1.22.0
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba  # v1.22.1
         with:
           tool: cargo
           output-file-path: bench_output.txt
