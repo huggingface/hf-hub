@@ -11,6 +11,8 @@ env:
 
 jobs:
   fmt:
+    permissions:
+      contents: read
     name: Format
     runs-on:
       group: aws-general-8-plus
@@ -30,6 +32,8 @@ jobs:
         run: cargo +nightly fmt --all -- --check
 
   lint:
+    permissions:
+      contents: read
     name: Lint
     runs-on:
       group: aws-general-8-plus
@@ -54,6 +58,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   build-and-test:
+    permissions:
+      contents: read
     name: Build & Test
     runs-on: ${{ matrix.runs-on }}
     strategy:
@@ -162,6 +168,8 @@ jobs:
           ./wasm/tests/run_tests.sh
 
   docs:
+    permissions:
+      contents: read
     name: Docs
     runs-on:
       group: aws-general-8-plus
@@ -182,6 +190,8 @@ jobs:
         run: RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo +nightly doc -p hf-hub --features blocking --no-deps
 
   audit:
+    permissions:
+      contents: read
     name: Audit
     runs-on:
       group: aws-general-8-plus
