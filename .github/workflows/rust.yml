@@ -17,16 +17,16 @@ jobs:
     runs-on:
       group: aws-general-8-plus
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Rust Nightly
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master 2026-09-12
         with:
           toolchain: nightly
           components: rustfmt
 
       - name: Set up HF registry proxies
-        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@514eaf34ed7574421e6556e62592cdd1c65c5eff  # main
 
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
@@ -38,18 +38,18 @@ jobs:
     runs-on:
       group: aws-general-8-plus
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master 2026-09-12
         with:
           toolchain: stable
           components: clippy
 
       - name: Set up HF registry proxies
-        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@514eaf34ed7574421e6556e62592cdd1c65c5eff  # main
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
 
       - name: Clippy (default features)
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -77,21 +77,21 @@ jobs:
             runs-on: macOS-latest
             use_hf_registries: false
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master 2026-09-12
         with:
           toolchain: stable
 
       - name: Set up HF registry proxies
         if: matrix.use_hf_registries
-        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@514eaf34ed7574421e6556e62592cdd1c65c5eff  # main
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
 
       - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.14"
 
@@ -113,15 +113,15 @@ jobs:
     name: WASM compile check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Rust Stable + wasm32 target
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master 2026-09-12
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
 
       - name: Check hf-hub builds for wasm32-unknown-unknown
         run: ./scripts/verify_wasm.sh
@@ -130,18 +130,18 @@ jobs:
     name: WASM integration tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # The xet download test exercises `hf-xet`'s threaded wasm at runtime,
       # which requires `-Z build-std` (and therefore nightly + `rust-src`).
       - name: Install Rust Nightly + wasm32 target + rust-src
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master 2026-09-12
         with:
           toolchain: nightly
           targets: wasm32-unknown-unknown
           components: rust-src
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
 
       - name: Install wasm-bindgen-cli 0.2.121
         run: cargo install -f wasm-bindgen-cli --version 0.2.121 --locked
@@ -174,17 +174,17 @@ jobs:
     runs-on:
       group: aws-general-8-plus
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Rust Nightly
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master 2026-09-12
         with:
           toolchain: nightly
 
       - name: Set up HF registry proxies
-        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@514eaf34ed7574421e6556e62592cdd1c65c5eff  # main
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
 
       - name: Build docs
         run: RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo +nightly doc -p hf-hub --features blocking --no-deps
@@ -196,17 +196,17 @@ jobs:
     runs-on:
       group: aws-general-8-plus
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9  # 2026-03-27
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master 2026-09-12
         with:
           toolchain: stable
 
       - name: Set up HF registry proxies
-        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
+        uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@514eaf34ed7574421e6556e62592cdd1c65c5eff  # main
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
 
       - name: Install cargo audit
         run: cargo install cargo-audit --locked
