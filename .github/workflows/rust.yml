@@ -9,6 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions: {}
+
 jobs:
   fmt:
     permissions:
@@ -110,6 +112,8 @@ jobs:
           cargo test --workspace --all-features --all-targets --verbose
 
   wasm:
+    permissions:
+      contents: read
     name: WASM compile check
     runs-on: ubuntu-latest
     steps:
@@ -127,6 +131,8 @@ jobs:
         run: ./scripts/verify_wasm.sh
 
   wasm-test:
+    permissions:
+      contents: read
     name: WASM integration tests
     runs-on: ubuntu-latest
     steps:

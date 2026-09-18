@@ -16,13 +16,15 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: write
-  checks: write
-  pull-requests: write
+
+permissions: {}
 
 jobs:
   bench:
+    permissions:
+      checks: write
+      contents: write
+      pull-requests: write
     runs-on:
       group: aws-general-8-plus
     steps:
@@ -32,8 +34,10 @@ jobs:
         if: inputs.check_run_id != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          CHECK_RUN_ID: ${{ inputs.check_run_id }}
         run: |
-          gh api "repos/${{ github.repository }}/check-runs/${{ inputs.check_run_id }}" \
+          gh api "repos/${REPOSITORY}/check-runs/${CHECK_RUN_ID}" \
             -X PATCH \
             -f "status=in_progress" \
             -f "output[title]=Benchmarks running" \
@@ -83,12 +87,17 @@ jobs:
         if: always() && inputs.pr_number != '' && hashFiles('bench_output.txt') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
         run: |
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          run_url="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
           {
             echo "## Benchmark Results"
             echo ""
-            echo "Commit: \`${{ inputs.head_sha }}\`"
+            echo "Commit: \`${HEAD_SHA}\`"
             echo ""
             echo "See the [workflow run]($run_url) for the comparison table against the \`main\` baseline."
             echo ""
@@ -101,23 +110,27 @@ jobs:
             echo '</details>'
           } > comparison.md
 
-          existing=$(gh api "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments" \
+          existing=$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
             --jq '.[] | select(.body | startswith("## Benchmark Results")) | .id' | head -1)
 
           if [ -n "$existing" ]; then
-            gh api "repos/${{ github.repository }}/issues/comments/$existing" \
+            gh api "repos/${REPOSITORY}/issues/comments/$existing" \
               -X PATCH -F "body=@comparison.md"
           else
-            gh pr comment "${{ inputs.pr_number }}" --body-file comparison.md
+            gh pr comment "${PR_NUMBER}" --body-file comparison.md
           fi
 
       - name: Complete check run (success)
         if: always() && inputs.check_run_id != '' && !failure() && !cancelled()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          CHECK_RUN_ID: ${{ inputs.check_run_id }}
         run: |
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          gh api "repos/${{ github.repository }}/check-runs/${{ inputs.check_run_id }}" \
+          run_url="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          gh api "repos/${REPOSITORY}/check-runs/${CHECK_RUN_ID}" \
             -X PATCH \
             -f "status=completed" \
             -f "conclusion=success" \
@@ -128,9 +141,13 @@ jobs:
         if: always() && inputs.check_run_id != '' && (failure() || cancelled())
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          CHECK_RUN_ID: ${{ inputs.check_run_id }}
         run: |
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          gh api "repos/${{ github.repository }}/check-runs/${{ inputs.check_run_id }}" \
+          run_url="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
+          gh api "repos/${REPOSITORY}/check-runs/${CHECK_RUN_ID}" \
             -X PATCH \
             -f "status=completed" \
             -f "conclusion=failure" \
