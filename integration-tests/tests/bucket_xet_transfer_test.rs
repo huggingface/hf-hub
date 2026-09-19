@@ -137,6 +137,60 @@ async fn test_bucket_upload_small_text_file() {
     delete_test_bucket(&client, &namespace, &name).await;
 }
 
+/// A non-recursive listing must collapse nested files into a directory entry the caller
+/// can descend into. Every other bucket test here lists with `recursive(true)`, which
+/// masked a bug where `recursive(false)` was never sent and the endpoint's recursive
+/// default won: the tree came back flat, with nested paths and no directory entries.
+#[tokio::test]
+async fn test_bucket_list_tree_non_recursive_returns_directories() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+
+    let (namespace, name) = create_test_bucket(&client, &unique_suffix()).await;
+    let bucket = client.bucket(&namespace, &name);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let nested = tmp.path().join("nested.txt");
+    std::fs::write(&nested, b"nested content").unwrap();
+    let top = tmp.path().join("top.txt");
+    std::fs::write(&top, b"top content").unwrap();
+
+    bucket
+        .upload_files()
+        .files(vec![
+            BucketUpload::new(nested, "sub/nested.txt"),
+            BucketUpload::new(top, "top.txt"),
+        ])
+        .send()
+        .await
+        .expect("bucket upload_files should succeed");
+
+    wait_for_bucket_file(&bucket, "sub/nested.txt").await;
+
+    let entries: Vec<BucketTreeEntry> =
+        bucket.list_tree().recursive(false).send().unwrap().try_collect().await.unwrap();
+
+    let paths: Vec<&str> = entries
+        .iter()
+        .map(|e| match e {
+            BucketTreeEntry::File { path, .. } | BucketTreeEntry::Directory { path, .. } => path.as_str(),
+        })
+        .collect();
+
+    assert!(
+        entries
+            .iter()
+            .any(|e| matches!(e, BucketTreeEntry::Directory { path, .. } if path == "sub")),
+        "expected a directory entry for `sub`, got {paths:?}"
+    );
+    assert!(!paths.contains(&"sub/nested.txt"), "non-recursive listing leaked a nested path, got {paths:?}");
+    assert!(paths.contains(&"top.txt"), "expected the top-level file, got {paths:?}");
+
+    delete_test_bucket(&client, &namespace, &name).await;
+}
+
 #[tokio::test]
 async fn test_bucket_upload_multiple_files() {
     let Some(client) = api() else { return };
