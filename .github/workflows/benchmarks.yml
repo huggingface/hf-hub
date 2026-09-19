@@ -16,38 +16,43 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: write
-  checks: write
-  pull-requests: write
+
+permissions: {}
 
 jobs:
   bench:
+    permissions:
+      checks: write
+      contents: write
+      issues: write
+      pull-requests: write
     runs-on:
       group: aws-general-8-plus
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Mark check run in progress
         if: inputs.check_run_id != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          CHECK_RUN_ID: ${{ inputs.check_run_id }}
         run: |
-          gh api "repos/${{ github.repository }}/check-runs/${{ inputs.check_run_id }}" \
+          gh api "repos/${REPO}/check-runs/${CHECK_RUN_ID}" \
             -X PATCH \
             -f "status=in_progress" \
             -f "output[title]=Benchmarks running" \
             -f "output[summary]=Compiling and running benchmarks..."
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # v1
         with:
           toolchain: stable
 
       - name: Set up HF registry proxies
         uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@21845492ef47d4e46b07a3b2a6e14fd4748c39cc  # main
 
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
 
       - name: Run benchmarks
         run: cargo bench --bench sync_api -- --output-format bencher 2>&1 | tee bench_output.txt
@@ -63,7 +68,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Compare against baseline
-        uses: benchmark-action/github-action-benchmark@a60cea5bc7b49e15c1f58f411161f99e0df48372  # v1.22.0
+        uses: benchmark-action/github-action-benchmark@52576c92bccf6ac60c8223ec7eb2565637cae9ba  # v1.22.1
         with:
           tool: cargo
           output-file-path: bench_output.txt
@@ -83,12 +88,17 @@ jobs:
         if: always() && inputs.pr_number != '' && hashFiles('bench_output.txt') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
         run: |
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          run_url="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
           {
             echo "## Benchmark Results"
             echo ""
-            echo "Commit: \`${{ inputs.head_sha }}\`"
+            echo "Commit: \`${HEAD_SHA}\`"
             echo ""
             echo "See the [workflow run]($run_url) for the comparison table against the \`main\` baseline."
             echo ""
@@ -101,23 +111,27 @@ jobs:
             echo '</details>'
           } > comparison.md
 
-          existing=$(gh api "repos/${{ github.repository }}/issues/${{ inputs.pr_number }}/comments" \
+          existing=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
             --jq '.[] | select(.body | startswith("## Benchmark Results")) | .id' | head -1)
 
           if [ -n "$existing" ]; then
-            gh api "repos/${{ github.repository }}/issues/comments/$existing" \
+            gh api "repos/${REPO}/issues/comments/$existing" \
               -X PATCH -F "body=@comparison.md"
           else
-            gh pr comment "${{ inputs.pr_number }}" --body-file comparison.md
+            gh pr comment "${PR_NUMBER}" --body-file comparison.md
           fi
 
       - name: Complete check run (success)
         if: always() && inputs.check_run_id != '' && !failure() && !cancelled()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+          CHECK_RUN_ID: ${{ inputs.check_run_id }}
         run: |
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          gh api "repos/${{ github.repository }}/check-runs/${{ inputs.check_run_id }}" \
+          run_url="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          gh api "repos/${REPO}/check-runs/${CHECK_RUN_ID}" \
             -X PATCH \
             -f "status=completed" \
             -f "conclusion=success" \
@@ -128,9 +142,13 @@ jobs:
         if: always() && inputs.check_run_id != '' && (failure() || cancelled())
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          RUN_ID: ${{ github.run_id }}
+          CHECK_RUN_ID: ${{ inputs.check_run_id }}
         run: |
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          gh api "repos/${{ github.repository }}/check-runs/${{ inputs.check_run_id }}" \
+          run_url="${SERVER_URL}/${REPO}/actions/runs/${RUN_ID}"
+          gh api "repos/${REPO}/check-runs/${CHECK_RUN_ID}" \
             -X PATCH \
             -f "status=completed" \
             -f "conclusion=failure" \
