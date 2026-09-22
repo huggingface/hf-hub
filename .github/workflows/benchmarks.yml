@@ -44,7 +44,7 @@ jobs:
             -f "output[summary]=Compiling and running benchmarks..."
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de  # master 2026-09-12
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
         with:
           toolchain: stable
 

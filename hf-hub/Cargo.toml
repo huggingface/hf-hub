@@ -16,7 +16,7 @@ targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [dependencies]
 bytes = "1"
-reqwest = { version = "0.13", features = ["json", "stream", "multipart", "query"] }
+reqwest = { version = "0.13", features = ["json", "stream", "multipart", "query", "charset", "http2", "system-proxy"], default-features = false }
 hyper = "1"
 tokio = { version = "1", features = ["io-util"] }
 tokio-retry = "0.3"
@@ -32,15 +32,14 @@ pathdiff = "0.2"
 percent-encoding = "2"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
-hf-xet = { git = "https://github.com/huggingface/xet-core", branch = "feat/upload-feature-flag", default-features = false, features = [
-    "rustls-tls",
-] }
+hf-xet = { git = "https://github.com/huggingface/xet-core", branch = "feat/upload-feature-flag", default-features = false }
 sha2 = "0.11"
 
 [features]
-default = ["upload"]
+default = ["upload", "rustls-tls"]
 blocking = ["tokio/rt"]
-rustls-tls = ["reqwest/rustls"]
+native-tls = ["reqwest/native-tls", "hf-xet/native-tls"]
+rustls-tls = ["reqwest/rustls", "hf-xet/rustls-tls"]
 socks = ["reqwest/socks"]
 # Upload-side functionality: `create_commit`/`upload_file`/`upload_folder`,
 # bucket `upload_files`/`upload_source_files`, and the `upload` direction of

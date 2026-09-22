@@ -82,9 +82,10 @@ browser tests and runtime build flags live under `wasm/`.
 | Feature | Default? | Notes |
 |---------|----------|-------|
 | `blocking` | off | Synchronous `*Sync` wrappers in `blocking.rs`. Pulls in `tokio/rt`. Native only. |
-| `rustls-tls` | off | Force the rustls TLS backend on reqwest's native build. No effect on wasm. |
+| `rustls-tls` | on | rustls TLS backend (`aws-lc-rs`) for reqwest and `hf-xet`. No effect on wasm. |
+| `native-tls` | off | Platform-native TLS backend (OpenSSL/Secure Transport/SChannel) for reqwest and `hf-xet`, in place of rustls. Use `default-features = false` plus this feature (and whatever else you need, e.g. `upload`) to drop `rustls`/`aws-lc-rs` entirely. No effect on wasm. |
 | `upload` | on | Forwards to `hf-xet/upload`. Gates `create_commit`/`upload_file`/`upload_folder`, bucket `upload_files`/`upload_source_files`, and the `upload` direction of bucket `sync`. Download-only consumers can disable it via `default-features = false` (keeping whatever TLS feature they need) to compile out those upload code paths plus `hf-xet`'s own upload-side dependencies (chunking/dedup). |
-| `default` | `upload` | Includes `upload`. |
+| `default` | `upload`, `rustls-tls` | |
 
 ### Method builders (bon)
 
