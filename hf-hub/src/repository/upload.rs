@@ -24,8 +24,10 @@ use futures::stream::StreamExt;
 use sha2::{Digest, Sha256};
 
 #[cfg(not(target_family = "wasm"))]
+use super::RepoTreeEntry;
+#[cfg(not(target_family = "wasm"))]
 use super::files::matches_any_glob;
-use super::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoTreeEntry, RepoType};
+use super::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoType};
 use crate::client::encode_ref;
 #[cfg(not(target_family = "wasm"))]
 use crate::error::HFError;
