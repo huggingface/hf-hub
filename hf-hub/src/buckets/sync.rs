@@ -24,14 +24,17 @@ use bon::bon;
 use futures::StreamExt;
 use globset::{Glob, GlobMatcher};
 
-use crate::buckets::{BucketTreeEntry, BucketUpload, HFBucket};
+#[cfg(feature = "upload")]
+use crate::buckets::BucketUpload;
+use crate::buckets::{BucketTreeEntry, HFBucket};
 use crate::error::{HFError, HFResult};
 use crate::progress::{DownloadEvent, EmitEvent, Progress};
 
 /// Direction for a bucket sync operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BucketSyncDirection {
-    /// Local directory -> bucket (upload).
+    /// Local directory -> bucket (upload). Requires the `upload` feature.
+    #[cfg(feature = "upload")]
     Upload,
     /// Bucket -> local directory (download).
     Download,
@@ -147,6 +150,7 @@ fn validate_params(params: &BucketSyncParams) -> HFResult<()> {
     if params.existing && params.ignore_existing {
         return Err(HFError::InvalidParameter("cannot use both --existing and --ignore-existing".to_string()));
     }
+    #[cfg(feature = "upload")]
     if params.direction == BucketSyncDirection::Upload && !params.local_path.is_dir() {
         return Err(HFError::InvalidParameter(format!(
             "local path must be an existing directory for upload: {}",
@@ -309,6 +313,7 @@ fn parse_iso_mtime(s: &str) -> f64 {
 
 #[derive(Debug, Clone, Copy)]
 enum CompareRole {
+    #[cfg(feature = "upload")]
     Upload,
     Download,
 }
@@ -323,6 +328,7 @@ fn compare_files(
     params: &BucketSyncParams,
 ) -> Option<BucketSyncOperation> {
     let action = match role {
+        #[cfg(feature = "upload")]
         CompareRole::Upload => BucketSyncAction::Upload,
         CompareRole::Download => BucketSyncAction::Download,
     };
@@ -332,10 +338,12 @@ fn compare_files(
     let size_differs = source_size != dest_size;
 
     let source_label = match role {
+        #[cfg(feature = "upload")]
         CompareRole::Upload => "local newer",
         CompareRole::Download => "remote newer",
     };
     let dest_newer_label = match role {
+        #[cfg(feature = "upload")]
         CompareRole::Upload => "remote newer",
         CompareRole::Download => "local newer",
     };
@@ -459,6 +467,7 @@ impl HFBucket {
         Ok((files, entries))
     }
 
+    #[cfg(feature = "upload")]
     fn compute_upload_plan(
         &self,
         local_files: &HashMap<String, (u64, f64)>,
@@ -603,6 +612,7 @@ impl HFBucket {
         }
     }
 
+    #[cfg(feature = "upload")]
     async fn execute_upload_plan(&self, plan: &BucketSyncPlan, params: &BucketSyncParams) -> HFResult<()> {
         let upload_files: Vec<BucketUpload> = plan
             .operations
@@ -738,6 +748,7 @@ impl HFBucket {
         let (remote_files, remote_entries) = self.list_remote_files(&params.prefix, &include, &exclude).await?;
 
         match params.direction {
+            #[cfg(feature = "upload")]
             BucketSyncDirection::Upload => {
                 let all_local = list_local_files(&params.local_path)?;
                 let local_files: HashMap<String, (u64, f64)> = all_local
@@ -925,7 +936,9 @@ mod tests {
 
     fn make_plan(ops: Vec<(BucketSyncAction, Option<u64>)>) -> BucketSyncPlan {
         BucketSyncPlan {
-            direction: BucketSyncDirection::Upload,
+            // Direction is irrelevant to the counting/byte-total logic under test here; use
+            // Download so this helper works regardless of the `upload` feature.
+            direction: BucketSyncDirection::Download,
             operations: ops
                 .into_iter()
                 .enumerate()
@@ -1085,6 +1098,7 @@ mod tests {
         assert!(validate_params(&params).is_err());
     }
 
+    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_identical() {
         let params = BucketSyncParams {
@@ -1097,6 +1111,7 @@ mod tests {
         assert_eq!(op.reason, "identical");
     }
 
+    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_identical_not_verbose() {
         let params = make_params(BucketSyncDirection::Upload);
@@ -1105,6 +1120,7 @@ mod tests {
         assert!(op.is_none());
     }
 
+    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_size_differs() {
         let params = make_params(BucketSyncDirection::Upload);
@@ -1114,6 +1130,7 @@ mod tests {
         assert_eq!(op.reason, "size differs");
     }
 
+    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_source_newer() {
         let params = make_params(BucketSyncDirection::Upload);
@@ -1132,6 +1149,7 @@ mod tests {
         assert_eq!(op.reason, "remote newer");
     }
 
+    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_within_safety_window() {
         let params = BucketSyncParams {
@@ -1144,6 +1162,7 @@ mod tests {
         assert_eq!(op.reason, "identical");
     }
 
+    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_ignore_times() {
         let params = BucketSyncParams {
@@ -1161,6 +1180,7 @@ mod tests {
         assert_eq!(op.reason, "size differs");
     }
 
+    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_ignore_sizes() {
         let params = BucketSyncParams {
@@ -1191,6 +1211,7 @@ mod tests {
         assert_eq!(op.reason, "local newer");
     }
 
+    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_ignore_existing() {
         let params = BucketSyncParams {
@@ -1204,6 +1225,7 @@ mod tests {
         assert_eq!(op.reason, "exists on receiver (--ignore-existing)");
     }
 
+    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_ignore_existing_not_verbose() {
         let params = BucketSyncParams {
