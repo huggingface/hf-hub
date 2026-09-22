@@ -8,13 +8,15 @@ on:
   issue_comment:
     types: [created]
 
-permissions:
-  actions: write
-  checks: write
-  pull-requests: read
+
+permissions: {}
 
 jobs:
   trigger:
+    permissions:
+      actions: write
+      checks: write
+      pull-requests: read
     name: Trigger benchmarks
     if: >-
       github.event.issue.pull_request &&
@@ -43,11 +45,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           check_id=$(gh api "repos/$REPOSITORY/check-runs" \
             -X POST \
             -f "name=Benchmark Results" \
-            -f "head_sha=${{ steps.pr.outputs.head_sha }}" \
+            -f "head_sha=$HEAD_SHA" \
             -f "status=queued" \
             -f "output[title]=Benchmarks queued" \
             -f "output[summary]=Benchmark workflow has been dispatched. Results will appear here when complete." \
@@ -58,10 +61,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          CHECK_RUN_ID: ${{ steps.check.outputs.check_id }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
         run: |
           gh workflow run benchmarks.yml \
             --repo "$REPOSITORY" \
-            --ref "${{ steps.pr.outputs.head_ref }}" \
-            -f pr_number="${{ steps.pr.outputs.pr_number }}" \
-            -f check_run_id="${{ steps.check.outputs.check_id }}" \
-            -f head_sha="${{ steps.pr.outputs.head_sha }}"
+            --ref "$HEAD_REF" \
+            -f pr_number="$PR_NUMBER" \
+            -f check_run_id="$CHECK_RUN_ID" \
+            -f head_sha="$HEAD_SHA"
