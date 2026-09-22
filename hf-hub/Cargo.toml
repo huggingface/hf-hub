@@ -16,7 +16,7 @@ targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 
 [dependencies]
 bytes = "1"
-reqwest = { version = "0.13", features = ["json", "stream", "multipart", "query"], default-features = false }
+reqwest = { version = "0.13", features = ["json", "stream", "multipart", "query", "charset", "http2", "system-proxy"], default-features = false }
 hyper = "1"
 tokio = { version = "1", features = ["io-util"] }
 tokio-retry = "0.3"
