@@ -62,6 +62,7 @@ These rules apply to ALL code written or modified in this repo:
 
 - Format: `cargo +nightly fmt`
 - Lint: `cargo clippy -p hf-hub --all-features -- -D warnings`
+- Lint (download-only, if touching upload/xet code): `cargo clippy -p hf-hub --no-default-features --all-targets -- -D warnings`
 - ALWAYS run both after making changes — do not skip this step
 
 ### Minimal Changes
@@ -196,8 +197,11 @@ hf-hub/
 │   │   │   ├── listing.rs          # list_files, list_tree, get_paths_info, get_file_metadata
 │   │   │   ├── download.rs         # download_file, download_file_stream, download_file_to_bytes,
 │   │   │   │                       #   snapshot_download (private helper structs live here)
-│   │   │   └── upload.rs           # upload_file, upload_folder, create_commit, delete_file/folder
-│   │   │                           #   (private helper structs live here)
+│   │   │   ├── commit.rs           # Shared commit-transport helper (ndjson build + POST + parse),
+│   │   │   │                       #   always compiled; used by both upload.rs and delete.rs
+│   │   │   ├── upload.rs           # upload_file, upload_folder, create_commit — requires the
+│   │   │   │                       #   `upload` feature (private helper structs live here)
+│   │   │   └── delete.rs           # delete_file, delete_folder — always available (no xet/LFS)
 │   │   ├── spaces.rs               # Spaces component: HFSpace handle, SpaceRuntime, SpaceVariable,
 │   │   │                           #   runtime/hardware/secrets/variables/duplicate
 │   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,
