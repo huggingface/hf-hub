@@ -12,7 +12,9 @@
 //! while still catching an accidentally unboxed state machine.
 
 use hf_hub::HFClient;
-use hf_hub::repository::{AddSource, CommitOperation, HFRepository, RepoTypeModel};
+#[cfg(feature = "upload")]
+use hf_hub::repository::{AddSource, CommitOperation};
+use hf_hub::repository::{HFRepository, RepoTypeModel};
 
 const BOXED_SEND_FUTURE_LIMIT: usize = 2048;
 
@@ -44,6 +46,34 @@ fn boxed_send_futures_stay_small() {
     assert_small("download_file_stream", size_of_val(&repo.download_file_stream().filename("f").send()));
     assert_small("download_file_to_bytes", size_of_val(&repo.download_file_to_bytes().filename("f").send()));
     assert_small("snapshot_download", size_of_val(&repo.snapshot_download().send()));
+    assert_small("delete_file", size_of_val(&repo.delete_file().path_in_repo("f").send()));
+    assert_small("delete_folder", size_of_val(&repo.delete_folder().path_in_repo("f").send()));
+
+    assert_small("bucket.download_file_stream", size_of_val(&bucket.download_file_stream().remote_path("f").send()));
+    assert_small("bucket.download_files", size_of_val(&bucket.download_files().files(vec![]).send()));
+
+    // `sync`'s boxed future size doesn't depend on the direction value, so this stays in the
+    // always-available test (using `Download`, the only direction that exists without the
+    // `upload` feature) to keep coverage in the no-upload build too.
+    assert_small(
+        "bucket.sync",
+        size_of_val(
+            &bucket
+                .sync()
+                .local_path(".")
+                .direction(hf_hub::buckets::sync::BucketSyncDirection::Download)
+                .send(),
+        ),
+    );
+}
+
+#[cfg(feature = "upload")]
+#[test]
+fn boxed_send_futures_stay_small_upload() {
+    let client = client();
+    let repo = client.model("user", "repo");
+    let bucket = client.bucket("user", "bucket");
+
     assert_small(
         "create_commit",
         size_of_val(
@@ -59,23 +89,9 @@ fn boxed_send_futures_stay_small() {
         size_of_val(&repo.upload_file().source(AddSource::Bytes("x".into())).path_in_repo("f").send()),
     );
     assert_small("upload_folder", size_of_val(&repo.upload_folder().folder_path(".").send()));
-    assert_small("delete_file", size_of_val(&repo.delete_file().path_in_repo("f").send()));
-    assert_small("delete_folder", size_of_val(&repo.delete_folder().path_in_repo("f").send()));
 
-    assert_small("bucket.download_file_stream", size_of_val(&bucket.download_file_stream().remote_path("f").send()));
     assert_small("bucket.upload_source_files", size_of_val(&bucket.upload_source_files().files(vec![]).send()));
     assert_small("bucket.upload_files", size_of_val(&bucket.upload_files().files(vec![]).send()));
-    assert_small("bucket.download_files", size_of_val(&bucket.download_files().files(vec![]).send()));
-    assert_small(
-        "bucket.sync",
-        size_of_val(
-            &bucket
-                .sync()
-                .local_path(".")
-                .direction(hf_hub::buckets::sync::BucketSyncDirection::Upload)
-                .send(),
-        ),
-    );
 }
 
 // Consumer-shaped regression: a chain of nested async fns awaiting `download_file().send()`,
