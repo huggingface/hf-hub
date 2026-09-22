@@ -19,6 +19,7 @@
 //! Most items are also re-exported at [`crate::repository`] for a flat `hf_hub::repository::…`
 //! path in addition to the submodule paths rustdoc lists.
 
+mod commit;
 pub mod commits;
 pub mod diff;
 pub mod download;

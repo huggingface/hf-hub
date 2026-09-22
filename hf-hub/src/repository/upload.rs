@@ -90,12 +90,7 @@ struct DeleteFolderParams {
 
 impl<T: RepoType> HFRepository<T> {
     async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
-        let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!(
-            "{}/commit/{}",
-            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
-            encode_ref(revision)
-        );
+        let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION).to_string();
 
         let add_ops_count = params
             .operations
@@ -126,19 +121,13 @@ impl<T: RepoType> HFRepository<T> {
         // (regular). Files uploaded via xet are referenced by their SHA256 OID
         // in the commit NDJSON.
         let lfs_uploaded: HashMap<String, (String, u64)> =
-            self.preupload_and_upload_lfs_files(&params, revision).await?;
+            self.preupload_and_upload_lfs_files(&params, &revision).await?;
 
-        let mut ndjson_lines: Vec<Vec<u8>> = Vec::new();
-
-        let mut header_value = serde_json::json!({
-            "summary": params.commit_message,
-            "description": params.commit_description.as_deref().unwrap_or(""),
-        });
-        if let Some(ref parent) = params.parent_commit {
-            header_value["parentCommit"] = serde_json::Value::String(parent.clone());
-        }
-        let header_line = serde_json::json!({"key": "header", "value": header_value});
-        ndjson_lines.push(serde_json::to_vec(&header_line)?);
+        let mut ndjson_lines: Vec<Vec<u8>> = vec![super::commit::commit_header_line(
+            &params.commit_message,
+            params.commit_description.as_deref(),
+            params.parent_commit.as_deref(),
+        )?];
 
         for op in &params.operations {
             let line = match op {
@@ -174,41 +163,8 @@ impl<T: RepoType> HFRepository<T> {
             ndjson_lines.push(serde_json::to_vec(&line)?);
         }
 
-        let body: Vec<u8> = ndjson_lines
-            .into_iter()
-            .flat_map(|mut line| {
-                line.push(b'\n');
-                line
-            })
-            .collect();
-
-        params.progress.emit(UploadEvent::Committing);
-
-        let mut headers = self.hf_client.auth_headers();
-        headers.insert(reqwest::header::CONTENT_TYPE, "application/x-ndjson".parse().unwrap());
-
-        let create_pr = params.create_pr;
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            let mut req = self
-                .hf_client
-                .http_client()
-                .post(&url)
-                .headers(headers.clone())
-                .body(body.clone());
-            if create_pr {
-                req = req.query(&[("create_pr", "1")]);
-            }
-            req.send()
-        })
-        .await?;
-        let repo_path = self.repo_path();
-        let response = self
-            .hf_client
-            .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Repo)
-            .await?;
-
-        params.progress.emit(UploadEvent::Complete);
-        Ok(response.json().await?)
+        self.send_commit(&revision, ndjson_lines, params.create_pr, &params.progress)
+            .await
     }
 
     async fn inline_base64_entry(path_in_repo: &str, source: &AddSource) -> HFResult<serde_json::Value> {
