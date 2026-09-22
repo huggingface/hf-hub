@@ -32,14 +32,23 @@ pathdiff = "0.2"
 percent-encoding = "2"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
-hf-xet = "1.6"
+hf-xet = { git = "https://github.com/huggingface/xet-core", branch = "feat/upload-feature-flag", default-features = false, features = [
+    "rustls-tls",
+] }
 sha2 = "0.11"
 
 [features]
-default = []
+default = ["upload"]
 blocking = ["tokio/rt"]
 rustls-tls = ["reqwest/rustls"]
 socks = ["reqwest/socks"]
+# Upload-side functionality: `create_commit`/`upload_file`/`upload_folder`,
+# bucket `upload_files`/`upload_source_files`, and the `upload` direction of
+# bucket `sync`. Download-only consumers can disable this with
+# `default-features = false` (keeping any TLS feature they need) to compile
+# out the upload code paths here and in `hf-xet` (chunking, dedup, and the
+# xorb/shard upload pipeline).
+upload = ["hf-xet/upload"]
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 # Not used directly: raises the floor on reqwest's redirect middleware. Before
