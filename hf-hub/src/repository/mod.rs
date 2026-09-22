@@ -12,7 +12,8 @@
 //! - [`commits`] — history, refs, compare/diff, branches, tags
 //! - [`listing`] — list files/tree, path metadata
 //! - [`download`] — single-file and snapshot download builders
-//! - [`upload`] — uploads, deletes, and [`CommitOperation`] batches
+//! - [`upload`] — uploads and [`CommitOperation`] batches (requires the `upload` feature)
+//! - [`delete`] — single-delete and recursive-delete commits (always available)
 //! - [`diff`] — parsed raw diff lines ([`HFFileDiff`])
 //! - [`files`] — shared types such as [`CommitOperation`] and [`RepoTreeEntry`]
 //!
@@ -21,11 +22,14 @@
 
 mod commit;
 pub mod commits;
+pub mod delete;
 pub mod diff;
 pub mod download;
 pub mod files;
 pub mod listing;
 pub mod repo_type;
+#[cfg(feature = "upload")]
+#[cfg_attr(docsrs, doc(cfg(feature = "upload")))]
 pub mod upload;
 
 use std::collections::{BTreeMap, HashMap};
