@@ -1098,35 +1098,32 @@ mod tests {
         assert!(validate_params(&params).is_err());
     }
 
-    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_identical() {
         let params = BucketSyncParams {
             verbose: true,
-            ..make_params(BucketSyncDirection::Upload)
+            ..make_params(BucketSyncDirection::Download)
         };
 
-        let op = compare_files(String::new(), CompareRole::Upload, 100, 5000.0, 100, 5000.0, &params).unwrap();
+        let op = compare_files(String::new(), CompareRole::Download, 100, 5000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "identical");
     }
 
-    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_identical_not_verbose() {
-        let params = make_params(BucketSyncDirection::Upload);
+        let params = make_params(BucketSyncDirection::Download);
 
-        let op = compare_files(String::new(), CompareRole::Upload, 100, 5000.0, 100, 5000.0, &params);
+        let op = compare_files(String::new(), CompareRole::Download, 100, 5000.0, 100, 5000.0, &params);
         assert!(op.is_none());
     }
 
-    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_size_differs() {
-        let params = make_params(BucketSyncDirection::Upload);
+        let params = make_params(BucketSyncDirection::Download);
 
-        let op = compare_files(String::new(), CompareRole::Upload, 200, 5000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, BucketSyncAction::Upload);
+        let op = compare_files(String::new(), CompareRole::Download, 200, 5000.0, 100, 5000.0, &params).unwrap();
+        assert_eq!(op.action, BucketSyncAction::Download);
         assert_eq!(op.reason, "size differs");
     }
 
@@ -1149,53 +1146,50 @@ mod tests {
         assert_eq!(op.reason, "remote newer");
     }
 
-    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_within_safety_window() {
         let params = BucketSyncParams {
             verbose: true,
-            ..make_params(BucketSyncDirection::Upload)
+            ..make_params(BucketSyncDirection::Download)
         };
 
-        let op = compare_files(String::new(), CompareRole::Upload, 100, 5500.0, 100, 5000.0, &params).unwrap();
+        let op = compare_files(String::new(), CompareRole::Download, 100, 5500.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "identical");
     }
 
-    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_ignore_times() {
         let params = BucketSyncParams {
             ignore_times: true,
             verbose: true,
-            ..make_params(BucketSyncDirection::Upload)
+            ..make_params(BucketSyncDirection::Download)
         };
 
-        let op = compare_files(String::new(), CompareRole::Upload, 100, 9000.0, 100, 5000.0, &params).unwrap();
+        let op = compare_files(String::new(), CompareRole::Download, 100, 9000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "same size");
 
-        let op = compare_files(String::new(), CompareRole::Upload, 200, 5000.0, 100, 5000.0, &params).unwrap();
-        assert_eq!(op.action, BucketSyncAction::Upload);
+        let op = compare_files(String::new(), CompareRole::Download, 200, 5000.0, 100, 5000.0, &params).unwrap();
+        assert_eq!(op.action, BucketSyncAction::Download);
         assert_eq!(op.reason, "size differs");
     }
 
-    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_ignore_sizes() {
         let params = BucketSyncParams {
             ignore_sizes: true,
             verbose: true,
-            ..make_params(BucketSyncDirection::Upload)
+            ..make_params(BucketSyncDirection::Download)
         };
 
-        let op = compare_files(String::new(), CompareRole::Upload, 200, 5000.0, 100, 5000.0, &params).unwrap();
+        let op = compare_files(String::new(), CompareRole::Download, 200, 5000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "same mtime");
 
-        let op = compare_files(String::new(), CompareRole::Upload, 100, 3000.0, 100, 5000.0, &params).unwrap();
+        let op = compare_files(String::new(), CompareRole::Download, 100, 3000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
-        assert_eq!(op.reason, "remote newer");
+        assert_eq!(op.reason, "local newer");
     }
 
     #[test]
@@ -1211,29 +1205,27 @@ mod tests {
         assert_eq!(op.reason, "local newer");
     }
 
-    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_ignore_existing() {
         let params = BucketSyncParams {
             ignore_existing: true,
             verbose: true,
-            ..make_params(BucketSyncDirection::Upload)
+            ..make_params(BucketSyncDirection::Download)
         };
 
-        let op = compare_files(String::new(), CompareRole::Upload, 200, 9000.0, 100, 5000.0, &params).unwrap();
+        let op = compare_files(String::new(), CompareRole::Download, 200, 9000.0, 100, 5000.0, &params).unwrap();
         assert_eq!(op.action, BucketSyncAction::Skip);
         assert_eq!(op.reason, "exists on receiver (--ignore-existing)");
     }
 
-    #[cfg(feature = "upload")]
     #[test]
     fn test_compare_files_ignore_existing_not_verbose() {
         let params = BucketSyncParams {
             ignore_existing: true,
-            ..make_params(BucketSyncDirection::Upload)
+            ..make_params(BucketSyncDirection::Download)
         };
 
-        let op = compare_files(String::new(), CompareRole::Upload, 200, 9000.0, 100, 5000.0, &params);
+        let op = compare_files(String::new(), CompareRole::Download, 200, 9000.0, 100, 5000.0, &params);
         assert!(op.is_none());
     }
 }
