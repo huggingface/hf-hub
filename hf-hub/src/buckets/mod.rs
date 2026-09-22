@@ -26,7 +26,9 @@ use url::Url;
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, NotFoundContext};
-use crate::progress::{DownloadEvent, EmitEvent, Progress, UploadEvent};
+#[cfg(feature = "upload")]
+use crate::progress::UploadEvent;
+use crate::progress::{DownloadEvent, EmitEvent, Progress};
 use crate::repository::download::{HFByteStream, wrap_stream_with_progress};
 use crate::retry;
 
@@ -448,6 +450,7 @@ impl HFBucket {
     ///
     /// - `files` (required): list of `(remote_path, source)` pairs.
     /// - `progress`: optional progress handler.
+    #[cfg(feature = "upload")]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_source_files(
         &self,
@@ -470,7 +473,7 @@ impl HFBucket {
     ///
     /// - `files` (required): list of [`BucketUpload`] entries describing each `local` → `remote` mapping.
     /// - `progress`: optional progress handler.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(all(not(target_family = "wasm"), feature = "upload"))]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn upload_files(
         &self,
@@ -580,7 +583,7 @@ impl HFBucket {
 
     /// Body of [`HFBucket::upload_files`], extracted so the builder `send()` future only holds a
     /// boxed pointer to this state machine rather than embedding it inline.
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(all(not(target_family = "wasm"), feature = "upload"))]
     async fn upload_files_impl(&self, files: Vec<BucketUpload>, progress: Option<Progress>) -> HFResult<()> {
         if files.is_empty() {
             return Ok(());
@@ -693,6 +696,7 @@ impl HFBucket {
 
     /// Shared implementation: upload pre-built `(remote_path, AddSource)` pairs through xet
     /// and register them in the bucket. Used by [`HFBucket::upload_source_files`].
+    #[cfg(feature = "upload")]
     async fn upload_sources_impl(
         &self,
         uploads: Vec<(String, crate::repository::AddSource)>,
@@ -1223,6 +1227,7 @@ impl crate::blocking::HFBucketSync {
 
     /// Blocking counterpart of [`HFBucket::upload_source_files`]. See the async method for
     /// parameters and behavior.
+    #[cfg(feature = "upload")]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn upload_source_files(
         &self,
@@ -1235,6 +1240,7 @@ impl crate::blocking::HFBucketSync {
 
     /// Blocking counterpart of [`HFBucket::upload_files`]. See the async method for parameters
     /// and behavior.
+    #[cfg(feature = "upload")]
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn upload_files(&self, files: Vec<BucketUpload>, #[builder(into)] progress: Option<Progress>) -> HFResult<()> {
         self.runtime
