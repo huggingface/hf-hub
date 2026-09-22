@@ -5,9 +5,10 @@
 //! On `wasm32-unknown-unknown`, progress polling is omitted — no in-flight
 //! progress events. See per-item `#[cfg]` attributes.
 
+#[cfg(all(not(target_family = "wasm"), feature = "upload"))]
+use std::collections::HashMap;
 #[cfg(not(target_family = "wasm"))]
 use std::{
-    collections::HashMap,
     path::PathBuf,
     sync::{
         Arc,
@@ -18,19 +19,20 @@ use std::{
 use serde::Deserialize;
 #[cfg(test)]
 use xet::error::XetError;
-use xet::xet_session::XetFileInfo;
 #[cfg(not(target_family = "wasm"))]
-use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileMetadata, XetFileUpload, XetStreamUpload};
+use xet::xet_session::XetFileDownload;
+use xet::xet_session::XetFileInfo;
+#[cfg(all(not(target_family = "wasm"), feature = "upload"))]
+use xet::xet_session::{Sha256Policy, XetFileMetadata, XetFileUpload, XetStreamUpload};
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, XetOperation};
+#[cfg(not(target_family = "wasm"))]
+use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress};
 use crate::repository::{HFRepository, RepoType};
 use crate::retry;
-#[cfg(not(target_family = "wasm"))]
-use crate::{
-    progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent},
-    repository::AddSource,
-};
+#[cfg(all(not(target_family = "wasm"), feature = "upload"))]
+use crate::{progress::UploadEvent, repository::AddSource};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -210,13 +212,13 @@ pub(crate) struct XetBatchFile {
 /// an [`XetStreamUpload`], which the loop drives chunk-by-chunk from a
 /// spawned task. Wrapping both in one enum lets the progress-polling
 /// closure iterate a single homogeneous collection.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "upload"))]
 enum NativeAnyHandle {
     File(XetFileUpload),
     Stream(XetStreamUpload),
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "upload"))]
 impl NativeAnyHandle {
     fn progress(&self) -> Option<xet::xet_session::ItemProgressReport> {
         match self {
@@ -235,7 +237,7 @@ impl NativeAnyHandle {
 ///
 /// On wasm this is a stripped-down implementation: no filesystem paths
 /// (`AddSource::File` is wasm-unavailable) and no progress tracking.
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "upload"))]
 async fn xet_upload_inner(
     hf_client: &HFClient,
     files: &[(String, AddSource)],
@@ -466,7 +468,7 @@ async fn xet_upload_inner(
 
 /// Wasm counterpart of `xet_upload_inner` (above): no filesystem sources
 /// and no progress tracking, but the same cached `XetSession` on `HFClient`.
-#[cfg(target_family = "wasm")]
+#[cfg(all(target_family = "wasm", feature = "upload"))]
 async fn xet_upload_inner(
     hf_client: &HFClient,
     files: &[(String, crate::repository::AddSource)],
@@ -781,6 +783,7 @@ impl<T: RepoType> HFRepository<T> {
     }
 }
 
+#[cfg(feature = "upload")]
 impl<T: RepoType> HFRepository<T> {
     /// Upload files using the xet protocol.
     /// Fetches a write token and uses xet-session's UploadCommit.
@@ -813,6 +816,7 @@ impl<T: RepoType> HFRepository<T> {
     }
 }
 
+#[cfg(feature = "upload")]
 impl crate::buckets::HFBucket {
     pub(crate) async fn xet_upload(
         &self,
