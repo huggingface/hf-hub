@@ -165,11 +165,13 @@ jobs:
             exit 1
           fi
 
-      # Includes the xet-upload write tests, so they need a prod write token
-      # (the wasm tests target https://huggingface.co) and HF_TEST_WRITE=1.
+      # Includes the xet-upload write tests, which run against hub-ci (not
+      # prod) so this job runs on `pull_request` without exposing a prod
+      # write token to the wasm binary. Read-only tests still target prod
+      # public resources over https://huggingface.co.
       - name: Run wasm integration tests
         run: |
-          HF_TOKEN='${{ secrets.HF_PROD_TOKEN }}' \
+          HF_TOKEN='${{ secrets.HF_CI_TOKEN }}' \
           HF_TEST_WRITE=1 \
           ./wasm/tests/run_tests.sh
 

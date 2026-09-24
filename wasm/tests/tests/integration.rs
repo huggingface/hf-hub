@@ -24,6 +24,7 @@ use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
 wasm_bindgen_test_configure!(run_in_browser);
 
 const ENDPOINT: &str = "https://huggingface.co";
+const HUB_CI_ENDPOINT: &str = "https://hub-ci.huggingface.co";
 const TEST_MODEL_OWNER: &str = "openai-community";
 const TEST_MODEL_NAME: &str = "gpt2";
 
@@ -258,6 +259,10 @@ async fn download_xet_with_progress_handler_reports_bytes() {
 // `HF_TOKEN=hf_xxx HF_TEST_WRITE=1 ./wasm/tests/run_tests.sh`). Missing
 // either short-circuits the test to an early return — wasm-bindgen-test has
 // no built-in skip, so this is the convention used here.
+//
+// Write tests run against hub-ci, not prod: this token ends up compiled into
+// a wasm binary that a headless browser executes, so in CI it must be a
+// hub-ci token (see the `wasm-test` job), not a prod token.
 fn write_token() -> Option<&'static str> {
     if option_env!("HF_TEST_WRITE") != Some("1") {
         return None;
@@ -268,7 +273,7 @@ fn write_token() -> Option<&'static str> {
 
 fn authed_client(token: &str) -> HFClient {
     HFClientBuilder::new()
-        .endpoint(ENDPOINT.to_string())
+        .endpoint(HUB_CI_ENDPOINT.to_string())
         .token(token.to_string())
         .build()
         .expect("build authed HFClient")
