@@ -18,7 +18,6 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use bon::bon;
 use futures::StreamExt;
@@ -207,12 +206,7 @@ fn list_local_files(root: &Path) -> HFResult<HashMap<String, (u64, f64)>> {
                     .join("/");
                 let metadata = std::fs::metadata(&path)?;
                 let size = metadata.len();
-                let mtime_ms = metadata
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as f64)
-                    .unwrap_or(0.0);
+                let mtime_ms = super::mtime_millis(&metadata).map_or(0.0, |ms| ms as f64);
                 result.insert(rel_str, (size, mtime_ms));
             }
         }
