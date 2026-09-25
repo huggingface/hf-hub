@@ -13,6 +13,7 @@
 
 #[cfg(not(target_family = "wasm"))]
 use std::{
+    collections::HashSet,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -519,12 +520,15 @@ impl<T: RepoType> HFRepository<T> {
             let xet_hash =
                 xet_hash.ok_or_else(|| HFError::malformed_response_at("missing X-Xet-Hash header", url.clone()))?;
             let blob = cache::blob_path(cache_dir, repo_folder, &etag);
-            if !blob.exists() || force_download {
+            let _lock = if force_download || !blob.exists() {
+                Some(cache::acquire_lock(cache_dir, repo_folder, &etag).await?)
+            } else {
+                None
+            };
+            if force_download || !blob.exists() {
                 if let Some(parent) = blob.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
-
                 self.xet_download_to_blob(revision, &params.filename, &xet_hash, file_size, &blob, &params.progress)
                     .await?;
             }
@@ -533,6 +537,11 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         let blob = cache::blob_path(cache_dir, repo_folder, &etag);
+        let _lock = if force_download || !blob.exists() {
+            Some(cache::acquire_lock(cache_dir, repo_folder, &etag).await?)
+        } else {
+            None
+        };
 
         if blob.exists() && !force_download {
             params.progress.emit(DownloadEvent::Progress {
@@ -546,7 +555,6 @@ impl<T: RepoType> HFRepository<T> {
             return finalize_cached_file(cache_dir, repo_folder, revision, &commit_hash, &params.filename, &etag).await;
         }
 
-        let _lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
         let incomplete_path = PathBuf::from(format!("{}.incomplete", blob.display()));
         if let Some(parent) = incomplete_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -820,6 +828,7 @@ impl<T: RepoType> HFRepository<T> {
 
         // Cache mode
         let mut cached_progress: Vec<FileProgress> = Vec::new();
+        let mut uncached_metas = Vec::new();
         for meta in file_metas {
             let blob = cache::blob_path(cache_dir, &repo_folder, &meta.etag);
             if blob.exists() && !force {
@@ -833,12 +842,17 @@ impl<T: RepoType> HFRepository<T> {
                 });
                 continue;
             }
+            uncached_metas.push(meta);
+        }
+        let (blob_owner_metas, shared_blob_metas) = split_shared_blobs(uncached_metas);
+        for meta in blob_owner_metas {
             if meta.xet_hash.is_some() {
                 xet_metas.push(meta);
             } else {
                 non_xet_filenames.push(meta.filename);
             }
         }
+        xet_metas.sort_by(|a, b| a.etag.cmp(&b.etag));
         if !cached_progress.is_empty() {
             params.progress.emit(DownloadEvent::Progress { files: cached_progress });
         }
@@ -883,6 +897,23 @@ impl<T: RepoType> HFRepository<T> {
 
         tokio::try_join!(xet_batch_fut, non_xet_fut)?;
 
+        if !shared_blob_metas.is_empty() {
+            for m in &shared_blob_metas {
+                cache::create_pointer_symlink(cache_dir, &repo_folder, &m.commit_hash, &m.filename, &m.etag).await?;
+            }
+            params.progress.emit(DownloadEvent::Progress {
+                files: shared_blob_metas
+                    .iter()
+                    .map(|m| FileProgress {
+                        filename: m.filename.clone(),
+                        bytes_completed: m.file_size,
+                        total_bytes: m.file_size,
+                        status: FileStatus::Complete,
+                    })
+                    .collect(),
+            });
+        }
+
         if !cache::is_commit_hash(revision) {
             cache::write_ref(cache_dir, &repo_folder, revision, &commit_hash).await?;
         }
@@ -890,6 +921,15 @@ impl<T: RepoType> HFRepository<T> {
         params.progress.emit(DownloadEvent::Complete);
         Ok(cache_dir.join(&repo_folder).join("snapshots").join(&commit_hash))
     }
+}
+
+/// Split files into one owner per blob and the remaining files whose content (etag) an owner
+/// already covers. Several filenames with identical content share one cache blob, so only the
+/// owners are fetched; the rest are linked to the owner's blob afterwards.
+#[cfg(not(target_family = "wasm"))]
+fn split_shared_blobs(metas: Vec<FileMetadataInfo>) -> (Vec<FileMetadataInfo>, Vec<FileMetadataInfo>) {
+    let mut seen_etags = HashSet::new();
+    metas.into_iter().partition(|m| seen_etags.insert(m.etag.clone()))
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -1399,5 +1439,266 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .maybe_progress(progress)
                 .send(),
         )
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    use super::split_shared_blobs;
+    use crate::HFClient;
+    use crate::error::HFError;
+    use crate::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler};
+    use crate::repository::FileMetadataInfo;
+
+    const REPO: &str = "acme/dups";
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[derive(Clone)]
+    struct MockFile {
+        path: &'static str,
+        etag: &'static str,
+        xet_hash: Option<&'static str>,
+        body: &'static [u8],
+    }
+
+    struct MockHub {
+        endpoint: String,
+        requests: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MockHub {
+        fn count(&self, request: &str) -> usize {
+            self.requests.lock().unwrap().iter().filter(|r| *r == request).count()
+        }
+    }
+
+    /// Loopback server that answers the tree listing and `HEAD`/`GET` on `resolve`, and 404s
+    /// everything else (including the Xet read-token endpoint). One request per connection.
+    async fn start_mock_hub(files: Vec<MockFile>) -> MockHub {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&requests);
+        let files = Arc::new(files);
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let log = Arc::clone(&log);
+                let files = Arc::clone(&files);
+                tokio::spawn(async move {
+                    let mut socket = BufReader::new(socket);
+                    let mut request_line = String::new();
+                    if socket.read_line(&mut request_line).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    loop {
+                        let mut line = String::new();
+                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                    }
+                    let mut parts = request_line.split_whitespace();
+                    let method = parts.next().unwrap_or_default().to_string();
+                    let path = parts
+                        .next()
+                        .unwrap_or_default()
+                        .split('?')
+                        .next()
+                        .unwrap_or_default()
+                        .to_string();
+                    log.lock().unwrap().push(format!("{method} {path}"));
+
+                    let (status, headers, body) = route(&files, &method, &path);
+                    let mut response = format!("HTTP/1.1 {status}\r\nConnection: close\r\n");
+                    for (name, value) in headers {
+                        response.push_str(&format!("{name}: {value}\r\n"));
+                    }
+                    response.push_str("\r\n");
+                    let mut bytes = response.into_bytes();
+                    if method != "HEAD" {
+                        bytes.extend_from_slice(&body);
+                    }
+                    let _ = socket.get_mut().write_all(&bytes).await;
+                });
+            }
+        });
+        MockHub { endpoint, requests }
+    }
+
+    fn route(files: &[MockFile], method: &str, path: &str) -> (&'static str, Vec<(String, String)>, Vec<u8>) {
+        if method == "GET" && path == format!("/api/models/{REPO}/tree/{COMMIT}") {
+            let entries: Vec<serde_json::Value> = files
+                .iter()
+                .map(|f| {
+                    serde_json::json!({
+                        "type": "file",
+                        "oid": f.etag,
+                        "size": f.body.len(),
+                        "path": f.path,
+                        "xetHash": f.xet_hash,
+                    })
+                })
+                .collect();
+            let body = serde_json::to_vec(&entries).unwrap();
+            let headers = vec![
+                ("Content-Type".into(), "application/json".into()),
+                ("Content-Length".into(), body.len().to_string()),
+            ];
+            return ("200 OK", headers, body);
+        }
+        let resolve_prefix = format!("/{REPO}/resolve/{COMMIT}/");
+        if let Some(file) = path
+            .strip_prefix(&resolve_prefix)
+            .and_then(|name| files.iter().find(|f| f.path == name))
+        {
+            let mut headers = vec![
+                ("ETag".into(), format!("\"{}\"", file.etag)),
+                ("X-Repo-Commit".into(), COMMIT.into()),
+                ("Content-Length".into(), file.body.len().to_string()),
+            ];
+            if let Some(hash) = file.xet_hash {
+                headers.push(("X-Xet-Hash".into(), hash.into()));
+            }
+            return ("200 OK", headers, file.body.to_vec());
+        }
+        ("404 Not Found", vec![("Content-Length".into(), "0".into())], Vec::new())
+    }
+
+    fn client(endpoint: &str, cache_dir: &std::path::Path) -> HFClient {
+        HFClient::builder()
+            .endpoint(endpoint)
+            .client(reqwest::Client::builder().no_proxy().build().unwrap())
+            .cache_dir(cache_dir)
+            .retry_max_attempts(1)
+            .build()
+            .unwrap()
+    }
+
+    struct RecordingHandler(Mutex<Vec<ProgressEvent>>);
+
+    impl ProgressHandler for RecordingHandler {
+        fn on_progress(&self, event: &ProgressEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    fn meta(filename: &str, etag: &str) -> FileMetadataInfo {
+        FileMetadataInfo {
+            filename: filename.to_string(),
+            etag: etag.to_string(),
+            commit_hash: COMMIT.to_string(),
+            xet_hash: Some(etag.to_string()),
+            file_size: 10,
+            location: None,
+        }
+    }
+
+    #[test]
+    fn split_shared_blobs_keeps_one_owner_per_etag() {
+        let (owners, shared) = split_shared_blobs(vec![
+            meta("onnx/model_qint8_arm64.onnx", "q8"),
+            meta("model.onnx", "full"),
+            meta("onnx/model_qint8_avx512.onnx", "q8"),
+            meta("onnx/model_qint8_avx512_vnni.onnx", "q8"),
+        ]);
+        let owners: Vec<_> = owners.iter().map(|m| m.filename.as_str()).collect();
+        let shared: Vec<_> = shared.iter().map(|m| m.filename.as_str()).collect();
+        assert_eq!(owners, ["onnx/model_qint8_arm64.onnx", "model.onnx"]);
+        assert_eq!(shared, ["onnx/model_qint8_avx512.onnx", "onnx/model_qint8_avx512_vnni.onnx"]);
+    }
+
+    #[tokio::test]
+    async fn cache_snapshot_fetches_a_shared_blob_once_and_links_every_filename() {
+        let shared_file = |path| MockFile {
+            path,
+            etag: "shared-etag",
+            xet_hash: None,
+            body: b"same bytes",
+        };
+        let hub = start_mock_hub(vec![
+            shared_file("config.json"),
+            shared_file("copies/config.json"),
+            shared_file("copies/again.json"),
+            MockFile {
+                path: "README.md",
+                etag: "readme-etag",
+                xet_hash: None,
+                body: b"readme",
+            },
+        ])
+        .await;
+        let cache = tempfile::tempdir().unwrap();
+        let handler = Arc::new(RecordingHandler(Mutex::new(Vec::new())));
+
+        let snapshot = client(&hub.endpoint, cache.path())
+            .model("acme", "dups")
+            .snapshot_download()
+            .revision(COMMIT)
+            .progress(Arc::clone(&handler))
+            .send()
+            .await
+            .unwrap();
+
+        for name in ["config.json", "copies/config.json", "copies/again.json"] {
+            assert_eq!(std::fs::read(snapshot.join(name)).unwrap(), b"same bytes", "{name}");
+        }
+        assert_eq!(std::fs::read(snapshot.join("README.md")).unwrap(), b"readme");
+
+        let shared_gets: usize = ["config.json", "copies/config.json", "copies/again.json"]
+            .iter()
+            .map(|name| hub.count(&format!("GET /{REPO}/resolve/{COMMIT}/{name}")))
+            .sum();
+        assert_eq!(shared_gets, 1, "the shared blob must be fetched exactly once");
+
+        let completed: HashSet<String> = handler
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ProgressEvent::Download(DownloadEvent::Progress { files }) => Some(files.clone()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|f| f.status == FileStatus::Complete)
+            .map(|f| f.filename)
+            .collect();
+        assert_eq!(completed.len(), 4, "every filename reports completion: {completed:?}");
+    }
+
+    /// Xet files with identical content used to take the same cache lock once per filename, so
+    /// the second acquisition blocked on the first until the lock timed out.
+    #[tokio::test]
+    async fn cache_snapshot_with_shared_xet_blob_does_not_wait_on_its_own_lock() {
+        let xet_file = |path| MockFile {
+            path,
+            etag: "0000000000000000000000000000000000000000000000000000000000000abc",
+            xet_hash: Some("1111111111111111111111111111111111111111111111111111111111111111"),
+            body: b"quantized",
+        };
+        let hub = start_mock_hub(vec![
+            xet_file("onnx/model_qint8_arm64.onnx"),
+            xet_file("onnx/model_qint8_avx512.onnx"),
+            xet_file("onnx/model_qint8_avx512_vnni.onnx"),
+        ])
+        .await;
+        let cache = tempfile::tempdir().unwrap();
+
+        let result = client(&hub.endpoint, cache.path())
+            .model("acme", "dups")
+            .snapshot_download()
+            .revision(COMMIT)
+            .send()
+            .await;
+
+        assert!(
+            !matches!(result, Err(HFError::CacheLockTimeout { .. })),
+            "self-deadlocked on the shared blob lock: {result:?}"
+        );
+        assert_eq!(hub.count(&format!("GET /api/models/{REPO}/xet-read-token/{COMMIT}")), 1);
     }
 }
