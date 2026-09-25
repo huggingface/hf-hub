@@ -5,6 +5,8 @@ use reqwest::{Error as ReqwestError, Response, StatusCode};
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::{debug, error};
 
+use crate::error::{HFError, HFResult};
+
 pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 5;
 pub(crate) const DEFAULT_BASE_DELAY: Duration = Duration::from_millis(100);
 
@@ -69,22 +71,27 @@ fn is_transient_reqwest_error(err: &ReqwestError) -> bool {
     }
 }
 
-/// Whether an error raised while reading a response body (after the status and
-/// headers arrived) is worth resuming: a timeout, or the connection dropping
-/// mid-body. A body that fails to decode for any other reason is fatal.
-#[cfg(not(target_family = "wasm"))]
-pub(crate) fn is_transient_body_error(err: &ReqwestError) -> bool {
-    if err.is_timeout() {
-        return true;
+/// Whether an error raised while reading a response body is the connection
+/// dropping or timing out mid-transfer, so re-sending the request may succeed.
+fn is_transient_body_error(err: &ReqwestError) -> bool {
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = err;
+        false
     }
-    match find_source::<hyper::Error>(err) {
-        Some(hyper_err) => {
-            hyper_err.is_incomplete_message()
-                || hyper_err.is_canceled()
-                || hyper_err.is_timeout()
-                || find_source::<std::io::Error>(hyper_err).is_some()
-        },
-        None => find_source::<std::io::Error>(err).is_some(),
+    #[cfg(not(target_family = "wasm"))]
+    {
+        if !(err.is_body() || err.is_decode()) {
+            return false;
+        }
+        err.is_timeout()
+            || find_source::<hyper::Error>(err).is_some_and(|hyper_err| {
+                hyper_err.is_incomplete_message()
+                    || hyper_err.is_canceled()
+                    || hyper_err.is_timeout()
+                    || find_source::<std::io::Error>(hyper_err).is_some()
+            })
+            || find_source::<std::io::Error>(err).is_some()
     }
 }
 
@@ -138,7 +145,7 @@ fn log_exhausted(max_attempts: usize, result: &Result<Response, ReqwestError>) {
 /// Yields at most `config.max_attempts` durations. With `base_delay = B` and `max_attempts = N`
 /// the pre-jitter schedule is `2B, 4B, 8B, ..., 2^N * B`; `jitter` multiplies each by a random
 /// factor in `[0, 1)`, so the total sleep budget is bounded above by `B * (2^(N+1) - 2)`.
-pub(crate) fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> + Send + 'static {
+fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> {
     let base_ms = config.base_delay.as_millis().min(u64::MAX as u128) as u64;
     ExponentialBackoff::from_millis(2)
         .factor(base_ms)
@@ -176,6 +183,30 @@ where
         }
 
         attempt += 1;
+    }
+}
+
+/// Runs `attempt`, starting it over when its response body is cut off
+/// mid-transfer. [`retry`] only covers getting a response, so this wraps
+/// downloads that read the whole body before returning anything.
+pub(crate) async fn restart_on_body_error<T, F, Fut>(config: &RetryConfig, mut attempt: F) -> HFResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = HFResult<T>>,
+{
+    let mut delays = delay_strategy(config);
+    loop {
+        match attempt().await {
+            Err(HFError::Request { source, url }) if is_transient_body_error(&source) => {
+                let Some(delay) = delays.next() else {
+                    error!(url = ?url, max_attempts = config.max_attempts, "download body retries exhausted");
+                    return Err(HFError::Request { source, url });
+                };
+                debug!(url = ?url, error = %source, "response body interrupted, restarting download");
+                tokio::time::sleep(delay).await;
+            },
+            result => return result,
+        }
     }
 }
 
