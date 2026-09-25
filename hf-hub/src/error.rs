@@ -183,8 +183,9 @@ pub enum HFError {
     )]
     CacheNotEnabled,
 
-    /// Timed out waiting for an on-disk cache lock.
-    #[error("Cache lock timed out: {}", path.display())]
+    /// Timed out waiting for an on-disk cache lock held by another download of the same blob,
+    /// usually in another process. Retrying once that download finishes is expected to succeed.
+    #[error("Timed out waiting for another download of the same blob to release the cache lock: {}", path.display())]
     CacheLockTimeout {
         /// Path of the lock file or locked entry.
         path: std::path::PathBuf,
