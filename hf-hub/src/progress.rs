@@ -23,23 +23,64 @@
 //! ```text
 //!   Start ──┐
 //!           │ (silent preflight: preupload API, LFS classification)
-//!   Progress ── Progress ── … ── Progress
-//!           │ (active upload — poll loop fires ~every 100ms)
+//!   Progress{phase: Preparing} ── … ── Progress{phase: Uploading} ── …
+//!           │ (xet poll loop, ~every 100ms)
 //!   Committing
-//!           │ (silent: commit API round-trip)
+//!           │ (silent: commit API round-trip, or bucket batch registration)
 //!   Complete
 //! ```
+//!
+//! Upload contract:
+//!
+//! - `Start` is emitted once, first. Its totals do not change afterwards; `Progress.total_bytes` is xet's own count of
+//!   the same content and may differ slightly (e.g. while sizes are discovered for streams).
+//! - Every `Progress` carries an [`UploadPhase`]. It is `Preparing` while xet is still reading, chunking and hashing
+//!   and no byte counter has moved, and `Uploading` from the first moved byte on. It does not go back to `Preparing`,
+//!   including in the final `Progress`; an upload whose counters never move (e.g. only empty files) stays `Preparing`.
+//! - `bytes_completed` only counts content whose xorbs have been uploaded or deduplicated, so it can sit at 0 during
+//!   hashing and lag the network; `transfer_bytes_*` tracks the network. Per-file `Complete` statuses can arrive late,
+//!   often only in the final `Progress`.
+//! - `Committing` is emitted once, after the last byte-level `Progress` and before the commit (repo) or batch
+//!   registration (bucket) call. `Complete` follows on success.
+//! - Uploads that do not go through xet (small inline files) may skip `Progress` entirely.
 //!
 //! ## Download event sequence
 //!
 //! ```text
 //!   Start ──┐
-//!           │ (HEAD fan-out may precede this for snapshot downloads)
+//!           │ (HEAD fan-out precedes this for snapshot downloads)
 //!   Progress ── Progress ── … ── AggregateProgress ── Progress ── …
 //!           │ (Progress = per-file deltas; AggregateProgress = xet batch
 //!           │  totals. Either or both, interleaved.)
 //!   Complete
 //! ```
+//!
+//! Download contract, for `download_file`, `snapshot_download` and `HFBucket::download_files`:
+//!
+//! - `Start` is emitted exactly once per call, before any other event. Its `total_files` and `total_bytes` are
+//!   authoritative and never re-announced: a snapshot does not emit a `Start` per file. For `snapshot_download`,
+//!   `total_files` counts every selected file that exists at the resolved commit (including files already present
+//!   locally), and `total_bytes` is the sum of their sizes.
+//! - Every file counted in `Start.total_files` gets at least one [`FileProgress`] with [`FileStatus::Complete`] before
+//!   `Complete`, carrying `bytes_completed == total_bytes == <file size>`. That includes files that needed no transfer
+//!   (already in the snapshot, blob already cached, destination already present, or content shared with another file of
+//!   the same call). Repeats are possible; key by filename.
+//! - Per file, `total_bytes` is constant and `bytes_completed` never decreases. The sum over files of the latest
+//!   `bytes_completed` therefore rises monotonically to `Start.total_bytes`, and is the recommended overall byte
+//!   counter.
+//! - For xet files, per-file `bytes_completed` is bytes written to disk. Xet writes each file in order, so a single
+//!   large file can report little progress while later parts are already downloaded;
+//!   `AggregateProgress.transfer_bytes_completed` shows the network activity.
+//! - `AggregateProgress` describes only the xet files of the call. Its `total_bytes` is not the operation total and
+//!   should not replace `Start.total_bytes`; use it for rates and network activity.
+//! - `Complete` is emitted once, last, on success only.
+//! - `download_file` keeps this contract on cache hits too (snapshot already present, blob already cached, `304 Not
+//!   Modified`, `local_files_only`), sizing the file from disk when no transfer happens. One exception: if a transient
+//!   network error after `Start` makes it fall back to an older cached copy, that file's `Complete` reuses the size
+//!   already announced in `Start` rather than re-reading it from disk, so it always matches `Start.total_bytes`. If no
+//!   `Start` was announced yet and the cached file's size can't be read, the progress event for that file is skipped
+//!   (logged as a warning) instead of failing the call.
+//! - `snapshot_download` with `local_files_only` makes no network calls and emits no events at all.
 //!
 //! # Implementing a handler
 //!
@@ -237,6 +278,8 @@ pub enum UploadEvent {
     /// be empty for operations that don't go through xet (small inline files skip
     /// `Progress` entirely).
     Progress {
+        /// Whether bytes have started moving. See [`UploadPhase`].
+        phase: UploadPhase,
         /// Logical content bytes processed so far across all files.
         bytes_completed: u64,
         /// Total logical content bytes for the operation (matches `Start.total_bytes`).
@@ -266,12 +309,12 @@ pub enum UploadEvent {
 /// model, and cache-hit fast paths.
 #[derive(Debug, Clone)]
 pub enum DownloadEvent {
-    /// Download operation has begun; totals are known. Fires after the HEAD round-trip
-    /// (or HEAD fan-out for `snapshot_download`).
+    /// Download operation has begun; totals are known. Fires exactly once per call, after the
+    /// HEAD round-trip (or HEAD fan-out for `snapshot_download`), and its totals are final.
     Start {
-        /// Number of files to download.
+        /// Number of files the call covers, including ones that need no transfer.
         total_files: usize,
-        /// Sum of remote file sizes in bytes, as reported by HEAD responses.
+        /// Sum of those files' sizes in bytes.
         total_bytes: u64,
     },
 
@@ -287,16 +330,66 @@ pub enum DownloadEvent {
     /// cumulative bytes for the entire batch with no per-file breakdown — xet
     /// reports aggregate stats only.
     AggregateProgress {
-        /// Bytes downloaded so far across the in-flight xet batch.
+        /// File bytes written to disk so far across the in-flight xet batch. Xet writes each file
+        /// in order, so this can trail the network while an early part of a file is still in flight.
         bytes_completed: u64,
-        /// Total bytes for the in-flight xet batch.
+        /// Total file bytes for the in-flight xet batch. Covers only the xet files of this call,
+        /// not the operation total from `Start`.
         total_bytes: u64,
-        /// Download rate in bytes/sec. `None` until enough samples accumulate.
+        /// Rate of `bytes_completed` in bytes/sec. `None` until enough samples accumulate.
         bytes_per_sec: Option<f64>,
+        /// Network bytes received so far for the batch (compressed, after local chunk-cache hits).
+        transfer_bytes_completed: u64,
+        /// Network bytes the batch is expected to receive, as known so far. Grows while xet
+        /// discovers the reconstruction plan.
+        transfer_bytes: u64,
+        /// Network receive rate in bytes/sec. `None` until enough samples accumulate.
+        transfer_bytes_per_sec: Option<f64>,
     },
 
     /// Terminal event on success. Not emitted on failure — check the returned `Result`.
     Complete,
+}
+
+/// Stage of an upload reported on every [`UploadEvent::Progress`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UploadPhase {
+    /// Xet is reading, chunking and hashing the sources; nothing has been uploaded or matched
+    /// against existing content yet, so every byte counter is still zero. Large files can stay
+    /// here for a while.
+    Preparing,
+    /// Content is being uploaded (or found to exist already). Byte counters move from here on.
+    Uploading,
+}
+
+impl UploadPhase {
+    pub(crate) fn from_counters(bytes_completed: u64, transfer_bytes_completed: u64) -> Self {
+        if bytes_completed == 0 && transfer_bytes_completed == 0 {
+            Self::Preparing
+        } else {
+            Self::Uploading
+        }
+    }
+}
+
+/// Phase reported across the `Progress` events of one upload: `Uploading` from the first moved
+/// counter on, even if a later report reads lower counters.
+#[derive(Debug, Default)]
+pub(crate) struct UploadPhaseTracker(std::sync::atomic::AtomicBool);
+
+impl UploadPhaseTracker {
+    pub(crate) fn observe(&self, bytes_completed: u64, transfer_bytes_completed: u64) -> UploadPhase {
+        use std::sync::atomic::Ordering;
+        if UploadPhase::from_counters(bytes_completed, transfer_bytes_completed) == UploadPhase::Uploading {
+            self.0.store(true, Ordering::Relaxed);
+        }
+        if self.0.load(Ordering::Relaxed) {
+            UploadPhase::Uploading
+        } else {
+            UploadPhase::Preparing
+        }
+    }
 }
 
 /// Progress for a single file, carried in `Progress` events. See the parent
@@ -388,6 +481,24 @@ mod tests {
     }
 
     #[test]
+    fn upload_phase_is_preparing_until_a_byte_counter_moves() {
+        assert_eq!(UploadPhase::from_counters(0, 0), UploadPhase::Preparing);
+        assert_eq!(UploadPhase::from_counters(0, 1), UploadPhase::Uploading);
+        assert_eq!(UploadPhase::from_counters(1, 0), UploadPhase::Uploading);
+    }
+
+    #[test]
+    fn upload_phase_tracker_never_goes_back_to_preparing() {
+        use UploadPhase::{Preparing, Uploading};
+        let tracker = UploadPhaseTracker::default();
+        let phases: Vec<_> = [(0, 0), (0, 0), (0, 512), (0, 0), (1024, 512), (0, 0)]
+            .into_iter()
+            .map(|(bytes, transfer)| tracker.observe(bytes, transfer))
+            .collect();
+        assert_eq!(phases, [Preparing, Preparing, Uploading, Uploading, Uploading, Uploading]);
+    }
+
+    #[test]
     fn handler_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Arc<RecordingHandler>>();
@@ -409,6 +520,7 @@ mod tests {
             total_bytes: 1024,
         });
         progress.emit(UploadEvent::Progress {
+            phase: UploadPhase::Uploading,
             bytes_completed: 512,
             total_bytes: 1024,
             bytes_per_sec: Some(100.0),
@@ -475,6 +587,7 @@ mod tests {
             total_bytes: 100,
         });
         progress.emit(UploadEvent::Progress {
+            phase: UploadPhase::Uploading,
             bytes_completed: 50,
             total_bytes: 100,
             bytes_per_sec: None,
@@ -500,6 +613,7 @@ mod tests {
         let progress: Option<Progress> = Some(handler.clone().into());
 
         progress.emit(UploadEvent::Progress {
+            phase: UploadPhase::Uploading,
             bytes_completed: 500,
             total_bytes: 1000,
             bytes_per_sec: Some(100.0),

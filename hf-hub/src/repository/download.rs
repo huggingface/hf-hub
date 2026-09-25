@@ -58,6 +58,9 @@ struct DownloadFileParams {
     force_download: bool,
     local_files_only: bool,
     progress: Option<Progress>,
+    /// Emit `DownloadEvent::Start` for this file. Off inside `snapshot_download`, whose own
+    /// `Start` already covers every file.
+    announce_start: bool,
 }
 
 /// Internal options struct used by the streaming download helpers.
@@ -302,10 +305,12 @@ impl<T: RepoType> HFRepository<T> {
         let file_size = extract_file_size(&head_response).unwrap_or(0);
         let has_xet_hash = head_response.headers().get(constants::HEADER_X_XET_HASH).is_some();
 
-        params.progress.emit(DownloadEvent::Start {
-            total_files: 1,
-            total_bytes: file_size,
-        });
+        if params.announce_start {
+            params.progress.emit(DownloadEvent::Start {
+                total_files: 1,
+                total_bytes: file_size,
+            });
+        }
 
         if has_xet_hash {
             let local_dir = params.local_dir.as_ref().unwrap();
@@ -420,23 +425,33 @@ impl<T: RepoType> HFRepository<T> {
         if cache::is_commit_hash(revision) && !force_download {
             let snap = cache::snapshot_path(cache_dir, &repo_folder, revision, &params.filename);
             if snap.exists() {
+                announce_cached_file(params, &snap, false)?;
                 return Ok(snap);
             }
         }
 
         if params.local_files_only {
-            return self.resolve_from_cache_only(&repo_folder, revision, &params.filename);
+            let path = self.resolve_from_cache_only(&repo_folder, revision, &params.filename)?;
+            announce_cached_file(params, &path, false)?;
+            return Ok(path);
         }
 
+        let mut start_size: Option<u64> = None;
         let result = self
-            .download_file_to_cache_network(params, revision, cache_dir, &repo_folder, force_download)
+            .download_file_to_cache_network(params, revision, cache_dir, &repo_folder, force_download, &mut start_size)
             .await;
 
-        match &result {
-            Err(e) if e.is_transient() && !force_download => self
-                .resolve_from_cache_only(&repo_folder, revision, &params.filename)
-                .or(result),
-            _ => result,
+        match result {
+            Err(e) if e.is_transient() && !force_download => {
+                match self.resolve_from_cache_only(&repo_folder, revision, &params.filename) {
+                    Ok(path) => {
+                        announce_cached_file_after_transient_error(params, &path, start_size);
+                        Ok(path)
+                    },
+                    Err(_) => Err(e),
+                }
+            },
+            result => result,
         }
     }
 
@@ -448,6 +463,7 @@ impl<T: RepoType> HFRepository<T> {
         cache_dir: &Path,
         repo_folder: &str,
         force_download: bool,
+        start_size: &mut Option<u64>,
     ) -> HFResult<PathBuf> {
         let repo_path = self.repo_path();
         let url = self
@@ -494,7 +510,7 @@ impl<T: RepoType> HFRepository<T> {
                 })?,
             };
             let lock = cache::acquire_lock(cache_dir, repo_folder, &etag).await?;
-            return finalize_cached_file(
+            let path = finalize_cached_file(
                 &lock,
                 CachedFileTarget {
                     cache_dir,
@@ -506,7 +522,9 @@ impl<T: RepoType> HFRepository<T> {
                 },
                 false,
             )
-            .await;
+            .await?;
+            announce_cached_file(params, &path, false)?;
+            return Ok(path);
         }
 
         let etag = extract_etag(&head_response)
@@ -535,10 +553,13 @@ impl<T: RepoType> HFRepository<T> {
         let commit_hash =
             commit_hash.ok_or_else(|| HFError::malformed_response_at("missing X-Repo-Commit header", url.clone()))?;
 
-        params.progress.emit(DownloadEvent::Start {
-            total_files: 1,
-            total_bytes: file_size,
-        });
+        if params.announce_start {
+            params.progress.emit(DownloadEvent::Start {
+                total_files: 1,
+                total_bytes: file_size,
+            });
+            *start_size = Some(file_size);
+        }
 
         let snapshot_path = cache::snapshot_path(cache_dir, repo_folder, &commit_hash, &params.filename);
         if snapshot_path.exists() && !force_download {
@@ -547,14 +568,18 @@ impl<T: RepoType> HFRepository<T> {
             {
                 tracing::debug!(%error, revision, %commit_hash, "failed to update cache ref for existing snapshot");
             }
-            params.progress.emit(DownloadEvent::Progress {
-                files: vec![FileProgress {
-                    filename: params.filename.clone(),
-                    bytes_completed: file_size,
-                    total_bytes: file_size,
-                    status: FileStatus::Complete,
-                }],
-            });
+            emit_file_complete(&params.progress, &params.filename, file_size);
+            return Ok(snapshot_path);
+        }
+
+        if !force_download
+            && cache::blob_path(cache_dir, repo_folder, &etag).exists()
+            && cache::link_existing_blob(cache_dir, repo_folder, &commit_hash, &params.filename, &etag)?
+        {
+            emit_file_complete(&params.progress, &params.filename, file_size);
+            if !cache::is_commit_hash(revision) {
+                cache::write_ref(cache_dir, repo_folder, revision, &commit_hash).await?;
+            }
             return Ok(snapshot_path);
         }
 
@@ -569,14 +594,7 @@ impl<T: RepoType> HFRepository<T> {
                 {
                     tracing::debug!(%error, revision, %commit_hash, "failed to update cache ref for existing snapshot");
                 }
-                params.progress.emit(DownloadEvent::Progress {
-                    files: vec![FileProgress {
-                        filename: params.filename.clone(),
-                        bytes_completed: file_size,
-                        total_bytes: file_size,
-                        status: FileStatus::Complete,
-                    }],
-                });
+                emit_file_complete(&params.progress, &params.filename, file_size);
                 return Ok(snapshot_path);
             }
             let new_blob = !blob.exists();
@@ -586,6 +604,8 @@ impl<T: RepoType> HFRepository<T> {
                 }
                 self.xet_download_to_blob(revision, &params.filename, &xet_hash, file_size, &blob, &params.progress)
                     .await?;
+            } else {
+                emit_file_complete(&params.progress, &params.filename, file_size);
             }
 
             return finalize_cached_file(
@@ -612,26 +632,12 @@ impl<T: RepoType> HFRepository<T> {
             {
                 tracing::debug!(%error, revision, %commit_hash, "failed to update cache ref for existing snapshot");
             }
-            params.progress.emit(DownloadEvent::Progress {
-                files: vec![FileProgress {
-                    filename: params.filename.clone(),
-                    bytes_completed: file_size,
-                    total_bytes: file_size,
-                    status: FileStatus::Complete,
-                }],
-            });
+            emit_file_complete(&params.progress, &params.filename, file_size);
             return Ok(snapshot_path);
         }
 
         if blob.exists() && !force_download {
-            params.progress.emit(DownloadEvent::Progress {
-                files: vec![FileProgress {
-                    filename: params.filename.clone(),
-                    bytes_completed: file_size,
-                    total_bytes: file_size,
-                    status: FileStatus::Complete,
-                }],
-            });
+            emit_file_complete(&params.progress, &params.filename, file_size);
             return finalize_cached_file(
                 &lock,
                 CachedFileTarget {
@@ -658,6 +664,16 @@ impl<T: RepoType> HFRepository<T> {
             self.hf_client.http_client().get(&url).headers(dl_headers.clone()).send()
         })
         .await?;
+        let response = self
+            .hf_client
+            .check_response(
+                response,
+                Some(&repo_path),
+                crate::error::NotFoundContext::Entry {
+                    path: params.filename.clone(),
+                },
+            )
+            .await?;
         stream_response_to_file_with_progress(
             response,
             &incomplete_path,
@@ -713,26 +729,26 @@ impl<T: RepoType> HFRepository<T> {
         revision: &str,
         allow_patterns: Option<&Vec<String>>,
         ignore_patterns: Option<&Vec<String>>,
-    ) -> HFResult<Vec<String>> {
+    ) -> HFResult<Vec<(String, u64)>> {
         let stream = self.list_tree().revision(revision.to_string()).recursive(true).send()?;
         futures::pin_mut!(stream);
 
-        let mut filenames: Vec<String> = Vec::new();
+        let mut files: Vec<(String, u64)> = Vec::new();
         while let Some(entry) = stream.next().await {
             let entry = entry?;
-            if let RepoTreeEntry::File { path, .. } = entry {
-                filenames.push(path);
+            if let RepoTreeEntry::File { path, size, .. } = entry {
+                files.push((path, size));
             }
         }
 
         if let Some(allow) = allow_patterns {
-            filenames.retain(|f| matches_any_glob(allow, f));
+            files.retain(|(f, _)| matches_any_glob(allow, f));
         }
         if let Some(ignore) = ignore_patterns {
-            filenames.retain(|f| !matches_any_glob(ignore, f));
+            files.retain(|(f, _)| !matches_any_glob(ignore, f));
         }
 
-        Ok(filenames)
+        Ok(files)
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -766,23 +782,23 @@ impl<T: RepoType> HFRepository<T> {
 
         let commit_hash = self.resolve_commit_hash(revision).await?;
 
-        let mut filenames = self
+        let listed_files = self
             .list_filtered_files(&commit_hash, params.allow_patterns.as_ref(), params.ignore_patterns.as_ref())
             .await?;
 
-        let total_files = filenames.len();
         let force = params.force_download;
 
-        let mut cached_filenames = Vec::new();
-        if !force && params.local_dir.is_none() {
-            filenames.retain(|f| {
-                if cache::snapshot_path(cache_dir, &repo_folder, &commit_hash, f).exists() {
-                    cached_filenames.push(f.clone());
-                    false
-                } else {
-                    true
-                }
-            });
+        let mut cached_files: Vec<(String, u64)> = Vec::new();
+        let mut filenames: Vec<String> = Vec::with_capacity(listed_files.len());
+        for (filename, size) in listed_files {
+            if !force
+                && params.local_dir.is_none()
+                && cache::snapshot_path(cache_dir, &repo_folder, &commit_hash, &filename).exists()
+            {
+                cached_files.push((filename, size));
+            } else {
+                filenames.push(filename);
+            }
         }
 
         let repo_path = self.repo_path();
@@ -846,19 +862,20 @@ impl<T: RepoType> HFRepository<T> {
             .flatten()
             .collect();
 
-        let total_bytes: u64 = file_metas.iter().map(|m| m.file_size).sum();
+        let total_bytes: u64 = cached_files.iter().map(|(_, size)| size).sum::<u64>()
+            + file_metas.iter().map(|m| m.file_size).sum::<u64>();
         params.progress.emit(DownloadEvent::Start {
-            total_files,
+            total_files: cached_files.len() + file_metas.len(),
             total_bytes,
         });
-        if !cached_filenames.is_empty() {
+        if !cached_files.is_empty() {
             params.progress.emit(DownloadEvent::Progress {
-                files: cached_filenames
+                files: cached_files
                     .iter()
-                    .map(|f| FileProgress {
-                        filename: f.clone(),
-                        bytes_completed: 0,
-                        total_bytes: 0,
+                    .map(|(filename, size)| FileProgress {
+                        filename: filename.clone(),
+                        bytes_completed: *size,
+                        total_bytes: *size,
                         status: FileStatus::Complete,
                     })
                     .collect(),
@@ -873,7 +890,7 @@ impl<T: RepoType> HFRepository<T> {
             for meta in file_metas {
                 let dest = local_dir.join(&meta.filename);
                 if dest.exists() && !force {
-                    local_cached.push(meta.filename);
+                    local_cached.push(meta);
                     continue;
                 }
                 if meta.xet_hash.is_some() {
@@ -886,10 +903,10 @@ impl<T: RepoType> HFRepository<T> {
                 params.progress.emit(DownloadEvent::Progress {
                     files: local_cached
                         .iter()
-                        .map(|f| FileProgress {
-                            filename: f.clone(),
-                            bytes_completed: 0,
-                            total_bytes: 0,
+                        .map(|m| FileProgress {
+                            filename: m.filename.clone(),
+                            bytes_completed: m.file_size,
+                            total_bytes: m.file_size,
                             status: FileStatus::Complete,
                         })
                         .collect(),
@@ -1069,6 +1086,7 @@ impl<T: RepoType> HFRepository<T> {
             }
             self.xet_download_batch(&commit_hash, &batch_files, &params.progress).await?;
 
+            let mut linked_progress = Vec::new();
             for (etag, new_blob, metas) in pending_groups {
                 let lock = locks
                     .get(&etag)
@@ -1076,6 +1094,14 @@ impl<T: RepoType> HFRepository<T> {
                 let mut blob_must_be_preserved = !new_blob;
                 let last_index = metas.len().saturating_sub(1);
                 for (index, meta) in metas.into_iter().enumerate() {
+                    if index > 0 {
+                        linked_progress.push(FileProgress {
+                            filename: meta.filename.clone(),
+                            bytes_completed: meta.file_size,
+                            total_bytes: meta.file_size,
+                            status: FileStatus::Complete,
+                        });
+                    }
                     let move_blob = new_blob && !blob_must_be_preserved && index == last_index;
                     let result = cache::create_pointer_symlink(
                         lock,
@@ -1091,6 +1117,9 @@ impl<T: RepoType> HFRepository<T> {
                         blob_must_be_preserved = true;
                     }
                 }
+            }
+            if !linked_progress.is_empty() {
+                params.progress.emit(DownloadEvent::Progress { files: linked_progress });
             }
             Ok(())
         };
@@ -1157,6 +1186,69 @@ impl<T: RepoType> HFRepository<T> {
         params.progress.emit(DownloadEvent::Complete);
         Ok(cache_dir.join(&repo_folder).join("snapshots").join(&commit_hash))
     }
+}
+
+/// Announce a file served from the local cache: `Start` (unless one was already emitted for
+/// this call) and a per-file `Complete`, both sized from the file on disk.
+#[cfg(not(target_family = "wasm"))]
+fn announce_cached_file(params: &DownloadFileParams, path: &Path, start_emitted: bool) -> HFResult<()> {
+    if params.progress.is_none() {
+        return Ok(());
+    }
+    let size = std::fs::metadata(path)?.len();
+    if params.announce_start && !start_emitted {
+        params.progress.emit(DownloadEvent::Start {
+            total_files: 1,
+            total_bytes: size,
+        });
+    }
+    emit_file_complete(&params.progress, &params.filename, size);
+    Ok(())
+}
+
+/// Like `announce_cached_file`, for the fallback-to-cache path after a transient network error:
+/// the file is already resolved from cache, so a metadata read failure here must not turn that
+/// success into an error. Reuses the size already announced in `Start`, if any, instead of
+/// re-reading it from disk, so the reported size can't drift from what `Start` promised.
+#[cfg(not(target_family = "wasm"))]
+fn announce_cached_file_after_transient_error(params: &DownloadFileParams, path: &Path, start_size: Option<u64>) {
+    if params.progress.is_none() {
+        return;
+    }
+    let size = if let Some(size) = start_size {
+        size
+    } else {
+        match std::fs::metadata(path) {
+            Ok(meta) => meta.len(),
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "failed to read cached file size after transient download error; skipping progress event"
+                );
+                return;
+            },
+        }
+    };
+    if params.announce_start && start_size.is_none() {
+        params.progress.emit(DownloadEvent::Start {
+            total_files: 1,
+            total_bytes: size,
+        });
+    }
+    emit_file_complete(&params.progress, &params.filename, size);
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn emit_file_complete(progress: &Option<Progress>, filename: &str, size: u64) {
+    progress.emit(DownloadEvent::Progress {
+        files: vec![FileProgress {
+            filename: filename.to_string(),
+            bytes_completed: size,
+            total_bytes: size,
+            status: FileStatus::Complete,
+        }],
+    });
 }
 
 /// Split files into one owner per blob and the remaining files whose content (etag) an owner
@@ -1234,6 +1326,7 @@ fn build_download_params(
             force_download,
             local_files_only: false,
             progress: progress.clone(),
+            announce_start: false,
         })
         .collect()
 }
@@ -1721,6 +1814,7 @@ impl<T: RepoType> HFRepository<T> {
             force_download,
             local_files_only,
             progress,
+            announce_start: true,
         }))
         .await
     }
@@ -1958,92 +2052,175 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod shared_blob_tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     use super::split_shared_blobs;
     use crate::HFClient;
-    use crate::error::HFError;
+    use crate::cache::storage as cache;
     use crate::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler};
-    use crate::repository::FileMetadataInfo;
+    use crate::repository::{AddSource, FileMetadataInfo};
 
     const REPO: &str = "acme/dups";
     const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
     #[derive(Clone)]
     struct MockFile {
-        path: &'static str,
-        etag: &'static str,
-        xet_hash: Option<&'static str>,
-        body: &'static [u8],
+        path: String,
+        etag: String,
+        xet_hash: Option<String>,
+        body: Vec<u8>,
+        fail_get: bool,
     }
 
+    impl MockFile {
+        fn plain(path: &str, etag: &str, body: &[u8]) -> Self {
+            Self {
+                path: path.to_string(),
+                etag: etag.to_string(),
+                xet_hash: None,
+                body: body.to_vec(),
+                fail_get: false,
+            }
+        }
+    }
+
+    /// Loopback stand-in for the Hub: the tree listing, `HEAD`/`GET` on `resolve`, and Xet
+    /// read/write tokens pointing at a `local://` CAS directory. Everything else is a 404.
     struct MockHub {
         endpoint: String,
+        files: Arc<Mutex<Vec<MockFile>>>,
         requests: Arc<Mutex<Vec<String>>>,
+        _cas_dir: tempfile::TempDir,
     }
 
     impl MockHub {
+        async fn start() -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let cas_dir = tempfile::tempdir().unwrap();
+            let cas_url = format!("local://{}", cas_dir.path().display());
+            let files: Arc<Mutex<Vec<MockFile>>> = Arc::default();
+            let requests: Arc<Mutex<Vec<String>>> = Arc::default();
+            let (served_files, log) = (Arc::clone(&files), Arc::clone(&requests));
+            tokio::spawn(async move {
+                while let Ok((socket, _)) = listener.accept().await {
+                    let (files, log, cas_url) = (Arc::clone(&served_files), Arc::clone(&log), cas_url.clone());
+                    tokio::spawn(async move {
+                        let mut socket = BufReader::new(socket);
+                        let mut request_line = String::new();
+                        if socket.read_line(&mut request_line).await.unwrap_or(0) == 0 {
+                            return;
+                        }
+                        let mut if_none_match = None;
+                        loop {
+                            let mut line = String::new();
+                            if socket.read_line(&mut line).await.unwrap_or(0) == 0 || line == "\r\n" {
+                                break;
+                            }
+                            if let Some((name, value)) = line.split_once(':')
+                                && name.eq_ignore_ascii_case("if-none-match")
+                            {
+                                if_none_match = Some(value.trim().trim_matches('"').to_string());
+                            }
+                        }
+                        let mut parts = request_line.split_whitespace();
+                        let method = parts.next().unwrap_or_default().to_string();
+                        let path = parts
+                            .next()
+                            .unwrap_or_default()
+                            .split('?')
+                            .next()
+                            .unwrap_or_default()
+                            .to_string();
+                        log.lock().unwrap().push(format!("{method} {path}"));
+
+                        let files = files.lock().unwrap().clone();
+                        let (status, headers, body) = route(&files, &cas_url, &method, &path, if_none_match.as_deref());
+                        if status.starts_with("304") {
+                            log.lock().unwrap().push(format!("304 {path}"));
+                        }
+                        let mut response = format!("HTTP/1.1 {status}\r\nConnection: close\r\n");
+                        for (name, value) in headers {
+                            response.push_str(&format!("{name}: {value}\r\n"));
+                        }
+                        response.push_str("\r\n");
+                        let mut bytes = response.into_bytes();
+                        if method != "HEAD" {
+                            bytes.extend_from_slice(&body);
+                        }
+                        let _ = socket.get_mut().write_all(&bytes).await;
+                    });
+                }
+            });
+            Self {
+                endpoint,
+                files,
+                requests,
+                _cas_dir: cas_dir,
+            }
+        }
+
+        fn client(&self, cache_dir: &Path) -> HFClient {
+            HFClient::builder()
+                .endpoint(&self.endpoint)
+                .client(reqwest::Client::builder().no_proxy().build().unwrap())
+                .cache_dir(cache_dir)
+                .retry_max_attempts(1)
+                .build()
+                .unwrap()
+        }
+
+        /// Upload `body` to the local CAS and serve it at `path` as a Xet file.
+        async fn add_xet_file(&self, path: &str, body: &[u8]) {
+            let cache = tempfile::tempdir().unwrap();
+            let infos = self
+                .client(cache.path())
+                .model("acme", "dups")
+                .xet_upload(&[(path.to_string(), AddSource::bytes(body.to_vec()))], "main", false, &None)
+                .await
+                .unwrap();
+            let hash = infos[0].hash.clone();
+            self.files.lock().unwrap().push(MockFile {
+                path: path.to_string(),
+                etag: format!("sha-{hash}"),
+                xet_hash: Some(hash),
+                body: body.to_vec(),
+                fail_get: false,
+            });
+        }
+
+        fn add_file(&self, file: MockFile) {
+            self.files.lock().unwrap().push(file);
+        }
+
         fn count(&self, request: &str) -> usize {
             self.requests.lock().unwrap().iter().filter(|r| *r == request).count()
         }
     }
 
-    /// Loopback server that answers the tree listing and `HEAD`/`GET` on `resolve`, and 404s
-    /// everything else (including the Xet read-token endpoint). One request per connection.
-    async fn start_mock_hub(files: Vec<MockFile>) -> MockHub {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let log = Arc::clone(&requests);
-        let files = Arc::new(files);
-        tokio::spawn(async move {
-            while let Ok((socket, _)) = listener.accept().await {
-                let log = Arc::clone(&log);
-                let files = Arc::clone(&files);
-                tokio::spawn(async move {
-                    let mut socket = BufReader::new(socket);
-                    let mut request_line = String::new();
-                    if socket.read_line(&mut request_line).await.unwrap_or(0) == 0 {
-                        return;
-                    }
-                    loop {
-                        let mut line = String::new();
-                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 || line == "\r\n" {
-                            break;
-                        }
-                    }
-                    let mut parts = request_line.split_whitespace();
-                    let method = parts.next().unwrap_or_default().to_string();
-                    let path = parts
-                        .next()
-                        .unwrap_or_default()
-                        .split('?')
-                        .next()
-                        .unwrap_or_default()
-                        .to_string();
-                    log.lock().unwrap().push(format!("{method} {path}"));
-
-                    let (status, headers, body) = route(&files, &method, &path);
-                    let mut response = format!("HTTP/1.1 {status}\r\nConnection: close\r\n");
-                    for (name, value) in headers {
-                        response.push_str(&format!("{name}: {value}\r\n"));
-                    }
-                    response.push_str("\r\n");
-                    let mut bytes = response.into_bytes();
-                    if method != "HEAD" {
-                        bytes.extend_from_slice(&body);
-                    }
-                    let _ = socket.get_mut().write_all(&bytes).await;
-                });
-            }
-        });
-        MockHub { endpoint, requests }
-    }
-
-    fn route(files: &[MockFile], method: &str, path: &str) -> (&'static str, Vec<(String, String)>, Vec<u8>) {
+    fn route(
+        files: &[MockFile],
+        cas_url: &str,
+        method: &str,
+        path: &str,
+        if_none_match: Option<&str>,
+    ) -> (&'static str, Vec<(String, String)>, Vec<u8>) {
+        let json = |body: Vec<u8>| {
+            let headers = vec![
+                ("Content-Type".into(), "application/json".into()),
+                ("Content-Length".into(), body.len().to_string()),
+            ];
+            ("200 OK", headers, body)
+        };
+        let token_prefix = format!("/api/models/{REPO}/xet-");
+        if method == "GET" && path.starts_with(&token_prefix) {
+            let token = serde_json::json!({"accessToken": "token", "exp": 4_102_444_800u64, "casUrl": cas_url});
+            return json(serde_json::to_vec(&token).unwrap());
+        }
         if method == "GET" && path == format!("/api/models/{REPO}/tree/{COMMIT}") {
             let entries: Vec<serde_json::Value> = files
                 .iter()
@@ -2057,46 +2234,94 @@ mod shared_blob_tests {
                     })
                 })
                 .collect();
-            let body = serde_json::to_vec(&entries).unwrap();
-            let headers = vec![
-                ("Content-Type".into(), "application/json".into()),
-                ("Content-Length".into(), body.len().to_string()),
-            ];
-            return ("200 OK", headers, body);
+            return json(serde_json::to_vec(&entries).unwrap());
         }
-        let resolve_prefix = format!("/{REPO}/resolve/{COMMIT}/");
+        let resolve_prefix = format!("/{REPO}/resolve/");
         if let Some(file) = path
             .strip_prefix(&resolve_prefix)
+            .and_then(|rest| rest.strip_prefix(&format!("{COMMIT}/")).or_else(|| rest.strip_prefix("main/")))
             .and_then(|name| files.iter().find(|f| f.path == name))
         {
+            if method == "GET" && file.fail_get {
+                return ("500 Internal Server Error", vec![("Content-Length".into(), "0".into())], Vec::new());
+            }
+            if method == "HEAD" && if_none_match == Some(file.etag.as_str()) {
+                let headers = vec![
+                    ("ETag".into(), format!("\"{}\"", file.etag)),
+                    ("X-Repo-Commit".into(), COMMIT.into()),
+                    ("Content-Length".into(), "0".into()),
+                ];
+                return ("304 Not Modified", headers, Vec::new());
+            }
             let mut headers = vec![
                 ("ETag".into(), format!("\"{}\"", file.etag)),
                 ("X-Repo-Commit".into(), COMMIT.into()),
                 ("Content-Length".into(), file.body.len().to_string()),
             ];
-            if let Some(hash) = file.xet_hash {
-                headers.push(("X-Xet-Hash".into(), hash.into()));
+            if let Some(hash) = &file.xet_hash {
+                headers.push(("X-Xet-Hash".into(), hash.clone()));
             }
-            return ("200 OK", headers, file.body.to_vec());
+            return ("200 OK", headers, file.body.clone());
         }
         ("404 Not Found", vec![("Content-Length".into(), "0".into())], Vec::new())
     }
 
-    fn client(endpoint: &str, cache_dir: &std::path::Path) -> HFClient {
-        HFClient::builder()
-            .endpoint(endpoint)
-            .client(reqwest::Client::builder().no_proxy().build().unwrap())
-            .cache_dir(cache_dir)
-            .retry_max_attempts(1)
-            .build()
-            .unwrap()
-    }
-
-    struct RecordingHandler(Mutex<Vec<ProgressEvent>>);
+    #[derive(Default)]
+    struct RecordingHandler(Mutex<Vec<DownloadEvent>>);
 
     impl ProgressHandler for RecordingHandler {
         fn on_progress(&self, event: &ProgressEvent) {
-            self.0.lock().unwrap().push(event.clone());
+            if let ProgressEvent::Download(event) = event {
+                self.0.lock().unwrap().push(event.clone());
+            }
+        }
+    }
+
+    impl RecordingHandler {
+        /// Check the download contract documented in `crate::progress` and return the final
+        /// `(bytes_completed, total_bytes)` per file.
+        fn assert_download_contract(&self, expected_files: usize, expected_bytes: u64) -> HashMap<String, (u64, u64)> {
+            let events = self.0.lock().unwrap().clone();
+            let starts: Vec<_> = events
+                .iter()
+                .filter_map(|e| match e {
+                    DownloadEvent::Start {
+                        total_files,
+                        total_bytes,
+                    } => Some((*total_files, *total_bytes)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(starts, [(expected_files, expected_bytes)], "exactly one authoritative Start");
+            assert!(matches!(events.first(), Some(DownloadEvent::Start { .. })), "Start comes first");
+            assert!(matches!(events.last(), Some(DownloadEvent::Complete)), "Complete comes last");
+            assert_eq!(events.iter().filter(|e| matches!(e, DownloadEvent::Complete)).count(), 1);
+
+            let mut latest: HashMap<String, (u64, u64)> = HashMap::new();
+            let mut completed: HashSet<String> = HashSet::new();
+            let mut overall = 0u64;
+            for event in &events {
+                let DownloadEvent::Progress { files } = event else {
+                    continue;
+                };
+                for f in files {
+                    if let Some((done, total)) = latest.get(&f.filename) {
+                        assert_eq!(*total, f.total_bytes, "per-file total changed for {}", f.filename);
+                        assert!(f.bytes_completed >= *done, "per-file bytes went backwards for {}", f.filename);
+                    }
+                    latest.insert(f.filename.clone(), (f.bytes_completed, f.total_bytes));
+                    if f.status == FileStatus::Complete {
+                        assert_eq!(f.bytes_completed, f.total_bytes, "{} completed short", f.filename);
+                        completed.insert(f.filename.clone());
+                    }
+                }
+                let sum: u64 = latest.values().map(|(done, _)| done).sum();
+                assert!(sum >= overall && sum <= expected_bytes, "overall bytes {sum} not monotonic within total");
+                overall = sum;
+            }
+            assert_eq!(completed.len(), expected_files, "every file completes: {completed:?}");
+            assert_eq!(overall, expected_bytes, "per-file bytes add up to Start.total_bytes");
+            latest
         }
     }
 
@@ -2126,29 +2351,17 @@ mod shared_blob_tests {
     }
 
     #[tokio::test]
-    async fn cache_snapshot_fetches_a_shared_blob_once_and_links_every_filename() {
-        let shared_file = |path| MockFile {
-            path,
-            etag: "shared-etag",
-            xet_hash: None,
-            body: b"same bytes",
-        };
-        let hub = start_mock_hub(vec![
-            shared_file("config.json"),
-            shared_file("copies/config.json"),
-            shared_file("copies/again.json"),
-            MockFile {
-                path: "README.md",
-                etag: "readme-etag",
-                xet_hash: None,
-                body: b"readme",
-            },
-        ])
-        .await;
+    async fn cache_snapshot_fetches_a_shared_plain_blob_once() {
+        let hub = MockHub::start().await;
+        for path in ["config.json", "copies/config.json", "copies/again.json"] {
+            hub.add_file(MockFile::plain(path, "shared-etag", b"same bytes"));
+        }
+        hub.add_file(MockFile::plain("README.md", "readme-etag", b"readme"));
         let cache = tempfile::tempdir().unwrap();
-        let handler = Arc::new(RecordingHandler(Mutex::new(Vec::new())));
+        let handler = Arc::new(RecordingHandler::default());
 
-        let snapshot = client(&hub.endpoint, cache.path())
+        let snapshot = hub
+            .client(cache.path())
             .model("acme", "dups")
             .snapshot_download()
             .revision(COMMIT)
@@ -2161,58 +2374,285 @@ mod shared_blob_tests {
             assert_eq!(std::fs::read(snapshot.join(name)).unwrap(), b"same bytes", "{name}");
         }
         assert_eq!(std::fs::read(snapshot.join("README.md")).unwrap(), b"readme");
-
         let shared_gets: usize = ["config.json", "copies/config.json", "copies/again.json"]
             .iter()
             .map(|name| hub.count(&format!("GET /{REPO}/resolve/{COMMIT}/{name}")))
             .sum();
         assert_eq!(shared_gets, 1, "the shared blob must be fetched exactly once");
+        handler.assert_download_contract(4, 3 * 10 + 6);
+    }
 
-        let completed: HashSet<String> = handler
+    /// Xet files with identical content used to take the same cache lock once per filename, so
+    /// the second acquisition blocked on the first until the lock timed out.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cache_snapshot_with_shared_xet_blob_downloads_it_once_and_links_every_filename() {
+        let hub = MockHub::start().await;
+        let names = [
+            "onnx/model_qint8_arm64.onnx",
+            "onnx/model_qint8_avx512.onnx",
+            "onnx/model_qint8_avx512_vnni.onnx",
+        ];
+        for name in names {
+            hub.add_xet_file(name, b"quantized weights").await;
+        }
+        let cache = tempfile::tempdir().unwrap();
+        let handler = Arc::new(RecordingHandler::default());
+
+        let snapshot = hub
+            .client(cache.path())
+            .model("acme", "dups")
+            .snapshot_download()
+            .revision(COMMIT)
+            .progress(Arc::clone(&handler))
+            .send()
+            .await
+            .unwrap();
+
+        for name in names {
+            assert_eq!(std::fs::read(snapshot.join(name)).unwrap(), b"quantized weights", "{name}");
+        }
+        let blobs: Vec<_> = std::fs::read_dir(cache.path().join("models--acme--dups").join("blobs"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(blobs.len(), 1, "one blob, no leftover .incomplete files: {blobs:?}");
+        handler.assert_download_contract(3, 3 * 17);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mixed_cache_snapshot_announces_totals_once() {
+        let hub = MockHub::start().await;
+        hub.add_xet_file("model.safetensors", &[7u8; 300_000]).await;
+        hub.add_xet_file("tokenizer.json", b"{\"tokens\": []}").await;
+        hub.add_file(MockFile::plain("config.json", "config-etag", b"{\"a\": 1}"));
+        hub.add_file(MockFile::plain("README.md", "readme-etag", b"# readme"));
+        let cache = tempfile::tempdir().unwrap();
+        let client = hub.client(cache.path());
+        let expected_bytes = 300_000 + 14 + 8 + 8;
+
+        client
+            .model("acme", "dups")
+            .download_file()
+            .filename("README.md")
+            .revision(COMMIT)
+            .send()
+            .await
+            .unwrap();
+
+        let handler = Arc::new(RecordingHandler::default());
+        client
+            .model("acme", "dups")
+            .snapshot_download()
+            .revision(COMMIT)
+            .progress(Arc::clone(&handler))
+            .send()
+            .await
+            .unwrap();
+
+        let latest = handler.assert_download_contract(4, expected_bytes);
+        assert_eq!(latest["README.md"], (8, 8), "an already-present file still reports its size");
+        assert_eq!(hub.count(&format!("HEAD /{REPO}/resolve/{COMMIT}/README.md")), 1, "only the first download");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mixed_local_dir_snapshot_announces_totals_once() {
+        let hub = MockHub::start().await;
+        hub.add_xet_file("model.safetensors", &[3u8; 200_000]).await;
+        hub.add_file(MockFile::plain("config.json", "config-etag", b"{\"a\": 1}"));
+        hub.add_file(MockFile::plain("nested/notes.txt", "notes-etag", b"notes"));
+        let cache = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dest.path().join("nested")).unwrap();
+        std::fs::write(dest.path().join("nested/notes.txt"), b"notes").unwrap();
+        let handler = Arc::new(RecordingHandler::default());
+
+        hub.client(cache.path())
+            .model("acme", "dups")
+            .snapshot_download()
+            .revision(COMMIT)
+            .local_dir(dest.path())
+            .progress(Arc::clone(&handler))
+            .send()
+            .await
+            .unwrap();
+
+        let latest = handler.assert_download_contract(3, 200_000 + 8 + 5);
+        assert_eq!(latest["nested/notes.txt"], (5, 5));
+        assert_eq!(std::fs::read(dest.path().join("model.safetensors")).unwrap(), vec![3u8; 200_000]);
+    }
+
+    #[tokio::test]
+    async fn download_file_snapshot_hit_keeps_the_contract() {
+        let hub = MockHub::start().await;
+        hub.add_file(MockFile::plain("config.json", "config-etag", b"{\"a\": 1}"));
+        let cache = tempfile::tempdir().unwrap();
+        let repo = hub.client(cache.path()).model("acme", "dups");
+        repo.download_file()
+            .filename("config.json")
+            .revision(COMMIT)
+            .send()
+            .await
+            .unwrap();
+
+        let handler = Arc::new(RecordingHandler::default());
+        let path = repo
+            .download_file()
+            .filename("config.json")
+            .revision(COMMIT)
+            .progress(Arc::clone(&handler))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), b"{\"a\": 1}");
+        handler.assert_download_contract(1, 8);
+        assert_eq!(hub.count(&format!("HEAD /{REPO}/resolve/{COMMIT}/config.json")), 1);
+    }
+
+    #[tokio::test]
+    async fn download_file_not_modified_and_local_files_only_keep_the_contract() {
+        let hub = MockHub::start().await;
+        hub.add_file(MockFile::plain("config.json", "config-etag", b"{\"a\": 1}"));
+        let cache = tempfile::tempdir().unwrap();
+        let repo = hub.client(cache.path()).model("acme", "dups");
+        repo.download_file().filename("config.json").send().await.unwrap();
+
+        let handler = Arc::new(RecordingHandler::default());
+        let path = repo
+            .download_file()
+            .filename("config.json")
+            .progress(Arc::clone(&handler))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), b"{\"a\": 1}");
+        assert_eq!(hub.count(&format!("304 /{REPO}/resolve/main/config.json")), 1);
+        assert_eq!(hub.count(&format!("GET /{REPO}/resolve/main/config.json")), 1);
+        handler.assert_download_contract(1, 8);
+
+        let handler = Arc::new(RecordingHandler::default());
+        repo.download_file()
+            .filename("config.json")
+            .local_files_only(true)
+            .progress(Arc::clone(&handler))
+            .send()
+            .await
+            .unwrap();
+        handler.assert_download_contract(1, 8);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn download_file_blob_hit_keeps_the_contract_without_waiting_on_the_lock() {
+        let hub = MockHub::start().await;
+        hub.add_file(MockFile::plain("a.txt", "shared-etag", b"same bytes"));
+        hub.add_file(MockFile::plain("b.txt", "shared-etag", b"same bytes"));
+        hub.add_xet_file("weights/a.bin", b"shared weights").await;
+        hub.add_xet_file("weights/b.bin", b"shared weights").await;
+        let xet_etag = hub.files.lock().unwrap().last().unwrap().etag.clone();
+        let cache = tempfile::tempdir().unwrap();
+        let repo = hub.client(cache.path()).model("acme", "dups");
+        for name in ["a.txt", "weights/a.bin"] {
+            repo.download_file().filename(name).revision(COMMIT).send().await.unwrap();
+        }
+
+        let _held = [
+            cache::acquire_lock(cache.path(), "models--acme--dups", "shared-etag")
+                .await
+                .unwrap(),
+            cache::acquire_lock(cache.path(), "models--acme--dups", &xet_etag)
+                .await
+                .unwrap(),
+        ];
+        for (name, body) in [("b.txt", &b"same bytes"[..]), ("weights/b.bin", &b"shared weights"[..])] {
+            let handler = Arc::new(RecordingHandler::default());
+            let path = repo
+                .download_file()
+                .filename(name)
+                .revision(COMMIT)
+                .progress(Arc::clone(&handler))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), body, "{name}");
+            handler.assert_download_contract(1, body.len() as u64);
+        }
+    }
+
+    #[tokio::test]
+    async fn cache_snapshot_owner_failure_links_no_shared_filename() {
+        let hub = MockHub::start().await;
+        let names = ["config.json", "copies/config.json", "copies/again.json"];
+        for name in names {
+            hub.add_file(MockFile {
+                fail_get: true,
+                ..MockFile::plain(name, "shared-etag", b"same bytes")
+            });
+        }
+        let cache = tempfile::tempdir().unwrap();
+        let handler = Arc::new(RecordingHandler::default());
+
+        let result = hub
+            .client(cache.path())
+            .model("acme", "dups")
+            .snapshot_download()
+            .revision(COMMIT)
+            .progress(Arc::clone(&handler))
+            .send()
+            .await;
+
+        assert!(result.is_err(), "{result:?}");
+        let snapshot = cache.path().join("models--acme--dups").join("snapshots").join(COMMIT);
+        for name in names {
+            assert!(std::fs::symlink_metadata(snapshot.join(name)).is_err(), "{name} was linked");
+        }
+        let completed: Vec<_> = handler
             .0
             .lock()
             .unwrap()
             .iter()
             .filter_map(|e| match e {
-                ProgressEvent::Download(DownloadEvent::Progress { files }) => Some(files.clone()),
+                DownloadEvent::Progress { files } => Some(files.clone()),
                 _ => None,
             })
             .flatten()
             .filter(|f| f.status == FileStatus::Complete)
             .map(|f| f.filename)
             .collect();
-        assert_eq!(completed.len(), 4, "every filename reports completion: {completed:?}");
+        assert!(completed.is_empty(), "{completed:?}");
     }
 
-    /// Xet files with identical content used to take the same cache lock once per filename, so
-    /// the second acquisition blocked on the first until the lock timed out.
-    #[tokio::test]
-    async fn cache_snapshot_with_shared_xet_blob_does_not_wait_on_its_own_lock() {
-        let xet_file = |path| MockFile {
-            path,
-            etag: "0000000000000000000000000000000000000000000000000000000000000abc",
-            xet_hash: Some("1111111111111111111111111111111111111111111111111111111111111111"),
-            body: b"quantized",
-        };
-        let hub = start_mock_hub(vec![
-            xet_file("onnx/model_qint8_arm64.onnx"),
-            xet_file("onnx/model_qint8_avx512.onnx"),
-            xet_file("onnx/model_qint8_avx512_vnni.onnx"),
-        ])
-        .await;
+    #[tokio::test(flavor = "multi_thread")]
+    async fn local_dir_snapshot_writes_every_file_with_shared_content() {
+        let hub = MockHub::start().await;
+        let plain = ["config.json", "copies/config.json"];
+        let xet = ["onnx/model_arm64.onnx", "onnx/model_avx512.onnx"];
+        for name in plain {
+            hub.add_file(MockFile::plain(name, "shared-etag", b"same bytes"));
+        }
+        for name in xet {
+            hub.add_xet_file(name, b"quantized weights").await;
+        }
         let cache = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let handler = Arc::new(RecordingHandler::default());
 
-        let result = client(&hub.endpoint, cache.path())
+        hub.client(cache.path())
             .model("acme", "dups")
             .snapshot_download()
             .revision(COMMIT)
+            .local_dir(dest.path())
+            .progress(Arc::clone(&handler))
             .send()
-            .await;
+            .await
+            .unwrap();
 
-        assert!(
-            !matches!(result, Err(HFError::CacheLockTimeout { .. })),
-            "self-deadlocked on the shared blob lock: {result:?}"
-        );
-        assert_eq!(hub.count(&format!("GET /api/models/{REPO}/xet-read-token/{COMMIT}")), 1);
+        handler.assert_download_contract(4, 2 * 10 + 2 * 17);
+        for name in plain {
+            assert_eq!(std::fs::read(dest.path().join(name)).unwrap(), b"same bytes", "{name}");
+        }
+        for name in xet {
+            assert_eq!(std::fs::read(dest.path().join(name)).unwrap(), b"quantized weights", "{name}");
+        }
     }
 }

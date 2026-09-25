@@ -20,7 +20,7 @@
 use bytes::Bytes;
 use futures_util::StreamExt;
 use hf_hub::progress::{
-    DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, ProgressHandler, UploadEvent,
+    DownloadEvent, FileProgress, FileStatus, Progress, ProgressEvent, ProgressHandler, UploadEvent, UploadPhase,
 };
 use hf_hub::repository::download::HFByteStream;
 use hf_hub::{HFClient, HFClientBuilder, HFResult, RepoTypeAny};
@@ -218,11 +218,17 @@ fn event_to_js(event: &ProgressEvent) -> JsValue {
             bytes_completed,
             total_bytes,
             bytes_per_sec,
+            transfer_bytes_completed,
+            transfer_bytes,
+            transfer_bytes_per_sec,
         }) => {
             set_kind(&obj, "download.aggregate_progress");
             set_number(&obj, "bytes_completed", *bytes_completed as f64);
             set_number(&obj, "total_bytes", *total_bytes as f64);
             set_optional_number(&obj, "bytes_per_sec", *bytes_per_sec);
+            set_number(&obj, "transfer_bytes_completed", *transfer_bytes_completed as f64);
+            set_number(&obj, "transfer_bytes", *transfer_bytes as f64);
+            set_optional_number(&obj, "transfer_bytes_per_sec", *transfer_bytes_per_sec);
         },
         ProgressEvent::Download(DownloadEvent::Complete) => {
             set_kind(&obj, "download.complete");
@@ -243,8 +249,15 @@ fn event_to_js(event: &ProgressEvent) -> JsValue {
             transfer_bytes,
             transfer_bytes_per_sec,
             files,
+            phase,
         }) => {
             set_kind(&obj, "upload.progress");
+            let phase = match phase {
+                UploadPhase::Preparing => "preparing",
+                UploadPhase::Uploading => "uploading",
+                _ => "unknown",
+            };
+            set(&obj, "phase", &JsValue::from_str(phase));
             set_number(&obj, "bytes_completed", *bytes_completed as f64);
             set_number(&obj, "total_bytes", *total_bytes as f64);
             set_optional_number(&obj, "bytes_per_sec", *bytes_per_sec);

@@ -101,6 +101,41 @@ pub(crate) async fn create_pointer_symlink(
     }
 }
 
+/// Symlink a snapshot entry to a blob that is already complete, without taking the blob's lock,
+/// so a cache hit never waits on a download that holds it. Returns `false` when symlinks are
+/// unavailable; the caller then takes the lock and goes through `create_pointer_symlink`.
+pub(crate) fn link_existing_blob(
+    cache_dir: &Path,
+    repo_folder: &str,
+    commit_hash: &str,
+    filename: &str,
+    etag: &str,
+) -> crate::error::HFResult<bool> {
+    let pointer = snapshot_path(cache_dir, repo_folder, commit_hash, filename);
+    if let Some(parent) = pointer.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let blob = blob_path(cache_dir, repo_folder, etag);
+    let pointer_parent = pointer.parent().unwrap();
+    let relative = pathdiff::diff_paths(&blob, pointer_parent).unwrap_or_else(|| blob.clone());
+    let _ = std::fs::remove_file(&pointer);
+
+    #[cfg(not(windows))]
+    let result = std::os::unix::fs::symlink(&relative, &pointer);
+    #[cfg(windows)]
+    let result = std::os::windows::fs::symlink_file(&relative, &pointer);
+    match result {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok(pointer.symlink_metadata()?.file_type().is_symlink())
+        },
+        #[cfg(windows)]
+        Err(_) => Ok(false),
+        #[cfg(not(windows))]
+        Err(e) => Err(e.into()),
+    }
+}
+
 #[cfg(any(windows, test))]
 fn create_pointer_without_symlink(
     blob: &Path,

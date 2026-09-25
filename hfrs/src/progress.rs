@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
 use std::sync::Mutex;
 
-use hf_hub::progress::{DownloadEvent, FileProgress, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
+use hf_hub::progress::{
+    DownloadEvent, FileProgress, FileStatus, ProgressEvent, ProgressHandler, UploadEvent, UploadPhase,
+};
 use indicatif::{HumanBytes, HumanDuration, MultiProgress, ProgressBar, ProgressStyle};
 
 /// Renders indicatif progress bars in the terminal for download and upload operations.
@@ -252,6 +254,7 @@ impl CliProgressHandler {
                 state.spinner = Some(bar);
             },
             UploadEvent::Progress {
+                phase,
                 bytes_completed,
                 total_bytes,
                 bytes_per_sec,
@@ -260,6 +263,9 @@ impl CliProgressHandler {
                 transfer_bytes_per_sec,
                 files,
             } => {
+                if *phase == UploadPhase::Preparing && !state.upload_bars_active {
+                    return;
+                }
                 if !state.upload_bars_active {
                     if let Some(spinner) = state.spinner.take() {
                         spinner.finish_and_clear();

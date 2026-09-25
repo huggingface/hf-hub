@@ -50,6 +50,7 @@ impl ProgressHandler for PrintProgressHandler {
                     println!("Starting upload: {total_files} file(s), {total_bytes} bytes");
                 },
                 UploadEvent::Progress {
+                    phase,
                     bytes_completed,
                     total_bytes,
                     bytes_per_sec,
@@ -59,7 +60,7 @@ impl ProgressHandler for PrintProgressHandler {
                     files,
                 } => {
                     let rate = bytes_per_sec.map(|r| format!(" ({:.1} B/s)", r)).unwrap_or_default();
-                    println!("  [uploading] {bytes_completed}/{total_bytes}{rate}");
+                    println!("  [{phase:?}] {bytes_completed}/{total_bytes}{rate}");
                     if *transfer_bytes > 0 {
                         let transfer_rate =
                             transfer_bytes_per_sec.map(|r| format!(" ({:.1} B/s)", r)).unwrap_or_default();
