@@ -314,7 +314,7 @@ impl HFBucket {
     ///   - `xet_hash` (`String`): xet content hash from a prior xet upload — the bytes must already be in xet storage;
     ///     this call only registers metadata.
     ///   - `size` (`u64`): file size in bytes.
-    ///   - `mtime` (`Option<u64>`): last modification time as a Unix timestamp in seconds.
+    ///   - `mtime` (`Option<u64>`): last modification time in milliseconds since the Unix epoch.
     ///   - `content_type` (`Option<String>`): MIME type (e.g., `"text/plain"`).
     /// - `delete`: bucket-relative paths to remove from the bucket.
     /// - `copy`: server-side copies into this bucket. Each [`BucketCopyFile`] requires:
@@ -608,11 +608,7 @@ impl HFBucket {
             .map(|(f, xet_info)| {
                 let metadata = std::fs::metadata(&f.local).ok();
                 let size = metadata.as_ref().map(|m| m.len()).or(xet_info.file_size).unwrap_or(0);
-                let mtime = metadata
-                    .as_ref()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs());
+                let mtime = metadata.as_ref().and_then(mtime_millis);
 
                 BucketAddFile {
                     path: f.remote.clone(),
@@ -736,6 +732,13 @@ impl HFBucket {
     }
 }
 
+/// Modification time in milliseconds since the Unix epoch, the unit the batch endpoint expects.
+#[cfg(not(target_family = "wasm"))]
+fn mtime_millis(metadata: &std::fs::Metadata) -> Option<u64> {
+    let since_epoch = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(since_epoch.as_millis()).ok()
+}
+
 /// A file to register in a bucket via the batch endpoint.
 ///
 /// Represents an `addFile` entry in the NDJSON batch payload.
@@ -749,7 +752,7 @@ pub struct BucketAddFile {
     pub xet_hash: String,
     /// File size in bytes.
     pub size: u64,
-    /// Last modification time as a Unix timestamp (seconds).
+    /// Last modification time in milliseconds since the Unix epoch. Forwarded as `mtime`.
     pub mtime: Option<u64>,
     /// MIME content type (e.g., `"text/plain"`, `"application/octet-stream"`).
     pub content_type: Option<String>,
@@ -1319,6 +1322,19 @@ mod tests {
             request.contains("/api/buckets/my-org/my-bucket/tree/data"),
             "expected the prefix as a path segment, got: {request}"
         );
+    }
+
+    /// The Hub reads `addFile.mtime` as milliseconds; seconds show up as dates in January 1970.
+    #[test]
+    fn upload_mtime_is_sent_in_milliseconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.bin");
+        let file = std::fs::File::create(&path).unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_758_800_000_123);
+        file.set_modified(modified).unwrap();
+
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert_eq!(super::mtime_millis(&metadata), Some(1_758_800_000_123));
     }
 
     /// Shape of a live `GET /api/buckets/{id}/tree?recursive=false` page: a directory entry next
