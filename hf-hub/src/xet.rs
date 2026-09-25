@@ -28,7 +28,7 @@ use crate::repository::{HFRepository, RepoType};
 use crate::retry;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
-    progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent},
+    progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress, UploadEvent, UploadPhaseTracker},
     repository::AddSource,
 };
 
@@ -158,6 +158,9 @@ fn spawn_download_progress_poller(
                 bytes_completed: report.total_bytes_completed,
                 total_bytes: report.total_bytes,
                 bytes_per_sec: report.total_bytes_completion_rate,
+                transfer_bytes_completed: report.total_transfer_bytes_completed,
+                transfer_bytes: report.total_transfer_bytes,
+                transfer_bytes_per_sec: report.total_transfer_bytes_completion_rate,
             });
 
             let mut files = Vec::new();
@@ -373,12 +376,26 @@ async fn xet_upload_inner(
     let shared_handles: Arc<Vec<NativeAnyHandle>> = Arc::new(handles);
     let shared_name_map: Arc<HashMap<String, String>> = Arc::new(item_name_to_target_path);
 
+    let phase = Arc::new(UploadPhaseTracker::default());
+    // Aborts the poll task on drop so an early `?` return (e.g. from `stream_tasks` or
+    // `commit.commit()`) can't leave it emitting progress after this function has returned.
+    struct PollGuard(Option<tokio::task::JoinHandle<()>>);
+
+    impl Drop for PollGuard {
+        fn drop(&mut self) {
+            if let Some(h) = self.0.take() {
+                h.abort();
+            }
+        }
+    }
+
     let poll_handle = progress.as_ref().map(|handler| {
         let handler = handler.clone();
         let commit = commit.clone();
+        let phase = Arc::clone(&phase);
         let poll_handles = Arc::clone(&shared_handles);
         let poll_name_map = Arc::clone(&shared_name_map);
-        tokio::spawn(async move {
+        PollGuard(Some(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 let report = commit.progress();
@@ -403,6 +420,7 @@ async fn xet_upload_inner(
                     })
                     .collect();
                 handler.emit(UploadEvent::Progress {
+                    phase: phase.observe(report.total_bytes_completed, report.total_transfer_bytes_completed),
                     bytes_completed: report.total_bytes_completed,
                     total_bytes: report.total_bytes,
                     bytes_per_sec: report.total_bytes_completion_rate,
@@ -412,7 +430,7 @@ async fn xet_upload_inner(
                     files: file_progress,
                 });
             }
-        })
+        })))
     });
     // For streams, we need each `finish()` to land before `commit.commit()`
     // — otherwise the commit waits indefinitely on the in-flight cleaners.
@@ -427,8 +445,11 @@ async fn xet_upload_inner(
     }
 
     let results = commit.commit().await.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
-    if let Some(h) = poll_handle {
+    if let Some(mut guard) = poll_handle
+        && let Some(h) = guard.0.take()
+    {
         h.abort();
+        let _ = h.await;
     }
     tracing::info!("xet upload commit complete");
 
@@ -450,6 +471,7 @@ async fn xet_upload_inner(
         .collect();
 
     progress.emit(UploadEvent::Progress {
+        phase: phase.observe(results.progress.total_bytes_completed, results.progress.total_transfer_bytes_completed),
         bytes_completed: results.progress.total_bytes_completed,
         total_bytes: results.progress.total_bytes,
         bytes_per_sec: results.progress.total_bytes_completion_rate,

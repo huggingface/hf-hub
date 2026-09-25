@@ -620,6 +620,7 @@ impl HFBucket {
             })
             .collect();
 
+        progress.emit(UploadEvent::Committing);
         self.batch_operations().add_files(add_files).send().await?;
 
         progress.emit(UploadEvent::Complete);
@@ -725,6 +726,7 @@ impl HFBucket {
             })
             .collect();
 
+        progress.emit(UploadEvent::Committing);
         self.batch_operations().add_files(add_files).send().await?;
 
         progress.emit(UploadEvent::Complete);
@@ -1411,5 +1413,120 @@ mod tests {
             content_type: None,
         };
         assert!(bare.size.is_none() && bare.mtime.is_none() && bare.content_type.is_none());
+    }
+
+    #[derive(Default)]
+    struct UploadRecorder(std::sync::Mutex<Vec<crate::progress::UploadEvent>>);
+
+    impl crate::progress::ProgressHandler for UploadRecorder {
+        fn on_progress(&self, event: &crate::progress::ProgressEvent) {
+            if let crate::progress::ProgressEvent::Upload(event) = event {
+                self.0.lock().unwrap().push(event.clone());
+            }
+        }
+    }
+
+    /// Serves Xet write tokens pointing at a `local://` CAS and accepts every batch call.
+    async fn start_bucket_hub(cas_dir: &std::path::Path) -> String {
+        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let cas_url = format!("local://{}", cas_dir.display());
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let cas_url = cas_url.clone();
+                tokio::spawn(async move {
+                    let mut socket = tokio::io::BufReader::new(socket);
+                    let mut request_line = String::new();
+                    socket.read_line(&mut request_line).await.unwrap();
+                    let mut content_length = 0usize;
+                    loop {
+                        let mut line = String::new();
+                        if socket.read_line(&mut line).await.unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some((name, value)) = line.split_once(':')
+                            && name.eq_ignore_ascii_case("content-length")
+                        {
+                            content_length = value.trim().parse().unwrap();
+                        }
+                    }
+                    let mut body = vec![0u8; content_length];
+                    socket.read_exact(&mut body).await.unwrap();
+                    let path = request_line.split_whitespace().nth(1).unwrap_or_default();
+                    let reply = if path.starts_with("/api/buckets/my-org/my-bucket/xet-write-token") {
+                        serde_json::json!({"accessToken": "token", "exp": 4_102_444_800u64, "casUrl": cas_url})
+                            .to_string()
+                    } else {
+                        String::new()
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    );
+                    let _ = socket.get_mut().write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        endpoint
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bucket_upload_phases_never_regress_and_commit_once() {
+        use crate::progress::{UploadEvent, UploadPhase};
+
+        let cas = tempfile::tempdir().unwrap();
+        let endpoint = start_bucket_hub(cas.path()).await;
+        let src = tempfile::tempdir().unwrap();
+        let mut uploads = Vec::new();
+        for i in 0..3u8 {
+            let path = src.path().join(format!("f{i}.bin"));
+            let body: Vec<u8> = (0..4_000_000u32)
+                .map(|n| (n.wrapping_mul(2_654_435_761) >> 13) as u8 ^ i)
+                .collect();
+            std::fs::write(&path, body).unwrap();
+            uploads.push(super::BucketUpload::new(path, format!("data/f{i}.bin")));
+        }
+        let client = crate::HFClient::builder()
+            .endpoint(endpoint)
+            .client(reqwest::Client::builder().no_proxy().build().unwrap())
+            .retry_max_attempts(1)
+            .build()
+            .unwrap();
+        let recorder = std::sync::Arc::new(UploadRecorder::default());
+
+        HFBucket::new(client, "my-org", "my-bucket")
+            .upload_files()
+            .files(uploads)
+            .progress(std::sync::Arc::clone(&recorder))
+            .send()
+            .await
+            .unwrap();
+
+        let events = recorder.0.lock().unwrap().clone();
+        assert!(matches!(events.first(), Some(UploadEvent::Start { total_files: 3, .. })), "{events:?}");
+        assert!(matches!(events.last(), Some(UploadEvent::Complete)), "{events:?}");
+        let committing: Vec<_> = events
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| matches!(e, UploadEvent::Committing))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(committing, [events.len() - 2], "one Committing, right before Complete");
+        let phases: Vec<UploadPhase> = events
+            .iter()
+            .filter_map(|e| match e {
+                UploadEvent::Progress { phase, .. } => Some(*phase),
+                _ => None,
+            })
+            .collect();
+        assert!(!phases.is_empty());
+        assert!(
+            phases
+                .windows(2)
+                .all(|w| !(w[0] == UploadPhase::Uploading && w[1] == UploadPhase::Preparing)),
+            "phase went back to Preparing: {phases:?}"
+        );
+        assert_eq!(phases.last(), Some(&UploadPhase::Uploading));
     }
 }
