@@ -857,6 +857,7 @@ pub enum BucketTreeEntry {
         /// Last modification time (ISO 8601), if available.
         mtime: Option<String>,
         /// Upload timestamp (ISO 8601), if available.
+        #[serde(rename = "uploadedAt")]
         uploaded_at: Option<String>,
     },
     /// A directory entry.
@@ -864,6 +865,7 @@ pub enum BucketTreeEntry {
         /// Directory path within the bucket.
         path: String,
         /// Upload timestamp (ISO 8601), if available.
+        #[serde(rename = "uploadedAt")]
         uploaded_at: Option<String>,
     },
 }
@@ -1317,6 +1319,37 @@ mod tests {
             request.contains("/api/buckets/my-org/my-bucket/tree/data"),
             "expected the prefix as a path segment, got: {request}"
         );
+    }
+
+    /// Shape of a live `GET /api/buckets/{id}/tree?recursive=false` page: a directory entry next
+    /// to a top-level file, both carrying `uploadedAt`.
+    #[test]
+    fn non_recursive_tree_page_parses_directories_and_timestamps() {
+        let page = r#"[
+            {"type":"directory","path":"b","uploadedAt":"2026-08-07T13:41:45.404Z"},
+            {"type":"file","path":"top.txt","size":3,"xetHash":"abc","mtime":"2026-08-07T13:41:44.000Z","uploadedAt":"2026-08-07T13:41:45.404Z"}
+        ]"#;
+        let entries: Vec<BucketTreeEntry> = serde_json::from_str(page).unwrap();
+        match &entries[0] {
+            BucketTreeEntry::Directory { path, uploaded_at } => {
+                assert_eq!(path, "b");
+                assert_eq!(uploaded_at.as_deref(), Some("2026-08-07T13:41:45.404Z"));
+            },
+            other => panic!("expected a directory, got {other:?}"),
+        }
+        match &entries[1] {
+            BucketTreeEntry::File {
+                path,
+                mtime,
+                uploaded_at,
+                ..
+            } => {
+                assert_eq!(path, "top.txt");
+                assert_eq!(mtime.as_deref(), Some("2026-08-07T13:41:44.000Z"));
+                assert_eq!(uploaded_at.as_deref(), Some("2026-08-07T13:41:45.404Z"));
+            },
+            other => panic!("expected a file, got {other:?}"),
+        }
     }
 
     #[test]
