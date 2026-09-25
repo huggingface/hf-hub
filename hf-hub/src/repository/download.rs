@@ -61,6 +61,7 @@ struct DownloadFileParams {
 }
 
 /// Internal options struct used by the streaming download helpers.
+#[derive(Clone)]
 struct DownloadFileStreamParams {
     filename: String,
     revision: Option<String>,
@@ -264,14 +265,20 @@ impl<T: RepoType> HFRepository<T> {
     }
 
     async fn download_file_to_bytes_impl(&self, params: DownloadFileStreamParams) -> HFResult<bytes::Bytes> {
-        let (_, stream) = self.download_file_stream_impl(params).await?;
-        futures::pin_mut!(stream);
+        retry::restart_on_body_error(self.hf_client.retry_config(), || {
+            let params = params.clone();
+            async move {
+                let (_, stream) = self.download_file_stream_impl(params).await?;
+                futures::pin_mut!(stream);
 
-        let mut buf = bytes::BytesMut::new();
-        while let Some(chunk) = stream.next().await {
-            buf.extend_from_slice(&chunk?);
-        }
-        Ok(buf.freeze())
+                let mut buf = bytes::BytesMut::new();
+                while let Some(chunk) = stream.next().await {
+                    buf.extend_from_slice(&chunk?);
+                }
+                Ok(buf.freeze())
+            }
+        })
+        .await
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -314,36 +321,39 @@ impl<T: RepoType> HFRepository<T> {
                 .await;
         }
 
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().get(&url).headers(headers.clone()).send()
-        })
-        .await?;
-        let response = self
-            .hf_client
-            .check_response(
-                response,
-                Some(&repo_path),
-                crate::error::NotFoundContext::Entry {
-                    path: params.filename.clone(),
-                },
-            )
-            .await?;
-
         let local_dir = params.local_dir.as_ref().unwrap();
-        std::fs::create_dir_all(local_dir)?;
-
         let dest_path = local_dir.join(&params.filename);
-        if let Some(parent) = dest_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
 
-        stream_response_to_file_with_progress(
-            response,
-            &dest_path,
-            &params.progress,
-            Some(&params.filename),
-            file_size,
-        )
+        retry::restart_on_body_error(self.hf_client.retry_config(), || async {
+            let response = retry::retry(self.hf_client.retry_config(), || {
+                self.hf_client.http_client().get(&url).headers(headers.clone()).send()
+            })
+            .await?;
+            let response = self
+                .hf_client
+                .check_response(
+                    response,
+                    Some(&repo_path),
+                    crate::error::NotFoundContext::Entry {
+                        path: params.filename.clone(),
+                    },
+                )
+                .await?;
+
+            std::fs::create_dir_all(local_dir)?;
+            if let Some(parent) = dest_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            stream_response_to_file_with_progress(
+                response,
+                &dest_path,
+                &params.progress,
+                Some(&params.filename),
+                file_size,
+            )
+            .await
+        })
         .await?;
         params.progress.emit(DownloadEvent::Progress {
             files: vec![FileProgress {
@@ -654,17 +664,20 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         let dl_headers = self.hf_client.auth_headers();
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            self.hf_client.http_client().get(&url).headers(dl_headers.clone()).send()
+        retry::restart_on_body_error(self.hf_client.retry_config(), || async {
+            let response = retry::retry(self.hf_client.retry_config(), || {
+                self.hf_client.http_client().get(&url).headers(dl_headers.clone()).send()
+            })
+            .await?;
+            stream_response_to_file_with_progress(
+                response,
+                &incomplete_path,
+                &params.progress,
+                Some(&params.filename),
+                file_size,
+            )
+            .await
         })
-        .await?;
-        stream_response_to_file_with_progress(
-            response,
-            &incomplete_path,
-            &params.progress,
-            Some(&params.filename),
-            file_size,
-        )
         .await?;
         params.progress.emit(DownloadEvent::Progress {
             files: vec![FileProgress {
@@ -1319,10 +1332,10 @@ pub(crate) fn wrap_stream_with_progress(
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     use crate::cache::storage as cache;
     use crate::test_support::mock_hub;
@@ -1586,6 +1599,177 @@ mod tests {
         assert!(
             matches!(result, Err(HFError::EntryNotFound { repo_id, path, .. }) if repo_id == "owner/repo" && path == "missing.bin")
         );
+    }
+
+    const FLAKY_BODY: &[u8] = b"0123456789abcdefghij";
+
+    /// Serves `FLAKY_BODY`, cutting each of the first `cut_gets` GETs off after
+    /// 5 body bytes. Returns the endpoint and each GET's `Range` header.
+    async fn start_flaky_file_server(cut_gets: usize) -> (String, Arc<Mutex<Vec<Option<String>>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let get_ranges = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&get_ranges);
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut socket = BufReader::new(socket);
+                let mut request_line = String::new();
+                if socket.read_line(&mut request_line).await.is_err() {
+                    continue;
+                }
+                let mut range = None;
+                loop {
+                    let mut header = String::new();
+                    match socket.read_line(&mut header).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) if header == "\r\n" => break,
+                        Ok(_) => {},
+                    }
+                    if let Some(value) = header.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        range = Some(value.trim().to_string());
+                    }
+                }
+                let len = FLAKY_BODY.len();
+                if request_line.starts_with("HEAD ") {
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nETag: \"etag\"\r\nX-Repo-Commit: {TEST_COMMIT}\r\n\
+                         Content-Length: {len}\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = socket.get_mut().write_all(head.as_bytes()).await;
+                    continue;
+                }
+
+                let cut = {
+                    let mut ranges = recorded.lock().unwrap();
+                    ranges.push(range.clone());
+                    ranges.len() <= cut_gets
+                };
+                let (status, extra, slice) = match range.as_deref().and_then(|range| range.split_once('-')) {
+                    Some((start, end)) => {
+                        let (start, end): (usize, usize) = (start.parse().unwrap(), end.parse().unwrap());
+                        (
+                            "206 Partial Content",
+                            format!("Content-Range: bytes {start}-{end}/{len}\r\n"),
+                            &FLAKY_BODY[start..=end],
+                        )
+                    },
+                    None => ("200 OK", String::new(), FLAKY_BODY),
+                };
+                let head = format!(
+                    "HTTP/1.1 {status}\r\nETag: \"etag\"\r\n{extra}X-Repo-Commit: {TEST_COMMIT}\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    slice.len()
+                );
+                let sent = if cut { &slice[..5] } else { slice };
+                let socket = socket.get_mut();
+                let _ = socket.write_all(head.as_bytes()).await;
+                let _ = socket.write_all(sent).await;
+                let _ = socket.flush().await;
+            }
+        });
+        (endpoint, get_ranges)
+    }
+
+    fn flaky_client(endpoint: &str) -> crate::HFClient {
+        HFClientBuilder::new()
+            .endpoint(endpoint)
+            .retry_max_attempts(3)
+            .retry_base_delay(std::time::Duration::from_millis(1))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn download_to_bytes_restarts_after_mid_body_drop() {
+        let (endpoint, get_ranges) = start_flaky_file_server(1).await;
+
+        let bytes = flaky_client(&endpoint)
+            .model("owner", "repo")
+            .download_file_to_bytes()
+            .filename("model.bin")
+            .send()
+            .await
+            .expect("download restarts after the drop");
+
+        assert_eq!(bytes.as_ref(), FLAKY_BODY);
+        assert_eq!(*get_ranges.lock().unwrap(), vec![None, None]);
+    }
+
+    #[tokio::test]
+    async fn ranged_download_to_bytes_restarts_with_the_same_range() {
+        let (endpoint, get_ranges) = start_flaky_file_server(1).await;
+
+        let bytes = flaky_client(&endpoint)
+            .model("owner", "repo")
+            .download_file_to_bytes()
+            .filename("model.bin")
+            .range(2..18)
+            .send()
+            .await
+            .expect("ranged download restarts after the drop");
+
+        assert_eq!(bytes.as_ref(), &FLAKY_BODY[2..18]);
+        assert_eq!(*get_ranges.lock().unwrap(), vec![Some("2-17".to_string()), Some("2-17".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn download_to_local_dir_restarts_after_mid_body_drop() {
+        let (endpoint, get_ranges) = start_flaky_file_server(1).await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let path = flaky_client(&endpoint)
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .local_dir(dir.path().to_path_buf())
+            .send()
+            .await
+            .expect("download restarts after the drop");
+
+        assert_eq!(std::fs::read(path).unwrap(), FLAKY_BODY);
+        assert_eq!(get_ranges.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn download_to_cache_restarts_after_mid_body_drop() {
+        let (endpoint, get_ranges) = start_flaky_file_server(1).await;
+        let cache_dir = tempfile::tempdir().unwrap();
+        let client = HFClientBuilder::new()
+            .endpoint(&endpoint)
+            .cache_dir(cache_dir.path())
+            .retry_max_attempts(3)
+            .retry_base_delay(std::time::Duration::from_millis(1))
+            .build()
+            .unwrap();
+
+        let path = client
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .send()
+            .await
+            .expect("download restarts after the drop");
+
+        assert_eq!(std::fs::read(path).unwrap(), FLAKY_BODY);
+        assert_eq!(get_ranges.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn download_restarts_are_bounded_by_retry_attempts() {
+        let (endpoint, get_ranges) = start_flaky_file_server(usize::MAX).await;
+
+        let result = flaky_client(&endpoint)
+            .model("owner", "repo")
+            .download_file_to_bytes()
+            .filename("model.bin")
+            .send()
+            .await;
+
+        assert!(matches!(result, Err(HFError::Request { .. })), "got {result:?}");
+        assert_eq!(get_ranges.lock().unwrap().len(), 4, "the first GET plus 3 restarts");
     }
 }
 
