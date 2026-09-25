@@ -69,6 +69,25 @@ fn is_transient_reqwest_error(err: &ReqwestError) -> bool {
     }
 }
 
+/// Whether an error raised while reading a response body (after the status and
+/// headers arrived) is worth resuming: a timeout, or the connection dropping
+/// mid-body. A body that fails to decode for any other reason is fatal.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn is_transient_body_error(err: &ReqwestError) -> bool {
+    if err.is_timeout() {
+        return true;
+    }
+    match find_source::<hyper::Error>(err) {
+        Some(hyper_err) => {
+            hyper_err.is_incomplete_message()
+                || hyper_err.is_canceled()
+                || hyper_err.is_timeout()
+                || find_source::<std::io::Error>(hyper_err).is_some()
+        },
+        None => find_source::<std::io::Error>(err).is_some(),
+    }
+}
+
 fn find_source<T: std::error::Error + 'static>(err: &dyn std::error::Error) -> Option<&T> {
     let mut source = err.source();
     while let Some(e) = source {
@@ -119,7 +138,7 @@ fn log_exhausted(max_attempts: usize, result: &Result<Response, ReqwestError>) {
 /// Yields at most `config.max_attempts` durations. With `base_delay = B` and `max_attempts = N`
 /// the pre-jitter schedule is `2B, 4B, 8B, ..., 2^N * B`; `jitter` multiplies each by a random
 /// factor in `[0, 1)`, so the total sleep budget is bounded above by `B * (2^(N+1) - 2)`.
-fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> {
+pub(crate) fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> + Send + 'static {
     let base_ms = config.base_delay.as_millis().min(u64::MAX as u128) as u64;
     ExponentialBackoff::from_millis(2)
         .factor(base_ms)

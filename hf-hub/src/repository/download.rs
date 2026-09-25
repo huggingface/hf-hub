@@ -21,9 +21,13 @@ use std::{
 use bon::bon;
 #[cfg(not(target_family = "wasm"))]
 use futures::TryStreamExt;
+#[cfg(not(target_family = "wasm"))]
+use futures::stream::BoxStream;
 use futures::stream::{Stream, StreamExt};
 #[cfg(not(target_family = "wasm"))]
-use reqwest::header::IF_NONE_MATCH;
+use reqwest::StatusCode;
+#[cfg(not(target_family = "wasm"))]
+use reqwest::header::{CONTENT_RANGE, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH, IF_RANGE, RANGE};
 #[cfg(not(target_family = "wasm"))]
 use serde::Deserialize;
 
@@ -34,6 +38,8 @@ use super::{
     files::{extract_commit_hash, extract_etag, extract_xet_hash, matches_any_glob},
 };
 use super::{HFRepository, RepoTreeEntry, RepoType};
+#[cfg(not(target_family = "wasm"))]
+use crate::HFClient;
 #[cfg(not(target_family = "wasm"))]
 use crate::cache::storage as cache;
 use crate::error::{HFError, HFResult};
@@ -251,13 +257,15 @@ impl<T: RepoType> HFRepository<T> {
 
         let content_length = extract_file_size(&response);
         let total_bytes = content_length.unwrap_or(0);
-        let stream = response.bytes_stream().map(|r| r.map_err(HFError::from));
+        #[cfg(not(target_family = "wasm"))]
+        let stream = resumable_body_stream(&self.hf_client, &url, &headers, params.range.as_ref(), response);
+        #[cfg(target_family = "wasm")]
+        let stream: HFByteStream = Box::new(Box::pin(response.bytes_stream().map(|r| r.map_err(HFError::from))));
         params.progress.emit(DownloadEvent::Start {
             total_files: 1,
             total_bytes,
         });
-        let wrapped =
-            wrap_stream_with_progress(Box::new(Box::pin(stream)), params.progress, params.filename, total_bytes);
+        let wrapped = wrap_stream_with_progress(stream, params.progress, params.filename, total_bytes);
         #[cfg(target_family = "wasm")]
         let wrapped = buffer_wasm_stream(wrapped);
         Ok((content_length, wrapped))
@@ -338,7 +346,7 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         stream_response_to_file_with_progress(
-            response,
+            resumable_body_stream(&self.hf_client, &url, &headers, None, response),
             &dest_path,
             &params.progress,
             Some(&params.filename),
@@ -659,7 +667,7 @@ impl<T: RepoType> HFRepository<T> {
         })
         .await?;
         stream_response_to_file_with_progress(
-            response,
+            resumable_body_stream(&self.hf_client, &url, &dl_headers, None, response),
             &incomplete_path,
             &params.progress,
             Some(&params.filename),
@@ -1198,16 +1206,152 @@ async fn download_concurrently<T: RepoType>(
         .await
 }
 
+/// Body of a download `response` that survives transient mid-body failures.
+///
+/// Request retry only covers getting a response; once the body is streaming, a
+/// dropped connection would otherwise end the download with part of the file
+/// delivered. On such a failure this re-requests the remaining bytes with
+/// `Range` and `If-Range` (the response's strong `ETag`), and continues only if
+/// the server answers `206` from exactly the next offset. Anything else, such as
+/// the file changing under a branch revision, surfaces the original error.
+/// Resumes follow the client's retry config, and the attempt budget resets
+/// whenever a resumed body delivers bytes.
+#[cfg(not(target_family = "wasm"))]
+fn resumable_body_stream(
+    hf_client: &HFClient,
+    url: &str,
+    headers: &HeaderMap,
+    range: Option<&std::ops::Range<u64>>,
+    response: reqwest::Response,
+) -> HFByteStream {
+    let expected_status = if range.is_some() {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+    let etag = response
+        .headers()
+        .get(ETAG)
+        .filter(|etag| !etag.as_bytes().starts_with(b"W/"))
+        .cloned()
+        .filter(|_| response.status() == expected_status);
+    let start = range.map_or(0, |range| range.start);
+    let end = response.content_length().map(|len| start + len);
+    let body = response.bytes_stream().boxed();
+    let Some(etag) = etag else {
+        return Box::new(body.map(|chunk| chunk.map_err(HFError::from)));
+    };
+
+    let state = ResumableBody {
+        hf_client: hf_client.clone(),
+        url: url.to_string(),
+        headers: headers.clone(),
+        etag,
+        next_offset: start,
+        end,
+        body,
+        delays: Box::new(retry::delay_strategy(hf_client.retry_config())),
+        progressed_since_resume: false,
+    };
+    Box::new(Box::pin(futures::stream::unfold(Some(state), |state| async move {
+        let mut state = state?;
+        loop {
+            match state.body.next().await {
+                Some(Ok(chunk)) => {
+                    state.next_offset += chunk.len() as u64;
+                    state.progressed_since_resume = true;
+                    return Some((Ok(chunk), Some(state)));
+                },
+                Some(Err(err)) => {
+                    if state.end.is_some_and(|end| state.next_offset >= end) {
+                        return None;
+                    }
+                    if let Err(err) = state.resume(err).await {
+                        return Some((Err(err), None));
+                    }
+                },
+                None => return None,
+            }
+        }
+    })))
+}
+
+#[cfg(not(target_family = "wasm"))]
+struct ResumableBody {
+    hf_client: HFClient,
+    url: String,
+    headers: HeaderMap,
+    etag: HeaderValue,
+    next_offset: u64,
+    end: Option<u64>,
+    body: BoxStream<'static, reqwest::Result<bytes::Bytes>>,
+    delays: Box<dyn Iterator<Item = std::time::Duration> + Send>,
+    progressed_since_resume: bool,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl ResumableBody {
+    /// Swaps in a body continuing from `next_offset`, or returns the error to
+    /// surface when the failure isn't resumable.
+    async fn resume(&mut self, body_error: reqwest::Error) -> HFResult<()> {
+        if !retry::is_transient_body_error(&body_error) {
+            return Err(body_error.into());
+        }
+        if self.progressed_since_resume {
+            self.delays = Box::new(retry::delay_strategy(self.hf_client.retry_config()));
+            self.progressed_since_resume = false;
+        }
+        let Some(delay) = self.delays.next() else {
+            tracing::error!(url = %self.url, offset = self.next_offset, "download resume attempts exhausted");
+            return Err(body_error.into());
+        };
+        tokio::time::sleep(delay).await;
+
+        let range = match self.end {
+            Some(end) => format!("bytes={}-{}", self.next_offset, end - 1),
+            None => format!("bytes={}-", self.next_offset),
+        };
+        tracing::debug!(url = %self.url, error = %body_error, range = %range, "resuming interrupted download");
+        let response = retry::retry(self.hf_client.retry_config(), || {
+            self.hf_client
+                .http_client()
+                .get(&self.url)
+                .headers(self.headers.clone())
+                .header(RANGE, &range)
+                .header(IF_RANGE, self.etag.clone())
+                .send()
+        })
+        .await?;
+
+        let resumes_at_offset = response.status() == StatusCode::PARTIAL_CONTENT
+            && response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.starts_with(&format!("bytes {}-", self.next_offset)));
+        if !resumes_at_offset {
+            tracing::warn!(
+                url = %self.url,
+                status = %response.status(),
+                offset = self.next_offset,
+                "server did not resume the download at the interrupted offset"
+            );
+            return Err(body_error.into());
+        }
+        self.body = response.bytes_stream().boxed();
+        Ok(())
+    }
+}
+
 #[cfg(not(target_family = "wasm"))]
 async fn stream_response_to_file_with_progress(
-    response: reqwest::Response,
+    mut stream: HFByteStream,
     dest: &Path,
     handler: &Option<Progress>,
     filename: Option<&str>,
     total_bytes: u64,
 ) -> HFResult<()> {
     let mut file = std::fs::File::create(dest)?;
-    let mut stream = response.bytes_stream();
     let mut bytes_read: u64 = 0;
 
     if let (Some(h), Some(filename)) = (handler, filename) {
@@ -1319,10 +1463,10 @@ pub(crate) fn wrap_stream_with_progress(
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     use crate::cache::storage as cache;
     use crate::test_support::mock_hub;
@@ -1586,6 +1730,228 @@ mod tests {
         assert!(
             matches!(result, Err(HFError::EntryNotFound { repo_id, path, .. }) if repo_id == "owner/repo" && path == "missing.bin")
         );
+    }
+
+    const FLAKY_BODY: &[u8] = b"0123456789abcdefghij";
+
+    struct FlakyServer {
+        body: &'static [u8],
+        cut_after: usize,
+        etag: Option<&'static str>,
+        honor_resume: bool,
+    }
+
+    /// Serves `body`, cutting the first GET's connection after `cut_after` body
+    /// bytes. Later ranged GETs get a `206` when `honor_resume` is set and their
+    /// `If-Range` matches `etag`, and the full body otherwise. Returns the
+    /// endpoint and each GET's `Range` header.
+    async fn start_flaky_file_server(server: FlakyServer) -> (String, Arc<Mutex<Vec<Option<String>>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let get_ranges = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&get_ranges);
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut socket = BufReader::new(socket);
+                let mut request_line = String::new();
+                if socket.read_line(&mut request_line).await.is_err() {
+                    continue;
+                }
+                let (mut range, mut if_range) = (None, None);
+                loop {
+                    let mut header = String::new();
+                    match socket.read_line(&mut header).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) if header == "\r\n" => break,
+                        Ok(_) => {},
+                    }
+                    let lower = header.to_ascii_lowercase();
+                    if let Some(value) = lower.strip_prefix("range: bytes=") {
+                        range = Some(value.trim().to_string());
+                    } else if let Some(value) = header.strip_prefix("If-Range: ").or(header.strip_prefix("if-range: "))
+                    {
+                        if_range = Some(value.trim().to_string());
+                    }
+                }
+                let etag_header = server.etag.map(|etag| format!("ETag: {etag}\r\n")).unwrap_or_default();
+                let len = server.body.len();
+                if request_line.starts_with("HEAD ") {
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\n{etag_header}X-Repo-Commit: {TEST_COMMIT}\r\n\
+                         Content-Length: {len}\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = socket.get_mut().write_all(head.as_bytes()).await;
+                    continue;
+                }
+
+                let first_get = {
+                    let mut ranges = recorded.lock().unwrap();
+                    ranges.push(range.clone());
+                    ranges.len() == 1
+                };
+                let requested = range.as_deref().map(|range| {
+                    let (start, end) = range.split_once('-').unwrap();
+                    let start: usize = start.parse().unwrap();
+                    let end: usize = if end.is_empty() {
+                        len - 1
+                    } else {
+                        end.parse::<usize>().unwrap().min(len - 1)
+                    };
+                    (start, end)
+                });
+                let partial = requested.filter(|_| {
+                    first_get || (server.honor_resume && if_range.is_some() && if_range.as_deref() == server.etag)
+                });
+                let (status, extra, slice) = match partial {
+                    Some((start, end)) => (
+                        "206 Partial Content",
+                        format!("Content-Range: bytes {start}-{end}/{len}\r\n"),
+                        &server.body[start..=end],
+                    ),
+                    None => ("200 OK", String::new(), server.body),
+                };
+                let head = format!(
+                    "HTTP/1.1 {status}\r\n{etag_header}{extra}X-Repo-Commit: {TEST_COMMIT}\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    slice.len()
+                );
+                let sent = if first_get {
+                    &slice[..server.cut_after.min(slice.len())]
+                } else {
+                    slice
+                };
+                let socket = socket.get_mut();
+                let _ = socket.write_all(head.as_bytes()).await;
+                let _ = socket.write_all(sent).await;
+                let _ = socket.flush().await;
+            }
+        });
+        (endpoint, get_ranges)
+    }
+
+    fn flaky_client(endpoint: &str) -> crate::HFClient {
+        HFClientBuilder::new()
+            .endpoint(endpoint)
+            .retry_max_attempts(3)
+            .retry_base_delay(std::time::Duration::from_millis(1))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn download_to_bytes_resumes_after_mid_body_drop() {
+        let (endpoint, get_ranges) = start_flaky_file_server(FlakyServer {
+            body: FLAKY_BODY,
+            cut_after: 5,
+            etag: Some("\"strong\""),
+            honor_resume: true,
+        })
+        .await;
+
+        let bytes = flaky_client(&endpoint)
+            .model("owner", "repo")
+            .download_file_to_bytes()
+            .filename("model.bin")
+            .send()
+            .await
+            .expect("download resumes after the drop");
+
+        assert_eq!(bytes.as_ref(), FLAKY_BODY);
+        assert_eq!(*get_ranges.lock().unwrap(), vec![None, Some("5-19".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn ranged_stream_resumes_within_the_range() {
+        let (endpoint, get_ranges) = start_flaky_file_server(FlakyServer {
+            body: FLAKY_BODY,
+            cut_after: 4,
+            etag: Some("\"strong\""),
+            honor_resume: true,
+        })
+        .await;
+
+        let bytes = flaky_client(&endpoint)
+            .model("owner", "repo")
+            .download_file_to_bytes()
+            .filename("model.bin")
+            .range(2..18)
+            .send()
+            .await
+            .expect("ranged download resumes after the drop");
+
+        assert_eq!(bytes.as_ref(), &FLAKY_BODY[2..18]);
+        assert_eq!(*get_ranges.lock().unwrap(), vec![Some("2-17".to_string()), Some("6-17".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn download_to_local_dir_resumes_after_mid_body_drop() {
+        let (endpoint, get_ranges) = start_flaky_file_server(FlakyServer {
+            body: FLAKY_BODY,
+            cut_after: 7,
+            etag: Some("\"strong\""),
+            honor_resume: true,
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+
+        let path = flaky_client(&endpoint)
+            .model("owner", "repo")
+            .download_file()
+            .filename("model.bin")
+            .local_dir(dir.path().to_path_buf())
+            .send()
+            .await
+            .expect("download resumes after the drop");
+
+        assert_eq!(std::fs::read(path).unwrap(), FLAKY_BODY);
+        assert_eq!(*get_ranges.lock().unwrap(), vec![None, Some("7-19".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn resume_gives_up_when_server_ignores_if_range() {
+        let (endpoint, get_ranges) = start_flaky_file_server(FlakyServer {
+            body: FLAKY_BODY,
+            cut_after: 5,
+            etag: Some("\"strong\""),
+            honor_resume: false,
+        })
+        .await;
+
+        let result = flaky_client(&endpoint)
+            .model("owner", "repo")
+            .download_file_to_bytes()
+            .filename("model.bin")
+            .send()
+            .await;
+
+        assert!(result.is_err(), "a 200 reply to the resume must not be spliced in");
+        assert_eq!(*get_ranges.lock().unwrap(), vec![None, Some("5-19".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn no_resume_without_a_strong_etag() {
+        for etag in [None, Some("W/\"weak\"")] {
+            let (endpoint, get_ranges) = start_flaky_file_server(FlakyServer {
+                body: FLAKY_BODY,
+                cut_after: 5,
+                etag,
+                honor_resume: true,
+            })
+            .await;
+
+            let result = flaky_client(&endpoint)
+                .model("owner", "repo")
+                .download_file_to_bytes()
+                .filename("model.bin")
+                .send()
+                .await;
+
+            assert!(result.is_err(), "etag {etag:?}: nothing to validate a resume against");
+            assert_eq!(*get_ranges.lock().unwrap(), vec![None], "etag {etag:?}");
+        }
     }
 }
 
