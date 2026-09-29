@@ -4,9 +4,11 @@ version = "1.0.0"
 edition = "2024"
 description = "Command-line interface for the Hugging Face Hub"
 license = "Apache-2.0"
+repository = "https://github.com/huggingface/hf-hub"
+homepage = "https://github.com/huggingface/hf-hub"
 
 [dependencies]
-hf-hub = { path = "../hf-hub" }
+hf-hub = { path = "../hf-hub", version = "1.1" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 clap = { version = "4", features = ["derive", "env", "color"] }
 indicatif = "0.18"
