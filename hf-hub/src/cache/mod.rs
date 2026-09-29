@@ -13,6 +13,7 @@
 //! and [`CachedRevisionInfo::size_on_disk`].
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use bon::bon;
@@ -104,9 +105,35 @@ pub struct HFCacheInfo {
     pub repos: Vec<CachedRepoInfo>,
     /// Sum of [`CachedRepoInfo::size_on_disk`] across all repos.
     pub size_on_disk: u64,
-    /// Human-readable warnings for entries that could not be fully scanned —
-    /// for example, snapshot pointers whose blobs are missing or unreadable.
-    pub warnings: Vec<String>,
+    /// Entries that could not be fully scanned — for example, snapshot
+    /// pointers whose blobs are missing or unreadable.
+    pub warnings: Vec<CacheScanWarning>,
+}
+
+/// A non-fatal problem found while scanning the cache.
+///
+/// The affected file is omitted from [`HFCacheInfo`]; the rest of the scan
+/// continues.
+#[derive(Debug, Clone, thiserror::Error)]
+#[non_exhaustive]
+pub enum CacheScanWarning {
+    /// A snapshot pointer could not be resolved to its blob, typically a
+    /// broken symlink whose blob was deleted.
+    #[error("Cannot resolve {}: {source}", .path.display())]
+    UnresolvablePointer {
+        /// Pointer path inside the `snapshots/` tree.
+        path: PathBuf,
+        /// Underlying I/O error.
+        source: Arc<std::io::Error>,
+    },
+    /// A snapshot pointer resolved, but its blob's metadata could not be read.
+    #[error("Cannot read blob for {}: {source}", .path.display())]
+    UnreadableBlob {
+        /// Pointer path inside the `snapshots/` tree.
+        path: PathBuf,
+        /// Underlying I/O error.
+        source: Arc<std::io::Error>,
+    },
 }
 
 #[bon]
