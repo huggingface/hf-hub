@@ -195,8 +195,10 @@ hf-hub/
 │   │   │   ├── listing.rs          # list_files, list_tree, get_paths_info, get_file_metadata
 │   │   │   ├── download.rs         # download_file, download_file_stream, download_file_to_bytes,
 │   │   │   │                       #   snapshot_download (private helper structs live here)
-│   │   │   └── upload.rs           # upload_file, upload_folder, create_commit, delete_file/folder
-│   │   │                           #   (private helper structs live here)
+│   │   │   └── upload/
+│   │   │       ├── mod.rs          # upload_file, upload_folder, create_commit, delete_file/folder,
+│   │   │       │                   #   post_commit (private helper structs live here)
+│   │   │       └── pipeline.rs     # Multi-commit pipeline backing upload_folder (adaptive batches, create_pr)
 │   │   ├── spaces.rs               # Spaces component: HFSpace handle, SpaceRuntime, SpaceVariable,
 │   │   │                           #   runtime/hardware/secrets/variables/duplicate
 │   │   ├── users.rs                # Users component: User/Organization/OrgMembership, whoami,

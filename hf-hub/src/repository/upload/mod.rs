@@ -1,15 +1,19 @@
 //! Repository commit, upload, and delete builders.
 //!
-//! Builders on [`HFRepository`] for mutating repo contents. Every change goes through a single
-//! commit:
+//! Builders on [`HFRepository`] for mutating repo contents. Every change except `upload_folder`
+//! goes through a single commit:
 //!
 //! - [`HFRepository::create_commit`] — low-level: arbitrary mix of [`CommitOperation`] entries in one commit.
 //! - [`HFRepository::upload_file`] — upload one file (bytes or local path) as a single-add commit.
 //! - [`HFRepository::upload_folder`] — recursively upload a local folder, with allow/ignore globs matched against
-//!   `folder_path`-relative paths and a `delete_patterns` glob matched against repo-root paths.
+//!   `folder_path`-relative paths and a `delete_patterns` glob matched against repo-root paths. Large folders are split
+//!   across several commits.
 //! - [`HFRepository::delete_file`] / [`HFRepository::delete_folder`] — single-delete and recursive-delete commits.
 //!
 //! See each builder's docs for the exact path / glob format rules.
+
+#[cfg(not(target_family = "wasm"))]
+pub mod pipeline;
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -88,14 +92,21 @@ struct DeleteFolderParams {
     create_pr: bool,
 }
 
+/// Inputs to a single commit API call. `lfs_uploaded` maps `path_in_repo` to the
+/// `(sha256_oid, size)` of files already uploaded via xet.
+struct CommitRequest<'a> {
+    operations: &'a [CommitOperation],
+    lfs_uploaded: &'a HashMap<String, (String, u64)>,
+    commit_message: &'a str,
+    commit_description: Option<&'a str>,
+    parent_commit: Option<&'a str>,
+    revision: &'a str,
+    create_pr: bool,
+}
+
 impl<T: RepoType> HFRepository<T> {
     async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let url = format!(
-            "{}/commit/{}",
-            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
-            encode_ref(revision)
-        );
 
         let add_ops_count = params
             .operations
@@ -128,22 +139,47 @@ impl<T: RepoType> HFRepository<T> {
         let lfs_uploaded: HashMap<String, (String, u64)> =
             self.preupload_and_upload_lfs_files(&params, revision).await?;
 
+        params.progress.emit(UploadEvent::Committing);
+        let commit_info = self
+            .post_commit(CommitRequest {
+                operations: &params.operations,
+                lfs_uploaded: &lfs_uploaded,
+                commit_message: &params.commit_message,
+                commit_description: params.commit_description.as_deref(),
+                parent_commit: params.parent_commit.as_deref(),
+                revision,
+                create_pr: params.create_pr,
+            })
+            .await?;
+        params.progress.emit(UploadEvent::Complete);
+        Ok(commit_info)
+    }
+
+    /// Build the NDJSON commit body and POST it. Adds found in `lfs_uploaded` are committed as
+    /// `lfsFile` entries; every other add is inlined as base64. Emits no progress events.
+    async fn post_commit(&self, request: CommitRequest<'_>) -> HFResult<CommitInfo> {
+        let url = format!(
+            "{}/commit/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(request.revision)
+        );
+
         let mut ndjson_lines: Vec<Vec<u8>> = Vec::new();
 
         let mut header_value = serde_json::json!({
-            "summary": params.commit_message,
-            "description": params.commit_description.as_deref().unwrap_or(""),
+            "summary": request.commit_message,
+            "description": request.commit_description.unwrap_or(""),
         });
-        if let Some(ref parent) = params.parent_commit {
-            header_value["parentCommit"] = serde_json::Value::String(parent.clone());
+        if let Some(parent) = request.parent_commit {
+            header_value["parentCommit"] = serde_json::Value::String(parent.to_string());
         }
         let header_line = serde_json::json!({"key": "header", "value": header_value});
         ndjson_lines.push(serde_json::to_vec(&header_line)?);
 
-        for op in &params.operations {
+        for op in request.operations {
             let line = match op {
                 CommitOperation::Add { path_in_repo, source } => {
-                    if let Some((oid, size)) = lfs_uploaded.get(path_in_repo) {
+                    if let Some((oid, size)) = request.lfs_uploaded.get(path_in_repo) {
                         tracing::info!(
                             path = path_in_repo.as_str(),
                             oid = oid.as_str(),
@@ -182,12 +218,10 @@ impl<T: RepoType> HFRepository<T> {
             })
             .collect();
 
-        params.progress.emit(UploadEvent::Committing);
-
         let mut headers = self.hf_client.auth_headers();
         headers.insert(reqwest::header::CONTENT_TYPE, "application/x-ndjson".parse().unwrap());
 
-        let create_pr = params.create_pr;
+        let create_pr = request.create_pr;
         let response = retry::retry(self.hf_client.retry_config(), || {
             let mut req = self
                 .hf_client
@@ -207,7 +241,6 @@ impl<T: RepoType> HFRepository<T> {
             .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Repo)
             .await?;
 
-        params.progress.emit(UploadEvent::Complete);
         Ok(response.json().await?)
     }
 
@@ -252,50 +285,6 @@ impl<T: RepoType> HFRepository<T> {
             revision: params.revision.clone(),
             create_pr: params.create_pr,
             parent_commit: params.parent_commit.clone(),
-            progress: params.progress.clone(),
-        })
-        .await
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    async fn upload_folder_impl(&self, params: UploadFolderParams) -> HFResult<CommitInfo> {
-        let mut operations = Vec::new();
-
-        let folder = &params.folder_path;
-        let base_repo_path = params.path_in_repo.as_deref().unwrap_or("");
-
-        collect_files_recursive(
-            folder,
-            folder,
-            base_repo_path,
-            &params.allow_patterns,
-            &params.ignore_patterns,
-            &mut operations,
-        )?;
-
-        if let Some(ref delete_patterns) = params.delete_patterns {
-            let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-            let stream = self.list_tree().revision(revision.to_string()).recursive(true).send()?;
-            futures::pin_mut!(stream);
-            while let Some(entry) = stream.next().await {
-                let entry = entry?;
-                if let RepoTreeEntry::File { path, .. } = entry
-                    && matches_any_glob(delete_patterns, &path)
-                {
-                    operations.push(CommitOperation::delete(path));
-                }
-            }
-        }
-
-        let commit_message = params.commit_message.clone().unwrap_or_else(|| "Upload folder".to_string());
-
-        self.create_commit_impl(CreateCommitParams {
-            operations,
-            commit_message,
-            commit_description: params.commit_description.clone(),
-            revision: params.revision.clone(),
-            create_pr: params.create_pr,
-            parent_commit: None,
             progress: params.progress.clone(),
         })
         .await
@@ -664,7 +653,8 @@ async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>, String)> 
 }
 
 /// Recursively collect files from a directory into CommitOperation::Add entries.
-/// Respects allow_patterns and ignore_patterns (glob-style).
+/// Respects allow_patterns and ignore_patterns (glob-style). Returns the total size of the
+/// collected files.
 #[cfg(not(target_family = "wasm"))]
 fn collect_files_recursive(
     root: &Path,
@@ -673,14 +663,16 @@ fn collect_files_recursive(
     allow_patterns: &Option<Vec<String>>,
     ignore_patterns: &Option<Vec<String>>,
     operations: &mut Vec<CommitOperation>,
-) -> HFResult<()> {
+) -> HFResult<u64> {
+    let mut total_bytes = 0u64;
     for entry in std::fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
         let metadata = entry.metadata()?;
 
         if metadata.is_dir() {
-            collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations)?;
+            total_bytes +=
+                collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations)?;
         } else if metadata.is_file() {
             let relative = path.strip_prefix(root).map_err(|e| {
                 HFError::InvalidParameter(format!("path {} is not under {}: {e}", path.display(), root.display()))
@@ -712,10 +704,11 @@ fn collect_files_recursive(
             };
 
             operations.push(CommitOperation::add_file(repo_path, path));
+            total_bytes += metadata.len();
         }
     }
 
-    Ok(())
+    Ok(total_bytes)
 }
 
 #[cfg(test)]
@@ -863,8 +856,19 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Upload a local folder to a repository.
     ///
-    /// The folder is walked recursively and converted into add operations. When `delete_patterns`
-    /// is set, matching remote files are also deleted in the same commit.
+    /// The folder is walked recursively and converted into add operations. A small folder lands as a
+    /// single commit; a large one is split across several chained commits whose size adapts to how
+    /// fast the Hub accepts them (mirroring `huggingface_hub`), with LFS content for the next commit
+    /// uploading while the current one is created. Each commit reports
+    /// [`UploadEvent::CommitCompleted`], and the returned [`CommitInfo`] describes the last one. When
+    /// `delete_patterns` is set, matching remote files are deleted in the first commit.
+    ///
+    /// With `create_pr`, the first commit opens a pull request and later commits are pushed to its
+    /// `refs/pr/N` ref; the returned [`CommitInfo`] carries `pr_url` and `pr_num`.
+    ///
+    /// Re-running an interrupted upload with the same arguments is cheap: already-committed files
+    /// produce no changes and previously uploaded xet data is deduplicated. For an interrupted
+    /// pull-request upload, re-run with `revision = "refs/pr/N"` and `create_pr = false`.
     ///
     /// All pattern arguments use [`globset`](https://docs.rs/globset) syntax (`*`, `?`, `**`,
     /// character classes, etc.). Path strings are forward-slash-joined regardless of platform.
@@ -875,13 +879,13 @@ impl<T: RepoType> HFRepository<T> {
     /// - `path_in_repo`: destination directory within the repository (default: repo root).
     /// - `revision`: branch to upload to. Defaults to the main branch.
     /// - `commit_message`, `commit_description`: commit metadata.
-    /// - `create_pr` (default `false`): create a pull request instead of committing directly.
+    /// - `create_pr` (default `false`): open a pull request and commit every batch to it.
     /// - `allow_patterns`: globs selecting which local files to include. Matched against each discovered file's path
     ///   relative to `folder_path` (e.g., `data/train.bin`, not the absolute path and not prefixed with
     ///   `path_in_repo`). When set, only files matching at least one pattern are uploaded.
     /// - `ignore_patterns`: globs of local files to skip. Matched against the same `folder_path`-relative paths as
     ///   `allow_patterns`.
-    /// - `delete_patterns`: globs of *remote* files to delete in the same commit. Matched against each existing file's
+    /// - `delete_patterns`: globs of *remote* files to delete in the first commit. Matched against each existing file's
     ///   full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g., `old/*.bin` to remove
     ///   every `.bin` directly under `old/` at the repo root.
     /// - `progress`: optional progress handler.
@@ -914,7 +918,7 @@ impl<T: RepoType> HFRepository<T> {
         /// Globs of local files to skip. Matched against the same `folder_path`-relative paths as
         /// `allow_patterns`.
         ignore_patterns: Option<Vec<String>>,
-        /// Globs of *remote* files to delete in the same commit. Matched against each existing file's
+        /// Globs of *remote* files to delete in the first commit. Matched against each existing file's
         /// full repository path (relative to repo root, **not** relative to `path_in_repo`) — e.g., `old/*.bin` to
         /// remove every `.bin` directly under `old/` at the repo root.
         delete_patterns: Option<Vec<String>>,
@@ -922,7 +926,7 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        Box::pin(self.upload_folder_impl(UploadFolderParams {
+        Box::pin(self.upload_folder_pipeline(UploadFolderParams {
             folder_path,
             path_in_repo,
             revision,

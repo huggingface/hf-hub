@@ -25,6 +25,7 @@
 //!           │ (silent preflight: preupload API, LFS classification)
 //!   Progress ── Progress ── … ── Progress
 //!           │ (active upload — poll loop fires ~every 100ms)
+//!           │ (upload_folder only: CommitCompleted after each intermediate commit)
 //!   Committing
 //!           │ (silent: commit API round-trip)
 //!   Complete
@@ -254,8 +255,18 @@ pub enum UploadEvent {
     },
 
     /// Emitted once, immediately before the commit API call. Signals that all byte
-    /// transfer is done; the call itself is silent until `Complete`.
+    /// transfer is done; the call itself is silent until `Complete`. For a multi-commit
+    /// `upload_folder`, emitted before the final commit only.
     Committing,
+
+    /// Emitted by `upload_folder` after each of its commits lands, including the final one.
+    /// Large folders are uploaded as several commits; this reports each as it completes.
+    CommitCompleted {
+        /// 0-based index of the commit that just landed.
+        commit_index: usize,
+        /// SHA of the landed commit, when the API returned one.
+        commit_oid: Option<String>,
+    },
 
     /// Terminal event on success. Not emitted on failure — check the returned `Result`.
     Complete,

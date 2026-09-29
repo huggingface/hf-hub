@@ -310,6 +310,15 @@ impl CliProgressHandler {
                     self.process_upload_file_progress(&mut state, fp);
                 }
             },
+            UploadEvent::CommitCompleted {
+                commit_index,
+                commit_oid,
+            } => {
+                let short_oid = commit_oid.as_deref().map(|oid| &oid[..oid.len().min(7)]).unwrap_or("?");
+                let _ = self
+                    .multi
+                    .println(format!("  committed batch {} ({short_oid})", commit_index + 1));
+            },
             UploadEvent::Committing => {
                 self.cleanup_upload_bars(&mut state);
                 if let Some(spinner) = state.spinner.take() {
