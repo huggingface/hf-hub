@@ -1101,6 +1101,7 @@ dependencies = [
  "tracing",
  "url",
  "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]

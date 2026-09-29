@@ -6,6 +6,7 @@
 //! - Downloading a file as a byte stream
 //! - Uploading a file from bytes
 //! - Uploading a file from a local path
+//! - Uploading a stream of generated files across as many commits as needed
 //!
 //! Read operations require no auth. Write operations require HF_TOKEN.
 //! Run: cargo run -p examples --example download_upload
@@ -13,7 +14,7 @@
 use std::io::Write;
 
 use futures::StreamExt;
-use hf_hub::repository::AddSource;
+use hf_hub::repository::{AddSource, CommitOperation};
 use hf_hub::{HFClient, RepoTypeModel};
 
 #[tokio::main]
@@ -153,6 +154,18 @@ async fn main() -> hf_hub::HFResult<()> {
         .send()
         .await?;
     println!("Uploaded folder: {:?}", commit.commit_url);
+
+    // Upload a stream of add operations (works on wasm too)
+    let operations = futures::stream::iter(
+        (0..10).map(|i| Ok(CommitOperation::add_bytes(format!("generated/{i}.txt"), format!("file {i}").into_bytes()))),
+    );
+    let commit = repo
+        .upload_operations()
+        .operations(Box::pin(operations))
+        .commit_message("Upload generated files")
+        .send()
+        .await?;
+    println!("Uploaded generated files: {:?}", commit.commit_url);
 
     // Cleanup
     client

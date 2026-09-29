@@ -1,10 +1,11 @@
 //! Repository commit, upload, and delete builders.
 //!
-//! Builders on [`HFRepository`] for mutating repo contents. Every change except `upload_folder`
-//! goes through a single commit:
+//! Builders on [`HFRepository`] for mutating repo contents. Every change except `upload_operations` /
+//! `upload_folder` goes through a single commit:
 //!
 //! - [`HFRepository::create_commit`] — low-level: arbitrary mix of [`CommitOperation`] entries in one commit.
 //! - [`HFRepository::upload_file`] — upload one file (bytes or local path) as a single-add commit.
+//! - [`HFRepository::upload_operations`] — upload a stream of add operations, split across several commits as needed.
 //! - [`HFRepository::upload_folder`] — recursively upload a local folder, with allow/ignore globs matched against
 //!   `folder_path`-relative paths and a `delete_patterns` glob matched against repo-root paths. Large folders are split
 //!   across several commits.
@@ -12,7 +13,6 @@
 //!
 //! See each builder's docs for the exact path / glob format rules.
 
-#[cfg(not(target_family = "wasm"))]
 pub mod pipeline;
 
 use std::collections::HashMap;
@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 
 #[cfg(not(target_family = "wasm"))]
 use super::files::matches_any_glob;
-use super::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoTreeEntry, RepoType};
+use super::{AddSource, CommitInfo, CommitOperation, CommitOperationStream, HFRepository, RepoTreeEntry, RepoType};
 use crate::client::encode_ref;
 #[cfg(not(target_family = "wasm"))]
 use crate::error::HFError;
@@ -61,17 +61,12 @@ struct UploadFileParams {
     progress: Option<Progress>,
 }
 
-/// Internal options struct for [`HFRepository::upload_folder`].
-#[cfg(not(target_family = "wasm"))]
-struct UploadFolderParams {
-    folder_path: PathBuf,
-    path_in_repo: Option<String>,
+/// Internal options struct for [`HFRepository::upload_operations`] and [`HFRepository::upload_folder`].
+struct UploadOperationsParams {
     revision: Option<String>,
     commit_message: Option<String>,
     commit_description: Option<String>,
     create_pr: bool,
-    allow_patterns: Option<Vec<String>>,
-    ignore_patterns: Option<Vec<String>>,
     delete_patterns: Option<Vec<String>>,
     progress: Option<Progress>,
 }
@@ -653,8 +648,7 @@ async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>, String)> 
 }
 
 /// Recursively collect files from a directory into CommitOperation::Add entries.
-/// Respects allow_patterns and ignore_patterns (glob-style). Returns the total size of the
-/// collected files.
+/// Respects allow_patterns and ignore_patterns (glob-style).
 #[cfg(not(target_family = "wasm"))]
 fn collect_files_recursive(
     root: &Path,
@@ -663,16 +657,14 @@ fn collect_files_recursive(
     allow_patterns: &Option<Vec<String>>,
     ignore_patterns: &Option<Vec<String>>,
     operations: &mut Vec<CommitOperation>,
-) -> HFResult<u64> {
-    let mut total_bytes = 0u64;
+) -> HFResult<()> {
     for entry in std::fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
         let metadata = entry.metadata()?;
 
         if metadata.is_dir() {
-            total_bytes +=
-                collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations)?;
+            collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations)?;
         } else if metadata.is_file() {
             let relative = path.strip_prefix(root).map_err(|e| {
                 HFError::InvalidParameter(format!("path {} is not under {}: {e}", path.display(), root.display()))
@@ -704,11 +696,10 @@ fn collect_files_recursive(
             };
 
             operations.push(CommitOperation::add_file(repo_path, path));
-            total_bytes += metadata.len();
         }
     }
 
-    Ok(total_bytes)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -854,12 +845,72 @@ impl<T: RepoType> HFRepository<T> {
         .await
     }
 
+    /// Upload a stream of add operations to a repository, split across as many commits as needed.
+    ///
+    /// Operations are pulled from `operations` incrementally, so the full set never has to be known
+    /// (or held in memory) upfront. They are classified in chunks and grouped into chained commits whose
+    /// size adapts to how fast the Hub accepts them, with LFS content for the next commit uploading while
+    /// the current one is created. Each commit reports [`UploadEvent::CommitCompleted`], and the
+    /// returned [`CommitInfo`] describes the last one. Because totals are discovered as the stream is
+    /// consumed, [`UploadEvent::Start`] reports zero and `total_bytes` in [`UploadEvent::Progress`] grows
+    /// as operations are read.
+    ///
+    /// The stream must yield only [`CommitOperation::Add`] entries; a delete fails with
+    /// [`crate::HFError::InvalidParameter`]. Use `delete_patterns` to delete remote files, which happens in the
+    /// first commit. See [`HFRepository::upload_folder`] for `create_pr` and resume semantics, which are
+    /// identical.
+    ///
+    /// # Parameters
+    ///
+    /// - `operations` (required): stream of add operations.
+    /// - `revision`: branch to upload to. Defaults to the main branch.
+    /// - `commit_message`, `commit_description`: commit metadata.
+    /// - `create_pr` (default `false`): open a pull request and commit every batch to it.
+    /// - `delete_patterns`: globs of remote files (full repository paths) to delete in the first commit.
+    /// - `progress`: optional progress handler.
+    #[builder(finish_fn = send)]
+    pub async fn upload_operations(
+        &self,
+        /// Stream of add operations.
+        operations: CommitOperationStream,
+        /// Branch to upload to. Defaults to the main branch.
+        #[builder(into)]
+        revision: Option<String>,
+        /// Commit message.
+        #[builder(into)]
+        commit_message: Option<String>,
+        /// Extended description for the commit.
+        #[builder(into)]
+        commit_description: Option<String>,
+        /// Create a pull request instead of committing directly.
+        #[builder(default)]
+        create_pr: bool,
+        /// Globs of remote files (full repository paths) to delete in the first commit.
+        delete_patterns: Option<Vec<String>>,
+        /// Progress handler.
+        #[builder(into)]
+        progress: Option<Progress>,
+    ) -> HFResult<CommitInfo> {
+        Box::pin(self.upload_operations_pipeline(
+            operations,
+            UploadOperationsParams {
+                revision,
+                commit_message,
+                commit_description,
+                create_pr,
+                delete_patterns,
+                progress,
+            },
+        ))
+        .await
+    }
+
     /// Upload a local folder to a repository.
     ///
-    /// The folder is walked recursively and converted into add operations. A small folder lands as a
-    /// single commit; a large one is split across several chained commits whose size adapts to how
-    /// fast the Hub accepts them (mirroring `huggingface_hub`), with LFS content for the next commit
-    /// uploading while the current one is created. Each commit reports
+    /// The folder is walked recursively and its files are fed to the same pipeline as
+    /// [`HFRepository::upload_operations`]. A small folder lands as a single commit; a large one is split across
+    /// several chained commits whose size adapts to how fast the Hub accepts them (mirroring `huggingface_hub`),
+    /// with LFS content for the next commit uploading while the current one is created. Each commit reports
     /// [`UploadEvent::CommitCompleted`], and the returned [`CommitInfo`] describes the last one. When
     /// `delete_patterns` is set, matching remote files are deleted in the first commit.
     ///
@@ -926,18 +977,26 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        Box::pin(self.upload_folder_pipeline(UploadFolderParams {
-            folder_path,
-            path_in_repo,
-            revision,
-            commit_message,
-            commit_description,
-            create_pr,
-            allow_patterns,
-            ignore_patterns,
-            delete_patterns,
-            progress,
-        }))
+        let mut add_operations = Vec::new();
+        collect_files_recursive(
+            &folder_path,
+            &folder_path,
+            path_in_repo.as_deref().unwrap_or(""),
+            &allow_patterns,
+            &ignore_patterns,
+            &mut add_operations,
+        )?;
+        Box::pin(self.upload_operations_pipeline(
+            Box::pin(futures::stream::iter(add_operations.into_iter().map(Ok))),
+            UploadOperationsParams {
+                revision,
+                commit_message: Some(commit_message.unwrap_or_else(|| "Upload folder".to_string())),
+                commit_description,
+                create_pr,
+                delete_patterns,
+                progress,
+            },
+        ))
         .await
     }
 
@@ -1068,6 +1127,33 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .maybe_commit_description(commit_description)
                 .create_pr(create_pr)
                 .maybe_parent_commit(parent_commit)
+                .maybe_progress(progress)
+                .send(),
+        )
+    }
+
+    /// Blocking counterpart of [`HFRepository::upload_operations`]. Takes the add operations as a
+    /// `Vec`; see the async method for parameters and behavior.
+    #[builder(finish_fn = send)]
+    pub fn upload_operations(
+        &self,
+        operations: Vec<CommitOperation>,
+        #[builder(into)] revision: Option<String>,
+        #[builder(into)] commit_message: Option<String>,
+        #[builder(into)] commit_description: Option<String>,
+        #[builder(default)] create_pr: bool,
+        delete_patterns: Option<Vec<String>>,
+        #[builder(into)] progress: Option<Progress>,
+    ) -> HFResult<CommitInfo> {
+        self.runtime.block_on(
+            self.inner
+                .upload_operations()
+                .operations(Box::pin(futures::stream::iter(operations.into_iter().map(Ok))))
+                .maybe_revision(revision)
+                .maybe_commit_message(commit_message)
+                .maybe_commit_description(commit_description)
+                .create_pr(create_pr)
+                .maybe_delete_patterns(delete_patterns)
                 .maybe_progress(progress)
                 .send(),
         )

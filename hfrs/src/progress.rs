@@ -267,7 +267,7 @@ impl CliProgressHandler {
                     }
                     let pbar = self.multi.add(ProgressBar::new(0));
                     pbar.set_style(aggregate_bytes_style());
-                    pbar.set_message(format!("Processing Files (0 / {})", state.upload_total_files));
+                    pbar.set_message("Processing Files");
                     state.processing_bar = Some(pbar);
 
                     let tbar = self.multi.add(ProgressBar::new(0));
@@ -284,10 +284,13 @@ impl CliProgressHandler {
                     bar.set_length(*total_bytes);
                     bar.set_position(*bytes_completed);
                     let remaining = total_bytes.saturating_sub(*bytes_completed);
+                    let counts = if total_count == 0 {
+                        completed_count.to_string()
+                    } else {
+                        format!("{completed_count} / {total_count}")
+                    };
                     bar.set_message(format!(
-                        "Processing Files ({} / {}) • {} • ETA {}",
-                        completed_count,
-                        total_count,
+                        "Processing Files ({counts}) • {} • ETA {}",
                         format_rate(*bytes_per_sec),
                         format_eta(remaining, *bytes_per_sec),
                     ));

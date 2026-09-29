@@ -18,7 +18,7 @@
 
 use futures::StreamExt;
 use hf_hub::repository::*;
-use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoTypeDataset, RepoTypeModel, RepoTypeSpace};
+use hf_hub::{HFClient, HFClientBuilder, HFError, HFRepository, RepoTypeDataset, RepoTypeModel, RepoTypeSpace};
 use integration_tests::test_utils::*;
 
 fn api() -> Option<HFClient> {
@@ -987,6 +987,49 @@ async fn test_upload_folder_multi_commit() {
 
     let files = collect_file_paths(&test_repo).await;
     assert_eq!(files.iter().filter(|p| p.ends_with(".txt")).count(), 300);
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+#[tokio::test]
+async fn test_upload_operations_multi_commit() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+    let test_repo = repo(&client, &repo_id);
+
+    // The initial batch holds 250 files, so 300 operations force at least two commits.
+    let operations = futures::stream::iter(
+        (0..300).map(|i| Ok(CommitOperation::add_bytes(format!("f{i}.txt"), format!("content {i}").into_bytes()))),
+    );
+
+    let commits_before = count_commits(&test_repo, "main").await;
+    let commit = test_repo
+        .upload_operations()
+        .operations(Box::pin(operations))
+        .commit_message("multi-commit stream upload")
+        .send()
+        .await
+        .unwrap();
+    assert!(commit.commit_oid.is_some());
+
+    let commits_after = count_commits(&test_repo, "main").await;
+    assert!(
+        commits_after >= commits_before + 2,
+        "expected multiple commits (before={commits_before}, after={commits_after})"
+    );
+
+    let files = collect_file_paths(&test_repo).await;
+    assert_eq!(files.iter().filter(|p| p.ends_with(".txt")).count(), 300);
+
+    let rejected = test_repo
+        .upload_operations()
+        .operations(Box::pin(futures::stream::iter([Ok(CommitOperation::delete("f0.txt"))])))
+        .send()
+        .await;
+    assert!(matches!(rejected, Err(HFError::InvalidParameter(_))));
 
     delete_test_repo(&client, &repo_id).await;
 }

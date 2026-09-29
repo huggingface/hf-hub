@@ -1,8 +1,9 @@
-//! Streamed multi-commit pipeline backing [`HFRepository::upload_folder`].
+//! Streamed multi-commit pipeline backing [`HFRepository::upload_operations`] and
+//! [`HFRepository::upload_folder`].
 //!
-//! Mirrors `huggingface_hub`'s large-folder upload: files are classified via the `preupload`
-//! endpoint in chunks and grouped into adaptively-sized batches. A coordinator uploads each batch's
-//! LFS content via xet while a committer commits the previous batch, so transfer and commit
+//! Mirrors `huggingface_hub`'s large-folder upload: add operations are pulled from a stream,
+//! classified via the `preupload` endpoint in chunks, and grouped into adaptively-sized batches. A coordinator uploads
+//! each batch's LFS content via xet while a committer commits the previous batch, so transfer and commit
 //! round-trips overlap. A small folder lands as a single commit; a large one as several chained
 //! commits. With `create_pr`, the first commit opens the pull request and every later commit
 //! targets its `refs/pr/N` ref.
@@ -10,17 +11,23 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_family = "wasm"))]
+use std::time::Instant;
 
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
+#[cfg(target_family = "wasm")]
+use web_time::Instant;
 
-use super::{CommitRequest, UploadFolderParams, collect_files_recursive, prepare_source};
+use super::{CommitRequest, UploadOperationsParams, prepare_source};
 use crate::constants;
 use crate::error::{HFError, HFResult};
 use crate::progress::{EmitEvent, Progress, ProgressEvent, ProgressHandler, UploadEvent};
 use crate::repository::files::matches_any_glob;
-use crate::repository::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoTreeEntry, RepoType};
+use crate::repository::{
+    AddSource, CommitInfo, CommitOperation, CommitOperationStream, HFRepository, RepoTreeEntry, RepoType,
+};
 
 /// Files classified per `preupload` call.
 const PREUPLOAD_BATCH_SIZE: usize = 256;
@@ -145,7 +152,7 @@ impl CommitState {
     fn contextualize_error(&self, err: HFError) -> HFError {
         match self.pr {
             Some((pr_num, _)) => HFError::Other(format!(
-                "upload_folder failed after {} commit(s) to pull request #{pr_num}; re-run with \
+                "upload failed after {} commit(s) to pull request #{pr_num}; re-run with \
                  revision=\"refs/pr/{pr_num}\" and create_pr=false to resume: {err}",
                 self.committed
             )),
@@ -158,25 +165,30 @@ fn parse_pr_num(pr_url: &str) -> Option<u64> {
     pr_url.trim_end_matches('/').rsplit('/').next()?.parse().ok()
 }
 
-/// Rebases per-batch xet `Progress` events onto the whole upload's totals. Lifecycle events
-/// from the inner per-batch calls are dropped; the pipeline emits those once.
+/// Rebases per-batch xet `Progress` events onto the whole upload's totals. `total_bytes` grows as
+/// operations are pulled from the stream. Lifecycle events from the inner per-batch calls are
+/// dropped; the pipeline emits those once.
 struct AggregatingProgress {
     inner: Progress,
-    total_bytes: u64,
+    total_bytes: AtomicU64,
     completed_base: AtomicU64,
     transfer_base: AtomicU64,
     batch_transfer_completed: AtomicU64,
 }
 
 impl AggregatingProgress {
-    fn new(inner: Progress, total_bytes: u64) -> Self {
+    fn new(inner: Progress) -> Self {
         Self {
             inner,
-            total_bytes,
+            total_bytes: AtomicU64::new(0),
             completed_base: AtomicU64::new(0),
             transfer_base: AtomicU64::new(0),
             batch_transfer_completed: AtomicU64::new(0),
         }
+    }
+
+    fn add_discovered_bytes(&self, bytes: u64) {
+        self.total_bytes.fetch_add(bytes, Ordering::Relaxed);
     }
 
     fn finish_batch(&self, batch_content_bytes: u64) {
@@ -203,7 +215,7 @@ impl ProgressHandler for AggregatingProgress {
                 let transfer_base = self.transfer_base.load(Ordering::Relaxed);
                 self.inner.on_progress(&ProgressEvent::Upload(UploadEvent::Progress {
                     bytes_completed: self.completed_base.load(Ordering::Relaxed) + bytes_completed,
-                    total_bytes: self.total_bytes,
+                    total_bytes: self.total_bytes.load(Ordering::Relaxed),
                     bytes_per_sec: *bytes_per_sec,
                     transfer_bytes_completed: transfer_base + transfer_bytes_completed,
                     transfer_bytes: transfer_base + transfer_bytes,
@@ -224,7 +236,7 @@ struct CommitJob {
     is_last: bool,
 }
 
-/// Settings shared by every batch of one `upload_folder` call.
+/// Settings shared by every batch of one upload.
 struct PipelineContext<'a> {
     revision: &'a str,
     create_pr: bool,
@@ -233,19 +245,13 @@ struct PipelineContext<'a> {
 }
 
 impl<T: RepoType> HFRepository<T> {
-    pub(super) async fn upload_folder_pipeline(&self, params: UploadFolderParams) -> HFResult<CommitInfo> {
+    pub(super) async fn upload_operations_pipeline(
+        &self,
+        operations: CommitOperationStream,
+        params: UploadOperationsParams,
+    ) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
-        let commit_message = params.commit_message.as_deref().unwrap_or("Upload folder");
-
-        let mut add_operations = Vec::new();
-        let total_bytes = collect_files_recursive(
-            &params.folder_path,
-            &params.folder_path,
-            params.path_in_repo.as_deref().unwrap_or(""),
-            &params.allow_patterns,
-            &params.ignore_patterns,
-            &mut add_operations,
-        )?;
+        let commit_message = params.commit_message.as_deref().unwrap_or("Upload files");
 
         let mut delete_operations = Vec::new();
         if let Some(ref delete_patterns) = params.delete_patterns {
@@ -261,8 +267,8 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         params.progress.emit(UploadEvent::Start {
-            total_files: add_operations.len(),
-            total_bytes,
+            total_files: 0,
+            total_bytes: 0,
         });
 
         let commit_size = AdaptiveCommitSize::new();
@@ -270,16 +276,13 @@ impl<T: RepoType> HFRepository<T> {
             revision,
             create_pr: params.create_pr,
             commit_size: &commit_size,
-            aggregator: params
-                .progress
-                .clone()
-                .map(|inner| Arc::new(AggregatingProgress::new(inner, total_bytes))),
+            aggregator: params.progress.clone().map(|inner| Arc::new(AggregatingProgress::new(inner))),
         };
 
         // Zero buffer: one ready batch may wait while the next one uploads.
         let (job_sender, job_receiver) = mpsc::channel::<CommitJob>(0);
         let (_, info) = futures::try_join!(
-            self.coordinate(add_operations, delete_operations, &context, job_sender),
+            self.coordinate(operations, delete_operations, &context, job_sender),
             self.commit_batches(
                 job_receiver,
                 &context,
@@ -295,45 +298,56 @@ impl<T: RepoType> HFRepository<T> {
 
     async fn coordinate(
         &self,
-        add_operations: Vec<CommitOperation>,
+        operations: CommitOperationStream,
         delete_operations: Vec<CommitOperation>,
         context: &PipelineContext<'_>,
         mut job_sender: mpsc::Sender<CommitJob>,
     ) -> HFResult<()> {
+        let mut operations = operations.peekable();
         let mut pending_deletes = Some(delete_operations);
-        if add_operations.is_empty() {
+        if std::pin::Pin::new(&mut operations).peek().await.is_none() {
             let job = self
                 .upload_batch(BatchAccumulator::new(), pending_deletes.take(), context, true)
                 .await?;
             return send_job(&mut job_sender, job).await;
         }
 
-        let chunk_count = add_operations.len().div_ceil(PREUPLOAD_BATCH_SIZE);
         let mut batch = BatchAccumulator::new();
-        for (chunk_index, chunk) in add_operations.chunks(PREUPLOAD_BATCH_SIZE).enumerate() {
-            self.classify_chunk(chunk, context, &mut batch).await?;
-            let is_last = chunk_index + 1 == chunk_count;
+        let mut chunk = Vec::with_capacity(PREUPLOAD_BATCH_SIZE);
+        loop {
+            while chunk.len() < PREUPLOAD_BATCH_SIZE {
+                match operations.next().await {
+                    Some(operation) => chunk.push(require_add(operation?)?),
+                    None => break,
+                }
+            }
+            self.classify_chunk(&chunk, context, &mut batch).await?;
+            chunk.clear();
+            let is_last = std::pin::Pin::new(&mut operations).peek().await.is_none();
             if is_last || batch.should_flush(context.commit_size.current(), Instant::now()) {
                 let full_batch = std::mem::replace(&mut batch, BatchAccumulator::new());
                 let job = self.upload_batch(full_batch, pending_deletes.take(), context, is_last).await?;
                 send_job(&mut job_sender, job).await?;
             }
+            if is_last {
+                return Ok(());
+            }
         }
-        Ok(())
     }
 
     async fn classify_chunk(
         &self,
-        chunk: &[CommitOperation],
+        chunk: &[(String, AddSource)],
         context: &PipelineContext<'_>,
         batch: &mut BatchAccumulator,
     ) -> HFResult<()> {
         let mut prepared: Vec<(String, AddSource, u64, Vec<u8>, String)> = Vec::with_capacity(chunk.len());
-        for op in chunk {
-            if let CommitOperation::Add { path_in_repo, source } = op {
-                let (size, sample, sha256) = prepare_source(source).await?;
-                prepared.push((path_in_repo.clone(), source.clone(), size, sample, sha256));
-            }
+        for (path_in_repo, source) in chunk {
+            let (size, sample, sha256) = prepare_source(source).await?;
+            prepared.push((path_in_repo.clone(), source.clone(), size, sample, sha256));
+        }
+        if let Some(aggregator) = &context.aggregator {
+            aggregator.add_discovered_bytes(prepared.iter().map(|(_, _, size, ..)| size).sum());
         }
         let files: Vec<(&str, u64, &[u8])> = prepared
             .iter()
@@ -452,7 +466,7 @@ impl<T: RepoType> HFRepository<T> {
                 commit_index = state.committed - 1,
                 commit_oid = info.commit_oid.as_deref(),
                 files = job.operations.len(),
-                "upload_folder batch committed"
+                "upload batch committed"
             );
             progress.emit(UploadEvent::CommitCompleted {
                 commit_index: state.committed - 1,
@@ -461,7 +475,7 @@ impl<T: RepoType> HFRepository<T> {
             last_info = Some(info);
         }
 
-        let mut info = last_info.ok_or_else(|| HFError::Other("upload_folder produced no commits".to_string()))?;
+        let mut info = last_info.ok_or_else(|| HFError::Other("upload produced no commits".to_string()))?;
         if let Some((pr_num, pr_url)) = state.pr {
             info.pr_num = Some(pr_num);
             info.pr_url = pr_url;
@@ -470,11 +484,21 @@ impl<T: RepoType> HFRepository<T> {
     }
 }
 
+fn require_add(operation: CommitOperation) -> HFResult<(String, AddSource)> {
+    match operation {
+        CommitOperation::Add { path_in_repo, source } => Ok((path_in_repo, source)),
+        CommitOperation::Delete { path_in_repo } => Err(HFError::InvalidParameter(format!(
+            "upload_operations only accepts add operations, got a delete for {path_in_repo:?}; use delete_patterns \
+             to delete remote files"
+        ))),
+    }
+}
+
 async fn send_job(job_sender: &mut mpsc::Sender<CommitJob>, job: CommitJob) -> HFResult<()> {
     job_sender
         .send(job)
         .await
-        .map_err(|_| HFError::Other("upload_folder committer stopped before all batches were sent".to_string()))
+        .map_err(|_| HFError::Other("upload committer stopped before all batches were sent".to_string()))
 }
 
 #[cfg(test)]
@@ -642,21 +666,29 @@ mod tests {
     }
 
     #[test]
-    fn aggregating_progress_rebases_onto_totals() {
+    fn aggregating_progress_rebases_onto_growing_totals() {
         let capture = Arc::new(CaptureProgress::default());
-        let aggregator = AggregatingProgress::new(Progress::from(capture.clone()), 100);
+        let aggregator = AggregatingProgress::new(Progress::from(capture.clone()));
+        aggregator.add_discovered_bytes(50);
         aggregator.on_progress(&progress_event(10, 5));
         aggregator.on_progress(&progress_event(50, 30));
         aggregator.finish_batch(50);
+        aggregator.add_discovered_bytes(50);
         aggregator.on_progress(&progress_event(20, 10));
         let seen = capture.0.lock().unwrap().clone();
-        assert_eq!(seen, vec![(10, 100, 5, 30), (50, 100, 30, 30), (70, 100, 40, 60)]);
+        assert_eq!(seen, vec![(10, 50, 5, 30), (50, 50, 30, 30), (70, 100, 40, 60)]);
+    }
+
+    #[test]
+    fn require_add_rejects_deletes() {
+        assert!(require_add(CommitOperation::add_bytes("a", b"x".to_vec())).is_ok());
+        assert!(matches!(require_add(CommitOperation::delete("a")), Err(HFError::InvalidParameter(_))));
     }
 
     #[test]
     fn aggregating_progress_drops_inner_lifecycle_events() {
         let capture = Arc::new(CaptureProgress::default());
-        let aggregator = AggregatingProgress::new(Progress::from(capture.clone()), 100);
+        let aggregator = AggregatingProgress::new(Progress::from(capture.clone()));
         aggregator.on_progress(&ProgressEvent::Upload(UploadEvent::Start {
             total_files: 3,
             total_bytes: 100,

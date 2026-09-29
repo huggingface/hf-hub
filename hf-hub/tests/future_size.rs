@@ -59,6 +59,10 @@ fn boxed_send_futures_stay_small() {
         size_of_val(&repo.upload_file().source(AddSource::Bytes("x".into())).path_in_repo("f").send()),
     );
     assert_small("upload_folder", size_of_val(&repo.upload_folder().folder_path(".").send()));
+    assert_small(
+        "upload_operations",
+        size_of_val(&repo.upload_operations().operations(Box::pin(futures::stream::empty())).send()),
+    );
     assert_small("delete_file", size_of_val(&repo.delete_file().path_in_repo("f").send()));
     assert_small("delete_folder", size_of_val(&repo.delete_folder().path_in_repo("f").send()));
 

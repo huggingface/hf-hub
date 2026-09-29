@@ -216,7 +216,8 @@ pub enum ProgressEvent {
 /// the silent-gap caveats.
 #[derive(Debug, Clone)]
 pub enum UploadEvent {
-    /// Upload has begun; totals are known.
+    /// Upload has begun. For `upload_operations` / `upload_folder`, operations are discovered
+    /// incrementally, so both totals are `0` here and `Progress::total_bytes` grows instead.
     Start {
         /// Number of files the operation will upload (excludes deletes and other
         /// non-add operations in a commit).
@@ -240,7 +241,8 @@ pub enum UploadEvent {
     Progress {
         /// Logical content bytes processed so far across all files.
         bytes_completed: u64,
-        /// Total logical content bytes for the operation (matches `Start.total_bytes`).
+        /// Total logical content bytes for the operation (matches `Start.total_bytes`, except for
+        /// `upload_operations` / `upload_folder`, where it grows as operations are discovered).
         total_bytes: u64,
         /// Rate of logical content processing in bytes/sec. `None` during warm-up.
         bytes_per_sec: Option<f64>,
@@ -256,10 +258,10 @@ pub enum UploadEvent {
 
     /// Emitted once, immediately before the commit API call. Signals that all byte
     /// transfer is done; the call itself is silent until `Complete`. For a multi-commit
-    /// `upload_folder`, emitted before the final commit only.
+    /// `upload_operations` / `upload_folder`, emitted before the final commit only.
     Committing,
 
-    /// Emitted by `upload_folder` after each of its commits lands, including the final one.
+    /// Emitted by `upload_operations` / `upload_folder` after each of its commits lands, including the final one.
     /// Large folders are uploaded as several commits; this reports each as it completes.
     CommitCompleted {
         /// 0-based index of the commit that just landed.
