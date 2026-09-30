@@ -31,7 +31,7 @@ use super::files::extract_file_size;
 #[cfg(not(target_family = "wasm"))]
 use super::{
     FileMetadataInfo,
-    files::{extract_commit_hash, extract_etag, extract_xet_hash, matches_any_glob},
+    files::{extract_commit_hash, extract_etag, extract_xet_file_size, extract_xet_hash, matches_any_glob},
 };
 use super::{HFRepository, RepoTreeEntry, RepoType};
 #[cfg(not(target_family = "wasm"))]
@@ -203,10 +203,12 @@ impl<T: RepoType> HFRepository<T> {
         let (xet_hash, file_size_hint) = self.resolve_xet_hash_and_size(revision, &params.filename).await?;
 
         if let Some(xet_hash) = xet_hash {
-            let file_size: u64 = file_size_hint.unwrap_or_else(|| {
-                tracing::warn!(url = %url, "missing file size for xet file, defaulting to 0");
-                0
-            });
+            let file_size = file_size_hint.ok_or_else(|| {
+                HFError::malformed_response_at(
+                    format!("missing or invalid X-Linked-Size header for xet file {}", params.filename),
+                    url.clone(),
+                )
+            })?;
 
             let content_length = params.range.as_ref().map(|r| r.end.saturating_sub(r.start)).or(Some(file_size));
 
@@ -299,8 +301,12 @@ impl<T: RepoType> HFRepository<T> {
             )
             .await?;
 
-        let file_size = extract_file_size(&head_response).unwrap_or(0);
         let has_xet_hash = head_response.headers().get(constants::HEADER_X_XET_HASH).is_some();
+        let file_size = if has_xet_hash {
+            extract_xet_file_size(&head_response, &params.filename)?
+        } else {
+            extract_file_size(&head_response).unwrap_or(0)
+        };
 
         params.progress.emit(DownloadEvent::Start {
             total_files: 1,
@@ -514,10 +520,14 @@ impl<T: RepoType> HFRepository<T> {
         let commit_hash = extract_commit_hash(&head_response);
         let xet_hash = extract_xet_hash(&head_response);
         let has_xet_hash = xet_hash.is_some();
-        let file_size: u64 = extract_file_size(&head_response).unwrap_or_else(|| {
-            tracing::warn!(url = %url, "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0");
-            0
-        });
+        let file_size = if has_xet_hash {
+            extract_xet_file_size(&head_response, &params.filename)
+        } else {
+            Ok(extract_file_size(&head_response).unwrap_or_else(|| {
+                tracing::warn!(url = %url, "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0");
+                0
+            }))
+        };
 
         if !status.is_success() && !status.is_redirection() {
             self.hf_client
@@ -534,6 +544,7 @@ impl<T: RepoType> HFRepository<T> {
         let etag = etag?;
         let commit_hash =
             commit_hash.ok_or_else(|| HFError::malformed_response_at("missing X-Repo-Commit header", url.clone()))?;
+        let file_size = file_size?;
 
         params.progress.emit(DownloadEvent::Start {
             total_files: 1,
@@ -822,10 +833,14 @@ impl<T: RepoType> HFRepository<T> {
                     })?;
                     let commit = extract_commit_hash(&resp).unwrap_or_else(|| commit_hash_ref.clone());
                     let xet_hash = extract_xet_hash(&resp);
-                    let file_size: u64 = extract_file_size(&resp).unwrap_or_else(|| {
-                        tracing::warn!(file = %filename, "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0");
-                        0
-                    });
+                    let file_size = if xet_hash.is_some() {
+                        extract_xet_file_size(&resp, &filename)?
+                    } else {
+                        extract_file_size(&resp).unwrap_or_else(|| {
+                            tracing::warn!(file = %filename, "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0");
+                            0
+                        })
+                    };
                     let location = Some(resp.url().to_string());
                     Ok::<_, HFError>(Some(FileMetadataInfo {
                         filename,
@@ -1549,6 +1564,28 @@ mod tests {
         server.abort();
         assert!(
             matches!(result, Err(HFError::AuthRequired { context }) if context.url.ends_with("/xet-read-token/main"))
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_rejects_xet_file_without_linked_size() {
+        let (client, server) = mock_hub(&[
+            (
+                "HEAD /owner/repo/resolve/main/model.bin HTTP/1.1",
+                "HTTP/1.1 302 Found\r\nLocation: {endpoint}/cdn\r\nX-Xet-Hash: abc123\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            ),
+            ("HEAD /cdn HTTP/1.1", "HTTP/1.1 200 OK\r\nContent-Length: 42\r\nConnection: close\r\n\r\n"),
+        ])
+        .await;
+        let result = client
+            .model("owner", "repo")
+            .download_file_stream()
+            .filename("model.bin")
+            .send()
+            .await;
+        server.abort();
+        assert!(
+            matches!(result, Err(HFError::MalformedResponse { what, .. }) if what.contains("X-Linked-Size") && what.contains("model.bin"))
         );
     }
 
