@@ -18,7 +18,7 @@
 
 use futures::StreamExt;
 use hf_hub::repository::*;
-use hf_hub::{HFClient, HFClientBuilder, HFRepository, RepoTypeDataset, RepoTypeModel, RepoTypeSpace};
+use hf_hub::{HFClient, HFClientBuilder, HFError, HFRepository, RepoTypeDataset, RepoTypeModel, RepoTypeSpace};
 use integration_tests::test_utils::*;
 
 fn api() -> Option<HFClient> {
@@ -935,6 +935,148 @@ async fn test_upload_folder() {
     let files = collect_file_paths(&test_repo).await;
     assert!(files.contains("hello.txt"));
     assert!(files.contains("subdir/nested.txt"));
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+async fn count_commits<T: RepoType>(test_repo: &HFRepository<T>, revision: &str) -> usize {
+    let stream = test_repo.list_commits().revision(revision).send().unwrap();
+    futures::pin_mut!(stream);
+    let mut count = 0;
+    while let Some(commit) = stream.next().await {
+        commit.unwrap();
+        count += 1;
+    }
+    count
+}
+
+fn write_many_small_files(dir: &std::path::Path, count: usize) {
+    for i in 0..count {
+        std::fs::write(dir.join(format!("f{i}.txt")), format!("content {i}")).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn test_upload_folder_multi_commit() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+    let test_repo = repo(&client, &repo_id);
+
+    // The initial batch holds 250 files, so 300 files force at least two commits.
+    let dir = tempfile::tempdir().unwrap();
+    write_many_small_files(dir.path(), 300);
+
+    let commits_before = count_commits(&test_repo, "main").await;
+    let commit = test_repo
+        .upload_folder()
+        .folder_path(dir.path().to_path_buf())
+        .commit_message("multi-commit upload")
+        .send()
+        .await
+        .unwrap();
+    assert!(commit.commit_oid.is_some());
+
+    let commits_after = count_commits(&test_repo, "main").await;
+    assert!(
+        commits_after >= commits_before + 2,
+        "expected multiple commits (before={commits_before}, after={commits_after})"
+    );
+
+    let files = collect_file_paths(&test_repo).await;
+    assert_eq!(files.iter().filter(|p| p.ends_with(".txt")).count(), 300);
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+#[tokio::test]
+async fn test_upload_operations_multi_commit() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+    let test_repo = repo(&client, &repo_id);
+
+    // The initial batch holds 250 files, so 300 operations force at least two commits.
+    let operations = futures::stream::iter(
+        (0..300).map(|i| Ok(CommitOperation::add_bytes(format!("f{i}.txt"), format!("content {i}").into_bytes()))),
+    );
+
+    let commits_before = count_commits(&test_repo, "main").await;
+    let commit = test_repo
+        .upload_operations()
+        .operations(Box::pin(operations))
+        .commit_message("multi-commit stream upload")
+        .send()
+        .await
+        .unwrap();
+    assert!(commit.commit_oid.is_some());
+
+    let commits_after = count_commits(&test_repo, "main").await;
+    assert!(
+        commits_after >= commits_before + 2,
+        "expected multiple commits (before={commits_before}, after={commits_after})"
+    );
+
+    let files = collect_file_paths(&test_repo).await;
+    assert_eq!(files.iter().filter(|p| p.ends_with(".txt")).count(), 300);
+
+    let rejected = test_repo
+        .upload_operations()
+        .operations(Box::pin(futures::stream::iter([Ok(CommitOperation::delete("f0.txt"))])))
+        .send()
+        .await;
+    assert!(matches!(rejected, Err(HFError::InvalidParameter(_))));
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+#[tokio::test]
+async fn test_upload_folder_multi_commit_create_pr() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+    let test_repo = repo(&client, &repo_id);
+
+    let dir = tempfile::tempdir().unwrap();
+    write_many_small_files(dir.path(), 300);
+
+    let commit = test_repo
+        .upload_folder()
+        .folder_path(dir.path().to_path_buf())
+        .commit_message("pr multi-commit")
+        .create_pr(true)
+        .send()
+        .await
+        .unwrap();
+    let pr_num = commit.pr_num.expect("a pull request should have been opened");
+    assert!(commit.pr_url.is_some());
+
+    let pr_revision = format!("refs/pr/{pr_num}");
+    let stream = test_repo
+        .list_tree()
+        .revision(pr_revision.clone())
+        .recursive(true)
+        .send()
+        .unwrap();
+    futures::pin_mut!(stream);
+    let mut txt_count = 0;
+    while let Some(entry) = stream.next().await {
+        if let RepoTreeEntry::File { path, .. } = entry.unwrap()
+            && path.ends_with(".txt")
+        {
+            txt_count += 1;
+        }
+    }
+    assert_eq!(txt_count, 300, "all files should land on {pr_revision}");
+
+    let main_files = collect_file_paths(&test_repo).await;
+    assert!(!main_files.iter().any(|p| p.ends_with(".txt")), "main should be untouched");
 
     delete_test_repo(&client, &repo_id).await;
 }
