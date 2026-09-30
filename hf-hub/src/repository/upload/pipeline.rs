@@ -10,12 +10,12 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc;
-use futures::{SinkExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
 use serde::Deserialize;
 
 use super::{CreateCommitParams, UploadOperationsParams, prepare_source};
@@ -44,9 +44,9 @@ struct AdaptiveCommitSize {
 }
 
 impl AdaptiveCommitSize {
-    fn new() -> Self {
+    fn new(initial_index: usize) -> Self {
         Self {
-            index: AtomicUsize::new(INITIAL_COMMIT_SIZE_INDEX),
+            index: AtomicUsize::new(initial_index.min(COMMIT_SIZE_SCALE.len() - 1)),
         }
     }
 
@@ -271,6 +271,7 @@ struct PipelineContext<'a> {
     aggregator: Option<Arc<AggregatingProgress>>,
     opened_pr: OnceLock<u64>,
     max_commit_interval: Duration,
+    committing_emitted: AtomicBool,
 }
 
 impl<T: RepoType> HFRepository<T> {
@@ -279,15 +280,16 @@ impl<T: RepoType> HFRepository<T> {
         operations: CommitOperationStream,
         params: UploadOperationsParams,
     ) -> HFResult<CommitInfo> {
-        self.upload_operations_pipeline_with_interval(operations, params, MAX_COMMIT_INTERVAL)
+        self.upload_operations_pipeline_tuned(operations, params, MAX_COMMIT_INTERVAL, INITIAL_COMMIT_SIZE_INDEX)
             .await
     }
 
-    async fn upload_operations_pipeline_with_interval(
+    async fn upload_operations_pipeline_tuned(
         &self,
         operations: CommitOperationStream,
         params: UploadOperationsParams,
         max_commit_interval: Duration,
+        initial_commit_size_index: usize,
     ) -> HFResult<CommitInfo> {
         if params.create_pr
             && let Some(revision) = params.revision.as_deref()
@@ -319,7 +321,7 @@ impl<T: RepoType> HFRepository<T> {
             total_bytes: 0,
         });
 
-        let commit_size = AdaptiveCommitSize::new();
+        let commit_size = AdaptiveCommitSize::new(initial_commit_size_index);
         let context = PipelineContext {
             revision,
             create_pr: params.create_pr,
@@ -327,24 +329,36 @@ impl<T: RepoType> HFRepository<T> {
             aggregator: params.progress.clone().map(|inner| Arc::new(AggregatingProgress::new(inner))),
             opened_pr: OnceLock::new(),
             max_commit_interval,
+            committing_emitted: AtomicBool::new(false),
         };
 
         // Zero buffer: one ready batch may wait while the next one uploads.
         let (job_sender, job_receiver) = mpsc::channel::<CommitJob>(0);
-        let result = futures::try_join!(
-            self.coordinate(operations, &context, job_sender),
-            self.commit_batches(
-                job_receiver,
-                &context,
-                delete_operations,
-                CommitState::new(revision.to_string(), params.parent_commit),
-                commit_message,
-                params.commit_description.as_deref(),
-                &params.progress,
-            ),
-        );
+        let coordinator = std::pin::pin!(self.coordinate(operations, &context, job_sender));
+        let committer = std::pin::pin!(self.commit_batches(
+            job_receiver,
+            &context,
+            delete_operations,
+            CommitState::new(revision.to_string(), params.parent_commit),
+            commit_message,
+            params.commit_description.as_deref(),
+            &params.progress,
+        ));
+        // A committer failure stops the coordinator right away. A coordinator failure drops its job
+        // sender, so the committer still lands the batches already handed to it before exiting.
+        let result = match futures::future::select(coordinator, committer).await {
+            futures::future::Either::Left((Ok(()), committer)) => committer.await,
+            futures::future::Either::Left((Err(err), committer)) => {
+                if let Err(commit_err) = committer.await {
+                    tracing::warn!(error = %commit_err, "committing already-uploaded batches failed after upload error");
+                }
+                Err(err)
+            },
+            futures::future::Either::Right((Ok(info), coordinator)) => coordinator.await.map(|()| info),
+            futures::future::Either::Right((Err(err), _)) => Err(err),
+        };
         let info = match result {
-            Ok((_, info)) => info,
+            Ok(info) => info,
             Err(err) => {
                 if let Some(&pr_num) = context.opened_pr.get() {
                     tracing::warn!(
@@ -360,6 +374,9 @@ impl<T: RepoType> HFRepository<T> {
             },
         };
 
+        if !context.committing_emitted.load(Ordering::Relaxed) {
+            params.progress.emit(UploadEvent::Committing);
+        }
         params.progress.emit(UploadEvent::Complete);
         Ok(info)
     }
@@ -377,7 +394,12 @@ impl<T: RepoType> HFRepository<T> {
         loop {
             let mut deadline_passed = false;
             let mut stream_done = false;
+            let mut target_reached = false;
             while chunk.len() < PREUPLOAD_BATCH_SIZE {
+                if batch.adds.len() + chunk.len() >= context.commit_size.current() {
+                    target_reached = true;
+                    break;
+                }
                 let oldest_pending = match (batch.adds.is_empty(), chunk_started_at) {
                     (false, Some(chunk_started)) => Some(batch.started_at.min(chunk_started)),
                     (false, None) => Some(batch.started_at),
@@ -399,12 +421,22 @@ impl<T: RepoType> HFRepository<T> {
                     },
                 }
             }
+            // Learning about EOF now lets the batch about to flush be marked as the last one.
+            if target_reached && chunk.len() < PREUPLOAD_BATCH_SIZE {
+                match operations.next().now_or_never() {
+                    Some(Some(operation)) => chunk.push(require_add(operation?)?),
+                    Some(None) => stream_done = true,
+                    None => {},
+                }
+            }
             let prepared = self.classify_chunk(&chunk, context).await?;
             chunk.clear();
             chunk_started_at = None;
-            for add in prepared {
+            let prepared_count = prepared.len();
+            for (index, add) in prepared.into_iter().enumerate() {
                 if let Some(ready) = push_and_take_ready(&mut batch, add, context.commit_size.current()) {
-                    let job = self.upload_batch(ready, context, false).await?;
+                    let is_last = stream_done && index + 1 == prepared_count;
+                    let job = self.upload_batch(ready, context, is_last).await?;
                     send_job(&mut job_sender, job).await?;
                     sent_any = true;
                 }
@@ -425,7 +457,9 @@ impl<T: RepoType> HFRepository<T> {
                 return send_job(&mut job_sender, job).await;
             }
             let batch_expired = batch.started_at.elapsed() >= context.max_commit_interval;
-            if !batch.adds.is_empty() && (deadline_passed || batch_expired) {
+            if !batch.adds.is_empty()
+                && (deadline_passed || batch_expired || batch.should_flush(context.commit_size.current()))
+            {
                 let job = self.upload_batch(batch.take(), context, false).await?;
                 send_job(&mut job_sender, job).await?;
                 sent_any = true;
@@ -554,7 +588,7 @@ impl<T: RepoType> HFRepository<T> {
     ) -> HFResult<CommitInfo> {
         let mut last_info: Option<CommitInfo> = None;
         while let Some(job) = job_receiver.next().await {
-            if job.is_last {
+            if job.is_last && !context.committing_emitted.swap(true, Ordering::Relaxed) {
                 progress.emit(UploadEvent::Committing);
             }
             let mut pending_pieces = VecDeque::from([job.adds]);
@@ -728,12 +762,12 @@ mod tests {
 
     #[test]
     fn commit_size_starts_at_250() {
-        assert_eq!(AdaptiveCommitSize::new().current(), 250);
+        assert_eq!(AdaptiveCommitSize::new(INITIAL_COMMIT_SIZE_INDEX).current(), 250);
     }
 
     #[test]
     fn commit_size_grows_after_fast_full_commit_and_shrinks_after_slow_commit() {
-        let size = AdaptiveCommitSize::new();
+        let size = AdaptiveCommitSize::new(INITIAL_COMMIT_SIZE_INDEX);
         size.record_success(Duration::from_secs(5), 250);
         assert_eq!(size.current(), 400);
         size.record_success(Duration::from_secs(120), 400);
@@ -743,21 +777,21 @@ mod tests {
 
     #[test]
     fn commit_size_does_not_grow_after_fast_partial_commit() {
-        let size = AdaptiveCommitSize::new();
+        let size = AdaptiveCommitSize::new(INITIAL_COMMIT_SIZE_INDEX);
         size.record_success(Duration::from_secs(5), 249);
         assert_eq!(size.current(), 250);
     }
 
     #[test]
     fn commit_size_shrinks_on_failure() {
-        let size = AdaptiveCommitSize::new();
+        let size = AdaptiveCommitSize::new(INITIAL_COMMIT_SIZE_INDEX);
         size.record_failure();
         assert_eq!(size.current(), 200);
     }
 
     #[test]
     fn commit_size_is_clamped_to_scale() {
-        let size = AdaptiveCommitSize::new();
+        let size = AdaptiveCommitSize::new(INITIAL_COMMIT_SIZE_INDEX);
         for _ in 0..20 {
             size.record_success(Duration::from_secs(1), 1000);
         }
@@ -882,16 +916,23 @@ mod tests {
     /// Minimal Hub stand-in: every commit is rejected with 403, everything else succeeds. Records
     /// each request line.
     async fn spawn_rejecting_hub() -> (String, Arc<Mutex<Vec<String>>>) {
-        spawn_hub(false).await
+        let (endpoint, requests, _) = spawn_hub(usize::MAX).await;
+        (endpoint, requests)
     }
 
-    /// Minimal Hub stand-in; commits succeed only when `accept_commits`. Records each request line,
-    /// with the number of committed files appended to commit requests.
-    async fn spawn_hub(accept_commits: bool) -> (String, Arc<Mutex<Vec<String>>>) {
+    type Recorded = Arc<Mutex<Vec<String>>>;
+
+    /// Minimal Hub stand-in; the first `rejected_commits` commits get a 403, later ones succeed.
+    /// Records each request line, with the number of committed files and deletes appended to
+    /// successful commit requests, and every commit request body. The tree lists one `old.txt`.
+    async fn spawn_hub(rejected_commits: usize) -> (String, Recorded, Recorded) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let commit_bodies = Arc::new(Mutex::new(Vec::new()));
         let recorded = requests.clone();
+        let recorded_bodies = commit_bodies.clone();
+        let mut remaining_rejections = rejected_commits;
         tokio::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else {
@@ -921,12 +962,24 @@ mod tests {
                     raw.extend_from_slice(&buf[..read]);
                 }
                 let mut request_line = head.lines().next().unwrap_or_default().to_string();
-                let (status, body) = if request_line.contains("/commit/") && accept_commits {
-                    let files = String::from_utf8_lossy(&raw[header_end..]).matches(r#""key":"file""#).count();
-                    request_line.push_str(&format!(" files={files}"));
+                let is_commit = request_line.contains("/commit/");
+                if is_commit {
+                    recorded_bodies
+                        .lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&raw[header_end..]).to_string());
+                }
+                let (status, body) = if is_commit && remaining_rejections == 0 {
+                    let commit_body = String::from_utf8_lossy(&raw[header_end..]);
+                    let files = commit_body.matches(r#""key":"file""#).count();
+                    let deletes = commit_body.matches(r#""key":"deletedFile""#).count();
+                    request_line.push_str(&format!(" deletes={deletes} files={files}"));
                     ("200 OK", r#"{"commitOid":"abc"}"#)
-                } else if request_line.contains("/commit/") {
+                } else if is_commit {
+                    remaining_rejections = remaining_rejections.saturating_sub(1);
                     ("403 Forbidden", r#"{"error":"no"}"#)
+                } else if request_line.contains("/tree/") {
+                    ("200 OK", r#"[{"type":"file","oid":"o","size":1,"path":"old.txt"}]"#)
                 } else if request_line.contains("/discussions") {
                     ("200 OK", r#"{"num":3}"#)
                 } else {
@@ -942,7 +995,7 @@ mod tests {
                     .unwrap();
             }
         });
-        (format!("http://{addr}"), requests)
+        (format!("http://{addr}"), requests, commit_bodies)
     }
 
     fn two_file_stream() -> CommitOperationStream {
@@ -1095,16 +1148,32 @@ mod tests {
     async fn start_channel_upload(
         max_commit_interval: Duration,
     ) -> (OperationSender, tokio::task::JoinHandle<HFResult<CommitInfo>>, Arc<Mutex<Vec<String>>>) {
-        let (endpoint, requests) = spawn_hub(true).await;
+        let (sender, upload, requests, _) =
+            start_tuned_upload(max_commit_interval, INITIAL_COMMIT_SIZE_INDEX, 0, upload_params()).await;
+        (sender, upload, requests)
+    }
+
+    async fn start_tuned_upload(
+        max_commit_interval: Duration,
+        initial_commit_size_index: usize,
+        rejected_commits: usize,
+        params: UploadOperationsParams,
+    ) -> (OperationSender, tokio::task::JoinHandle<HFResult<CommitInfo>>, Recorded, Recorded) {
+        let (endpoint, requests, commit_bodies) = spawn_hub(rejected_commits).await;
         let client = crate::HFClient::builder().endpoint(endpoint).token("hf_test").build().unwrap();
         let (sender, receiver) = mpsc::unbounded();
         let upload = tokio::spawn(async move {
             client
                 .model("owner", "repo")
-                .upload_operations_pipeline_with_interval(Box::pin(receiver), upload_params(), max_commit_interval)
+                .upload_operations_pipeline_tuned(
+                    Box::pin(receiver),
+                    params,
+                    max_commit_interval,
+                    initial_commit_size_index,
+                )
                 .await
         });
-        (sender, upload, requests)
+        (sender, upload, requests, commit_bodies)
     }
 
     fn add_op(index: usize) -> HFResult<CommitOperation> {
@@ -1145,5 +1214,141 @@ mod tests {
         assert_eq!(info.commit_oid.as_deref(), Some("abc"));
         assert_eq!(commit_files(&requests), vec![1]);
         assert!(!requests.lock().unwrap().iter().any(|r| r.contains("/commits/")), "{requests:?}");
+    }
+    fn commit_deletes(requests: &Mutex<Vec<String>>) -> Vec<usize> {
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.split_once(" deletes=")?.1.split_once(' ')?.0.parse().ok())
+            .collect()
+    }
+
+    fn commit_header(body: &str) -> serde_json::Value {
+        let header: serde_json::Value = serde_json::from_str(body.lines().next().unwrap()).unwrap();
+        header["value"].clone()
+    }
+
+    const SMALLEST_COMMIT_SIZE_INDEX: usize = 0;
+
+    #[derive(Default)]
+    struct LifecycleProgress(Mutex<Vec<String>>);
+
+    impl ProgressHandler for LifecycleProgress {
+        fn on_progress(&self, event: &ProgressEvent) {
+            let name = match event {
+                ProgressEvent::Upload(UploadEvent::Committing) => "committing",
+                ProgressEvent::Upload(UploadEvent::CommitCompleted { .. }) => "commit_completed",
+                ProgressEvent::Upload(UploadEvent::Complete) => "complete",
+                _ => return,
+            };
+            self.0.lock().unwrap().push(name.to_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn coordinator_error_still_lands_queued_commit_and_keeps_error_variant() {
+        let (sender, upload, requests, _) =
+            start_tuned_upload(Duration::from_secs(3600), SMALLEST_COMMIT_SIZE_INDEX, 0, upload_params()).await;
+        // One file past the target so the full batch is queued before the stream error is read.
+        for index in 0..=COMMIT_SIZE_SCALE[0] {
+            sender.unbounded_send(add_op(index)).unwrap();
+        }
+        sender.unbounded_send(Err(HFError::Other("stream broke".to_string()))).unwrap();
+        let result = upload.await.unwrap();
+        assert!(matches!(&result, Err(HFError::Other(message)) if message == "stream broke"), "got {result:?}");
+        assert_eq!(commit_files(&requests), vec![COMMIT_SIZE_SCALE[0]]);
+    }
+
+    #[tokio::test]
+    async fn exactly_target_files_emit_committing_once_before_complete() {
+        let capture = Arc::new(LifecycleProgress::default());
+        let params = UploadOperationsParams {
+            progress: Some(Progress::from(capture.clone() as Arc<dyn ProgressHandler>)),
+            ..upload_params()
+        };
+        let (sender, upload, requests, _) =
+            start_tuned_upload(Duration::from_secs(3600), INITIAL_COMMIT_SIZE_INDEX, 0, params).await;
+        let target = COMMIT_SIZE_SCALE[INITIAL_COMMIT_SIZE_INDEX];
+        for index in 0..target {
+            sender.unbounded_send(add_op(index)).unwrap();
+        }
+        drop(sender);
+        upload.await.unwrap().unwrap();
+        assert_eq!(commit_files(&requests), vec![target]);
+        let events = capture.0.lock().unwrap().clone();
+        assert_eq!(events, vec!["committing", "commit_completed", "complete"]);
+    }
+
+    #[tokio::test]
+    async fn batch_at_small_target_commits_without_waiting_for_chunk_or_deadline() {
+        let (sender, upload, requests, _) =
+            start_tuned_upload(Duration::from_secs(3600), SMALLEST_COMMIT_SIZE_INDEX, 0, upload_params()).await;
+        for index in 0..COMMIT_SIZE_SCALE[0] {
+            sender.unbounded_send(add_op(index)).unwrap();
+        }
+        wait_for_commits(&requests, 1).await;
+        assert_eq!(commit_files(&requests), vec![COMMIT_SIZE_SCALE[0]]);
+        drop(sender);
+        upload.await.unwrap().unwrap();
+        assert_eq!(commit_files(&requests), vec![COMMIT_SIZE_SCALE[0]]);
+    }
+
+    #[tokio::test]
+    async fn failed_commit_is_resplit_at_lowered_target_with_deletes_in_first_piece() {
+        let params = UploadOperationsParams {
+            delete_patterns: Some(vec!["old.txt".to_string()]),
+            ..upload_params()
+        };
+        let initial_index = 2;
+        let (sender, upload, requests, _) =
+            start_tuned_upload(Duration::from_secs(3600), initial_index, 1, params).await;
+        let files = COMMIT_SIZE_SCALE[initial_index];
+        for index in 0..files {
+            sender.unbounded_send(add_op(index)).unwrap();
+        }
+        drop(sender);
+        upload.await.unwrap().unwrap();
+        let lowered = COMMIT_SIZE_SCALE[initial_index - 1];
+        assert_eq!(commit_files(&requests), vec![lowered, files - lowered]);
+        assert_eq!(commit_deletes(&requests), vec![1, 0]);
+    }
+
+    #[tokio::test]
+    async fn later_commits_are_numbered_parts_and_only_first_sends_parent() {
+        let params = UploadOperationsParams {
+            parent_commit: Some("sha0".to_string()),
+            commit_message: Some("Add data".to_string()),
+            ..upload_params()
+        };
+        let (sender, upload, requests, commit_bodies) =
+            start_tuned_upload(Duration::from_secs(3600), SMALLEST_COMMIT_SIZE_INDEX, 0, params).await;
+        for index in 0..COMMIT_SIZE_SCALE[0] {
+            sender.unbounded_send(add_op(index)).unwrap();
+        }
+        wait_for_commits(&requests, 1).await;
+        sender.unbounded_send(add_op(COMMIT_SIZE_SCALE[0])).unwrap();
+        drop(sender);
+        upload.await.unwrap().unwrap();
+        let headers: Vec<serde_json::Value> = commit_bodies.lock().unwrap().iter().map(|b| commit_header(b)).collect();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0]["summary"], "Add data");
+        assert_eq!(headers[0]["parentCommit"], "sha0");
+        assert_eq!(headers[1]["summary"], "Add data (part 2)");
+        assert!(headers[1].get("parentCommit").is_none(), "{}", headers[1]);
+    }
+
+    #[tokio::test]
+    async fn delete_only_upload_makes_one_deletes_only_commit() {
+        let params = UploadOperationsParams {
+            delete_patterns: Some(vec!["*.txt".to_string()]),
+            ..upload_params()
+        };
+        let (sender, upload, requests, _) =
+            start_tuned_upload(Duration::from_secs(3600), INITIAL_COMMIT_SIZE_INDEX, 0, params).await;
+        drop(sender);
+        upload.await.unwrap().unwrap();
+        assert_eq!(commit_files(&requests), vec![0]);
+        assert_eq!(commit_deletes(&requests), vec![1]);
     }
 }
