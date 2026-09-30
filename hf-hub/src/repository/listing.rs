@@ -13,7 +13,7 @@ use futures::stream::Stream;
 use reqwest::Url;
 
 #[cfg(not(target_family = "wasm"))]
-use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_hash};
+use super::files::{extract_commit_hash, extract_etag, extract_file_size, extract_xet_file_size, extract_xet_hash};
 use super::{FileMetadataInfo, HFRepository, RepoTreeEntry, RepoType};
 use crate::client::encode_ref;
 use crate::error::{HFError, HFResult};
@@ -193,13 +193,17 @@ impl<T: RepoType> HFRepository<T> {
             HFError::malformed_response_at(format!("missing X-Repo-Commit header for {filename}"), url.to_string())
         })?;
         let xet_hash = extract_xet_hash(&response);
-        let file_size = extract_file_size(&response).unwrap_or_else(|| {
-            tracing::warn!(
-                file = %filename,
-                "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0"
-            );
-            0
-        });
+        let file_size = if xet_hash.is_some() {
+            extract_xet_file_size(&response, &filename)?
+        } else {
+            extract_file_size(&response).unwrap_or_else(|| {
+                tracing::warn!(
+                    file = %filename,
+                    "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0"
+                );
+                0
+            })
+        };
         let location = response
             .headers()
             .get(reqwest::header::LOCATION)
