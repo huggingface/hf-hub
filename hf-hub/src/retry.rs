@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::time::Duration;
 
+use reqwest::header::HeaderMap;
 use reqwest::{Error as ReqwestError, Response, StatusCode};
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::{debug, error};
@@ -95,13 +96,33 @@ fn is_transient(result: &Result<Response, ReqwestError>) -> bool {
     }
 }
 
-/// The wait a 429/503 response asks for via `Retry-After`, capped at [`MAX_RETRY_AFTER`].
+/// The wait a 429/503 response asks for, capped at [`MAX_RETRY_AFTER`]. On a 429 an exhausted
+/// Hub `RateLimit` quota takes precedence over `Retry-After`.
 fn retry_after(result: &Result<Response, ReqwestError>) -> Option<Duration> {
     let resp = result.as_ref().ok()?;
-    if !matches!(resp.status(), StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE) {
-        return None;
+    let wait = match resp.status() {
+        StatusCode::TOO_MANY_REQUESTS => {
+            parse_rate_limit_reset(resp.headers()).or_else(|| parse_retry_after(resp.headers()))
+        },
+        StatusCode::SERVICE_UNAVAILABLE => parse_retry_after(resp.headers()),
+        _ => None,
+    }?;
+    Some(wait.min(MAX_RETRY_AFTER))
+}
+
+/// Seconds until reset from a Hub `RateLimit: "api";r=0;t=55` header, when no requests remain.
+fn parse_rate_limit_reset(headers: &HeaderMap) -> Option<Duration> {
+    let raw = headers.get("ratelimit")?.to_str().ok()?;
+    let mut remaining = None;
+    let mut reset = None;
+    for param in raw.split(';').skip(1) {
+        match param.trim().split_once('=') {
+            Some(("r", value)) => remaining = value.trim().parse::<u64>().ok(),
+            Some(("t", value)) => reset = value.trim().parse::<u64>().ok(),
+            _ => {},
+        }
     }
-    parse_retry_after(resp.headers()).map(|wait| wait.min(MAX_RETRY_AFTER))
+    (remaining? == 0).then_some(Duration::from_secs(reset?))
 }
 
 fn log_attempt(attempt: usize, transient: bool, result: &Result<Response, ReqwestError>) {
@@ -143,7 +164,7 @@ fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> {
 /// Retry the provided async request factory using the given config.
 /// On each attempt the closure is invoked to build a fresh `send()` future.
 /// Between attempts it waits the backoff delay, or longer when a 429/503
-/// carries a `Retry-After`.
+/// carries a `RateLimit` reset or `Retry-After`.
 /// Returns the final `Response` (including non-retryable error statuses) or
 /// a final transport error.
 pub(crate) async fn retry<F, Fut>(config: &RetryConfig, mut f: F) -> Result<Response, ReqwestError>
@@ -239,11 +260,41 @@ mod tests {
     }
 
     fn response(status: u16, retry_after: Option<&str>) -> Result<Response, ReqwestError> {
+        response_with_headers(status, retry_after, None)
+    }
+
+    fn response_with_headers(
+        status: u16,
+        retry_after: Option<&str>,
+        rate_limit: Option<&str>,
+    ) -> Result<Response, ReqwestError> {
         let mut builder = http::Response::builder().status(status);
         if let Some(value) = retry_after {
             builder = builder.header(reqwest::header::RETRY_AFTER, value);
         }
+        if let Some(value) = rate_limit {
+            builder = builder.header("RateLimit", value);
+        }
         Ok(Response::from(builder.body("").unwrap()))
+    }
+
+    #[test]
+    fn rate_limit_reset_used_on_429() {
+        let exhausted = Some("\"api\";r=0;t=55");
+        assert_eq!(retry_after(&response_with_headers(429, None, exhausted)), Some(Duration::from_secs(55)));
+        assert_eq!(retry_after(&response_with_headers(429, Some("3"), exhausted)), Some(Duration::from_secs(55)));
+        assert_eq!(retry_after(&response_with_headers(503, None, exhausted)), None);
+    }
+
+    #[test]
+    fn rate_limit_falls_back_to_retry_after() {
+        let remaining = Some("\"api\";r=5;t=55");
+        assert_eq!(retry_after(&response_with_headers(429, Some("3"), remaining)), Some(Duration::from_secs(3)));
+        assert_eq!(retry_after(&response_with_headers(429, Some("3"), Some("garbage"))), Some(Duration::from_secs(3)));
+        assert_eq!(
+            retry_after(&response_with_headers(429, Some("3"), Some("\"api\";r=0"))),
+            Some(Duration::from_secs(3))
+        );
     }
 
     #[test]
