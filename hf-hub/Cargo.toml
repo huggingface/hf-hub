@@ -56,6 +56,8 @@ tower-http = { version = "0.6.9", default-features = false }
 # needs the `js` feature on wasm32 to compile.
 getrandom = { version = "0.2", features = ["js"] }
 wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
 # `std::time::Instant` panics on wasm32-unknown-unknown.
 web-time = "1"
 

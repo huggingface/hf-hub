@@ -102,31 +102,62 @@ impl BatchAccumulator {
     }
 
     fn push(&mut self, add: PreparedAdd) {
+        if self.adds.is_empty() {
+            self.started_at = Instant::now();
+        }
         if !add.lfs {
             self.regular_bytes += add.size;
         }
         self.adds.push(add);
     }
 
-    fn should_flush(&self, max_files: usize, now: Instant) -> bool {
-        !self.adds.is_empty()
-            && (self.adds.len() >= max_files
-                || self.regular_bytes >= REGULAR_CONTENT_BYTES_BUDGET
-                || now.duration_since(self.started_at) >= MAX_COMMIT_INTERVAL)
+    fn should_flush(&self, max_files: usize) -> bool {
+        !self.adds.is_empty() && (self.adds.len() >= max_files || self.regular_bytes >= REGULAR_CONTENT_BYTES_BUDGET)
+    }
+
+    fn take(&mut self) -> Self {
+        std::mem::replace(self, Self::new())
     }
 }
 
-/// Adds `add` to `batch` and hands back the batch when it must be committed now: when `is_last`, or when the
-/// flush condition holds after this file. Anything pushed afterwards starts a fresh batch.
-fn push_and_take_ready(
-    batch: &mut BatchAccumulator,
-    add: PreparedAdd,
-    max_files: usize,
-    is_last: bool,
-    now: Instant,
-) -> Option<BatchAccumulator> {
+/// Adds `add` to `batch` and hands back the batch when its size limits are reached. Anything pushed
+/// afterwards starts a fresh batch.
+fn push_and_take_ready(batch: &mut BatchAccumulator, add: PreparedAdd, max_files: usize) -> Option<BatchAccumulator> {
     batch.push(add);
-    (is_last || batch.should_flush(max_files, now)).then(|| std::mem::replace(batch, BatchAccumulator::new()))
+    batch.should_flush(max_files).then(|| batch.take())
+}
+
+#[cfg(not(target_family = "wasm"))]
+async fn sleep(duration: Duration) {
+    tokio::time::sleep(duration).await;
+}
+
+#[cfg(target_family = "wasm")]
+async fn sleep(duration: Duration) {
+    use wasm_bindgen::JsCast;
+
+    let millis = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);
+    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
+        let global = js_sys::global();
+        if let Ok(set_timeout) = js_sys::Reflect::get(&global, &"setTimeout".into())
+            .and_then(|set_timeout| set_timeout.dyn_into::<js_sys::Function>())
+        {
+            let _ = set_timeout.call2(&global, &resolve, &millis.into());
+        }
+    });
+    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+}
+
+/// Next stream item, or `None` if `deadline` passes first.
+async fn next_before<S: futures::Stream + Unpin>(stream: &mut S, deadline: Option<Instant>) -> Option<Option<S::Item>> {
+    let Some(deadline) = deadline else {
+        return Some(stream.next().await);
+    };
+    let timer = std::pin::pin!(sleep(deadline.saturating_duration_since(Instant::now())));
+    match futures::future::select(stream.next(), timer).await {
+        futures::future::Either::Left((item, _)) => Some(item),
+        futures::future::Either::Right(_) => None,
+    }
 }
 
 fn duplicate_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
@@ -264,6 +295,7 @@ struct PipelineContext<'a> {
     commit_size: &'a AdaptiveCommitSize,
     aggregator: Option<Arc<AggregatingProgress>>,
     opened_pr: OnceLock<u64>,
+    max_commit_interval: Duration,
 }
 
 impl<T: RepoType> HFRepository<T> {
@@ -271,6 +303,16 @@ impl<T: RepoType> HFRepository<T> {
         &self,
         operations: CommitOperationStream,
         params: UploadOperationsParams,
+    ) -> HFResult<CommitInfo> {
+        self.upload_operations_pipeline_with_interval(operations, params, MAX_COMMIT_INTERVAL)
+            .await
+    }
+
+    async fn upload_operations_pipeline_with_interval(
+        &self,
+        operations: CommitOperationStream,
+        params: UploadOperationsParams,
+        max_commit_interval: Duration,
     ) -> HFResult<CommitInfo> {
         if params.create_pr
             && let Some(revision) = params.revision.as_deref()
@@ -309,6 +351,7 @@ impl<T: RepoType> HFRepository<T> {
             commit_size: &commit_size,
             aggregator: params.progress.clone().map(|inner| Arc::new(AggregatingProgress::new(inner))),
             opened_pr: OnceLock::new(),
+            max_commit_interval,
         };
 
         // Zero buffer: one ready batch may wait while the next one uploads.
@@ -348,44 +391,69 @@ impl<T: RepoType> HFRepository<T> {
 
     async fn coordinate(
         &self,
-        operations: CommitOperationStream,
+        mut operations: CommitOperationStream,
         context: &PipelineContext<'_>,
         mut job_sender: mpsc::Sender<CommitJob>,
     ) -> HFResult<()> {
-        let mut operations = operations.peekable();
         let mut batch = BatchAccumulator::new();
         let mut chunk = Vec::with_capacity(PREUPLOAD_BATCH_SIZE);
+        let mut chunk_started_at = None;
+        let mut sent_any = false;
         loop {
+            let mut deadline_passed = false;
+            let mut stream_done = false;
             while chunk.len() < PREUPLOAD_BATCH_SIZE {
-                match operations.next().await {
-                    Some(operation) => chunk.push(require_add(operation?)?),
-                    None => break,
+                let oldest_pending = match (batch.adds.is_empty(), chunk_started_at) {
+                    (false, Some(chunk_started)) => Some(batch.started_at.min(chunk_started)),
+                    (false, None) => Some(batch.started_at),
+                    (true, chunk_started) => chunk_started,
+                };
+                let deadline = oldest_pending.map(|started| started + context.max_commit_interval);
+                match next_before(&mut operations, deadline).await {
+                    Some(Some(operation)) => {
+                        chunk.push(require_add(operation?)?);
+                        chunk_started_at.get_or_insert_with(Instant::now);
+                    },
+                    Some(None) => {
+                        stream_done = true;
+                        break;
+                    },
+                    None => {
+                        deadline_passed = true;
+                        break;
+                    },
                 }
             }
-            let stream_done = std::pin::Pin::new(&mut operations).peek().await.is_none();
             let prepared = self.classify_chunk(&chunk, context).await?;
             chunk.clear();
-            if prepared.is_empty() {
-                // Empty stream: the committer still owes a deletes-only commit, if any.
-                let job = CommitJob {
-                    adds: Vec::new(),
-                    lfs_uploaded: HashMap::new(),
-                    is_last: true,
-                };
-                return send_job(&mut job_sender, job).await;
-            }
-            let prepared_count = prepared.len();
-            for (index, add) in prepared.into_iter().enumerate() {
-                let is_last = stream_done && index + 1 == prepared_count;
-                if let Some(full_batch) =
-                    push_and_take_ready(&mut batch, add, context.commit_size.current(), is_last, Instant::now())
-                {
-                    let job = self.upload_batch(full_batch, context, is_last).await?;
+            chunk_started_at = None;
+            for add in prepared {
+                if let Some(ready) = push_and_take_ready(&mut batch, add, context.commit_size.current()) {
+                    let job = self.upload_batch(ready, context, false).await?;
                     send_job(&mut job_sender, job).await?;
+                    sent_any = true;
                 }
             }
             if stream_done {
-                return Ok(());
+                let job = if !batch.adds.is_empty() {
+                    self.upload_batch(batch, context, true).await?
+                } else if !sent_any {
+                    // Empty stream: the committer still owes a deletes-only commit, if any.
+                    CommitJob {
+                        adds: Vec::new(),
+                        lfs_uploaded: HashMap::new(),
+                        is_last: true,
+                    }
+                } else {
+                    return Ok(());
+                };
+                return send_job(&mut job_sender, job).await;
+            }
+            let batch_expired = batch.started_at.elapsed() >= context.max_commit_interval;
+            if !batch.adds.is_empty() && (deadline_passed || batch_expired) {
+                let job = self.upload_batch(batch.take(), context, false).await?;
+                send_job(&mut job_sender, job).await?;
+                sent_any = true;
             }
         }
     }
@@ -744,44 +812,30 @@ mod tests {
         for _ in 0..5 {
             batch.push(prepared(1, false));
         }
-        assert!(batch.should_flush(5, Instant::now()));
-        assert!(!batch.should_flush(6, Instant::now()));
+        assert!(batch.should_flush(5));
+        assert!(!batch.should_flush(6));
     }
 
     #[test]
     fn batch_flushes_on_regular_byte_budget_only() {
         let mut batch = BatchAccumulator::new();
         batch.push(prepared(REGULAR_CONTENT_BYTES_BUDGET, true));
-        assert!(!batch.should_flush(10_000, Instant::now()));
+        assert!(!batch.should_flush(10_000));
         batch.push(prepared(REGULAR_CONTENT_BYTES_BUDGET, false));
-        assert!(batch.should_flush(10_000, Instant::now()));
-    }
-
-    #[test]
-    fn batch_flushes_on_age() {
-        let mut batch = BatchAccumulator::new();
-        batch.push(prepared(1, false));
-        let later = Instant::now() + MAX_COMMIT_INTERVAL + Duration::from_secs(1);
-        assert!(batch.should_flush(10_000, later));
+        assert!(batch.should_flush(10_000));
     }
 
     #[test]
     fn empty_batch_never_flushes() {
-        let batch = BatchAccumulator::new();
-        assert!(!batch.should_flush(1, Instant::now() + Duration::from_secs(3600)));
+        assert!(!BatchAccumulator::new().should_flush(1));
     }
 
     /// Feeds one preupload chunk through the per-file flush and returns the committed batch sizes.
-    fn flush_sizes(adds: Vec<PreparedAdd>, max_files: usize, stream_done: bool) -> (Vec<usize>, usize) {
+    fn flush_sizes(adds: Vec<PreparedAdd>, max_files: usize) -> (Vec<usize>, usize) {
         let mut batch = BatchAccumulator::new();
-        let count = adds.len();
         let sizes = adds
             .into_iter()
-            .enumerate()
-            .filter_map(|(index, add)| {
-                let is_last = stream_done && index + 1 == count;
-                push_and_take_ready(&mut batch, add, max_files, is_last, Instant::now())
-            })
+            .filter_map(|add| push_and_take_ready(&mut batch, add, max_files))
             .map(|flushed| flushed.adds.len())
             .collect();
         (sizes, batch.adds.len())
@@ -790,17 +844,9 @@ mod tests {
     #[test]
     fn flushes_mid_chunk_at_small_target_and_carries_leftovers() {
         let adds = (0..PREUPLOAD_BATCH_SIZE).map(|_| prepared(1, false)).collect();
-        let (sizes, leftover) = flush_sizes(adds, 20, false);
+        let (sizes, leftover) = flush_sizes(adds, 20);
         assert_eq!(sizes, vec![20; PREUPLOAD_BATCH_SIZE / 20]);
         assert_eq!(leftover, PREUPLOAD_BATCH_SIZE % 20);
-    }
-
-    #[test]
-    fn last_file_flushes_the_remainder() {
-        let adds = (0..45).map(|_| prepared(1, false)).collect();
-        let (sizes, leftover) = flush_sizes(adds, 20, true);
-        assert_eq!(sizes, vec![20, 20, 5]);
-        assert_eq!(leftover, 0);
     }
 
     #[test]
@@ -813,7 +859,7 @@ mod tests {
             prepared(REGULAR_CONTENT_BYTES_BUDGET, true),
             prepared(1, false),
         ];
-        let (sizes, leftover) = flush_sizes(adds, 1000, false);
+        let (sizes, leftover) = flush_sizes(adds, 1000);
         assert_eq!(sizes, vec![2]);
         assert_eq!(leftover, 3);
     }
@@ -860,6 +906,12 @@ mod tests {
     /// Minimal Hub stand-in: every commit is rejected with 403, everything else succeeds. Records
     /// each request line.
     async fn spawn_rejecting_hub() -> (String, Arc<Mutex<Vec<String>>>) {
+        spawn_hub(false).await
+    }
+
+    /// Minimal Hub stand-in; commits succeed only when `accept_commits`. Records each request line,
+    /// with the number of committed files appended to commit requests.
+    async fn spawn_hub(accept_commits: bool) -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -892,8 +944,12 @@ mod tests {
                     let read = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await.unwrap();
                     raw.extend_from_slice(&buf[..read]);
                 }
-                let request_line = head.lines().next().unwrap_or_default().to_string();
-                let (status, body) = if request_line.contains("/commit/") {
+                let mut request_line = head.lines().next().unwrap_or_default().to_string();
+                let (status, body) = if request_line.contains("/commit/") && accept_commits {
+                    let files = String::from_utf8_lossy(&raw[header_end..]).matches(r#""key":"file""#).count();
+                    request_line.push_str(&format!(" files={files}"));
+                    ("200 OK", r#"{"commitOid":"abc"}"#)
+                } else if request_line.contains("/commit/") {
                     ("403 Forbidden", r#"{"error":"no"}"#)
                 } else if request_line.contains("/discussions") {
                     ("200 OK", r#"{"num":3}"#)
@@ -1023,5 +1079,95 @@ mod tests {
         aggregator.on_progress(&ProgressEvent::Upload(UploadEvent::Committing));
         aggregator.on_progress(&ProgressEvent::Upload(UploadEvent::Complete));
         assert_eq!(capture.1.load(Ordering::Relaxed), 0);
+    }
+
+    fn commit_files(requests: &Mutex<Vec<String>>) -> Vec<usize> {
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.contains("/commit/"))
+            .filter_map(|r| r.rsplit_once(" files=")?.1.parse().ok())
+            .collect()
+    }
+
+    async fn wait_for_commits(requests: &Mutex<Vec<String>>, count: usize) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while commit_files(requests).len() < count {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("commit did not happen while the stream was still open");
+    }
+
+    fn upload_params() -> UploadOperationsParams {
+        UploadOperationsParams {
+            revision: None,
+            commit_message: None,
+            commit_description: None,
+            create_pr: false,
+            parent_commit: None,
+            delete_patterns: None,
+            progress: None,
+        }
+    }
+
+    type OperationSender = mpsc::UnboundedSender<HFResult<CommitOperation>>;
+
+    /// Starts an upload fed by a channel; the returned sender keeps the stream open until dropped.
+    async fn start_channel_upload(
+        max_commit_interval: Duration,
+    ) -> (OperationSender, tokio::task::JoinHandle<HFResult<CommitInfo>>, Arc<Mutex<Vec<String>>>) {
+        let (endpoint, requests) = spawn_hub(true).await;
+        let client = crate::HFClient::builder().endpoint(endpoint).token("hf_test").build().unwrap();
+        let (sender, receiver) = mpsc::unbounded();
+        let upload = tokio::spawn(async move {
+            client
+                .model("owner", "repo")
+                .upload_operations_pipeline_with_interval(Box::pin(receiver), upload_params(), max_commit_interval)
+                .await
+        });
+        (sender, upload, requests)
+    }
+
+    fn add_op(index: usize) -> HFResult<CommitOperation> {
+        Ok(CommitOperation::add_bytes(format!("f{index}.txt"), b"x".to_vec()))
+    }
+
+    #[tokio::test]
+    async fn partial_batch_commits_after_interval_while_stream_stays_open() {
+        let (sender, upload, requests) = start_channel_upload(Duration::from_millis(100)).await;
+        sender.unbounded_send(add_op(0)).unwrap();
+        wait_for_commits(&requests, 1).await;
+        assert_eq!(commit_files(&requests), vec![1]);
+        drop(sender);
+        upload.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn full_batch_commits_without_waiting_for_more_items() {
+        let (sender, upload, requests) = start_channel_upload(Duration::from_secs(3600)).await;
+        for index in 0..PREUPLOAD_BATCH_SIZE {
+            sender.unbounded_send(add_op(index)).unwrap();
+        }
+        let commit_size = COMMIT_SIZE_SCALE[INITIAL_COMMIT_SIZE_INDEX];
+        wait_for_commits(&requests, 1).await;
+        assert_eq!(commit_files(&requests), vec![commit_size]);
+        drop(sender);
+        upload.await.unwrap().unwrap();
+        assert_eq!(commit_files(&requests), vec![commit_size, PREUPLOAD_BATCH_SIZE - commit_size]);
+    }
+
+    #[tokio::test]
+    async fn eof_after_flushed_batch_makes_no_empty_commit() {
+        let (sender, upload, requests) = start_channel_upload(Duration::from_millis(100)).await;
+        sender.unbounded_send(add_op(0)).unwrap();
+        wait_for_commits(&requests, 1).await;
+        drop(sender);
+        let info = upload.await.unwrap().unwrap();
+        assert_eq!(info.commit_oid.as_deref(), Some("abc"));
+        assert_eq!(commit_files(&requests), vec![1]);
+        assert!(!requests.lock().unwrap().iter().any(|r| r.contains("/commits/")), "{requests:?}");
     }
 }

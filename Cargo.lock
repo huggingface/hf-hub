@@ -1085,6 +1085,7 @@ dependencies = [
  "hf-xet",
  "http",
  "hyper",
+ "js-sys",
  "pathdiff",
  "percent-encoding",
  "reqwest",
@@ -1100,6 +1101,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "url",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
 ]
