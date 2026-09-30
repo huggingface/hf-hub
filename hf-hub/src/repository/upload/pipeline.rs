@@ -422,9 +422,14 @@ impl<T: RepoType> HFRepository<T> {
                 }
             }
             // Learning about EOF now lets the batch about to flush be marked as the last one.
+            // A stream error found here is returned only after the full batch is queued.
+            let mut deferred_error = None;
             if target_reached && chunk.len() < PREUPLOAD_BATCH_SIZE {
                 match operations.next().now_or_never() {
-                    Some(Some(operation)) => chunk.push(require_add(operation?)?),
+                    Some(Some(operation)) => match operation.and_then(require_add) {
+                        Ok(add) => chunk.push(add),
+                        Err(err) => deferred_error = Some(err),
+                    },
                     Some(None) => stream_done = true,
                     None => {},
                 }
@@ -440,6 +445,9 @@ impl<T: RepoType> HFRepository<T> {
                     send_job(&mut job_sender, job).await?;
                     sent_any = true;
                 }
+            }
+            if let Some(err) = deferred_error {
+                return Err(err);
             }
             if stream_done {
                 let job = if !batch.adds.is_empty() {
@@ -1252,6 +1260,19 @@ mod tests {
             start_tuned_upload(Duration::from_secs(3600), SMALLEST_COMMIT_SIZE_INDEX, 0, upload_params()).await;
         // One file past the target so the full batch is queued before the stream error is read.
         for index in 0..=COMMIT_SIZE_SCALE[0] {
+            sender.unbounded_send(add_op(index)).unwrap();
+        }
+        sender.unbounded_send(Err(HFError::Other("stream broke".to_string()))).unwrap();
+        let result = upload.await.unwrap();
+        assert!(matches!(&result, Err(HFError::Other(message)) if message == "stream broke"), "got {result:?}");
+        assert_eq!(commit_files(&requests), vec![COMMIT_SIZE_SCALE[0]]);
+    }
+
+    #[tokio::test]
+    async fn stream_error_right_after_full_batch_still_lands_that_batch() {
+        let (sender, upload, requests, _) =
+            start_tuned_upload(Duration::from_secs(3600), SMALLEST_COMMIT_SIZE_INDEX, 0, upload_params()).await;
+        for index in 0..COMMIT_SIZE_SCALE[0] {
             sender.unbounded_send(add_op(index)).unwrap();
         }
         sender.unbounded_send(Err(HFError::Other("stream broke".to_string()))).unwrap();
