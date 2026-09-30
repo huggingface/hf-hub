@@ -140,7 +140,8 @@ impl HFBucket {
     /// # Parameters
     ///
     /// - `prefix`: filter results to entries under this prefix.
-    /// - `recursive` (default `false`): traverse subdirectories.
+    /// - `recursive`: traverse subdirectories. Only sent to the Hub when set; otherwise the endpoint's own default
+    ///   applies.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_tree(
         &self,
@@ -148,8 +149,7 @@ impl HFBucket {
         #[builder(into)]
         prefix: Option<String>,
         /// Traverse subdirectories.
-        #[builder(default)]
-        recursive: bool,
+        recursive: Option<bool>,
     ) -> HFResult<impl Stream<Item = HFResult<BucketTreeEntry>> + '_> {
         let bucket_id = self.bucket_id();
         let url_str = format!("{}/api/buckets/{}/tree", self.hf_client.endpoint(), bucket_id);
@@ -159,8 +159,8 @@ impl HFBucket {
         }
 
         let mut query = vec![];
-        if recursive {
-            query.push(("recursive".to_string(), "true".to_string()));
+        if let Some(recursive) = recursive {
+            query.push(("recursive".to_string(), recursive.to_string()));
         }
 
         Ok(self.hf_client.paginate(url, query, None))
@@ -1167,10 +1167,10 @@ impl crate::blocking::HFBucketSync {
     pub fn list_tree(
         &self,
         #[builder(into)] prefix: Option<String>,
-        #[builder(default)] recursive: bool,
+        recursive: Option<bool>,
     ) -> HFResult<Vec<BucketTreeEntry>> {
         self.runtime.block_on(async move {
-            let stream = self.inner.list_tree().maybe_prefix(prefix).recursive(recursive).send()?;
+            let stream = self.inner.list_tree().maybe_prefix(prefix).maybe_recursive(recursive).send()?;
             futures::pin_mut!(stream);
             let mut items = Vec::new();
             while let Some(item) = stream.next().await {
@@ -1256,7 +1256,64 @@ impl crate::blocking::HFBucketSync {
 
 #[cfg(test)]
 mod tests {
-    use super::{BucketCopyFile, BucketCopySourceType, HFBucket};
+    use futures::TryStreamExt;
+
+    use super::{BucketCopyFile, BucketCopySourceType, BucketTreeEntry, HFBucket};
+
+    /// Serves one empty JSON page and hands back the request target it was asked for.
+    async fn capture_tree_request(recursive: Option<bool>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let served = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let read = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..read]).to_string();
+            let response =
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]";
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes()).await;
+            request.lines().next().unwrap_or_default().to_string()
+        });
+
+        let client = crate::HFClient::builder().endpoint(format!("http://{addr}")).build().unwrap();
+        let bucket = HFBucket::new(client, "my-org", "my-bucket");
+        let entries: Vec<BucketTreeEntry> = bucket
+            .list_tree()
+            .prefix("data")
+            .maybe_recursive(recursive)
+            .send()
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(entries.is_empty());
+
+        served.await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn list_tree_omits_the_recursive_flag_by_default() {
+        let request = capture_tree_request(None).await;
+        assert!(!request.contains("recursive"), "expected no recursive param, got: {request}");
+    }
+
+    #[tokio::test]
+    async fn list_tree_sends_the_recursive_flag_when_set() {
+        let request = capture_tree_request(Some(false)).await;
+        assert!(request.contains("recursive=false"), "expected recursive=false, got: {request}");
+        let request = capture_tree_request(Some(true)).await;
+        assert!(request.contains("recursive=true"), "expected recursive=true, got: {request}");
+    }
+
+    #[tokio::test]
+    async fn list_tree_puts_the_prefix_in_the_path() {
+        let request = capture_tree_request(None).await;
+        assert!(
+            request.contains("/api/buckets/my-org/my-bucket/tree/data"),
+            "expected the prefix as a path segment, got: {request}"
+        );
+    }
 
     #[test]
     fn test_bucket_accessors() {
