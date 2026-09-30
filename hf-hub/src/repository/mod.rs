@@ -33,9 +33,11 @@ use std::str::FromStr;
 use bon::bon;
 pub use commits::{CommitAuthor, DiffEntry, GitCommitInfo, GitRefInfo, GitRefs};
 pub use diff::{GitStatus, HFDiffParseError, HFFileDiff};
+#[cfg(not(target_family = "wasm"))]
+pub use files::CommitOperationStream;
 pub use files::{
-    AddSource, BlobLfsInfo, BlobSecurityInfo, CommitInfo, CommitOperation, CommitOperationStream, FileMetadataInfo,
-    LastCommitInfo, RepoTreeEntry, SourceByteStream, StreamFactory, StreamSource,
+    AddSource, BlobLfsInfo, BlobSecurityInfo, CommitInfo, CommitOperation, FileMetadataInfo, LastCommitInfo,
+    RepoTreeEntry, SourceByteStream, StreamFactory, StreamSource,
 };
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use files::{extract_file_size, extract_xet_hash};

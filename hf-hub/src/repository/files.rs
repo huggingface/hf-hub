@@ -232,12 +232,8 @@ pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>> + Send>>;
 pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>>>>;
 
 /// Stream of add operations consumed by [`HFRepository::upload_operations`].
-///
-/// `Send` on native targets; the bound is dropped on wasm, matching [`SourceByteStream`].
 #[cfg(not(target_family = "wasm"))]
 pub type CommitOperationStream = Pin<Box<dyn Stream<Item = HFResult<CommitOperation>> + Send>>;
-#[cfg(target_family = "wasm")]
-pub type CommitOperationStream = Pin<Box<dyn Stream<Item = HFResult<CommitOperation>>>>;
 
 /// Factory that produces a fresh [`SourceByteStream`] each time `open` is called.
 ///

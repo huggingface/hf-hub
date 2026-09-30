@@ -13,6 +13,7 @@
 //!
 //! See each builder's docs for the exact path / glob format rules.
 
+#[cfg(not(target_family = "wasm"))]
 pub mod pipeline;
 
 use std::collections::HashMap;
@@ -28,8 +29,10 @@ use futures::stream::StreamExt;
 use sha2::{Digest, Sha256};
 
 #[cfg(not(target_family = "wasm"))]
+use super::CommitOperationStream;
+#[cfg(not(target_family = "wasm"))]
 use super::files::matches_any_glob;
-use super::{AddSource, CommitInfo, CommitOperation, CommitOperationStream, HFRepository, RepoTreeEntry, RepoType};
+use super::{AddSource, CommitInfo, CommitOperation, HFRepository, RepoTreeEntry, RepoType};
 use crate::client::encode_ref;
 #[cfg(not(target_family = "wasm"))]
 use crate::error::HFError;
@@ -47,6 +50,9 @@ struct CreateCommitParams {
     create_pr: bool,
     parent_commit: Option<String>,
     progress: Option<Progress>,
+    /// `path_in_repo` -> `(sha256_oid, size)` of adds already uploaded via xet. When set, the preupload
+    /// step is skipped and every other add is inlined.
+    pre_uploaded_lfs: Option<HashMap<String, (String, u64)>>,
 }
 
 /// Internal options struct for [`HFRepository::upload_file`].
@@ -62,6 +68,7 @@ struct UploadFileParams {
 }
 
 /// Internal options struct for [`HFRepository::upload_operations`] and [`HFRepository::upload_folder`].
+#[cfg(not(target_family = "wasm"))]
 struct UploadOperationsParams {
     revision: Option<String>,
     commit_message: Option<String>,
@@ -88,21 +95,14 @@ struct DeleteFolderParams {
     create_pr: bool,
 }
 
-/// Inputs to a single commit API call. `lfs_uploaded` maps `path_in_repo` to the
-/// `(sha256_oid, size)` of files already uploaded via xet.
-struct CommitRequest<'a> {
-    operations: &'a [CommitOperation],
-    lfs_uploaded: &'a HashMap<String, (String, u64)>,
-    commit_message: &'a str,
-    commit_description: Option<&'a str>,
-    parent_commit: Option<&'a str>,
-    revision: &'a str,
-    create_pr: bool,
-}
-
 impl<T: RepoType> HFRepository<T> {
-    async fn create_commit_impl(&self, params: CreateCommitParams) -> HFResult<CommitInfo> {
+    async fn create_commit_impl(&self, mut params: CreateCommitParams) -> HFResult<CommitInfo> {
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
+        let url = format!(
+            "{}/commit/{}",
+            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
+            encode_ref(revision)
+        );
 
         let add_ops_count = params
             .operations
@@ -132,50 +132,27 @@ impl<T: RepoType> HFRepository<T> {
         // Determine which files should be uploaded via xet (LFS) vs. inline
         // (regular). Files uploaded via xet are referenced by their SHA256 OID
         // in the commit NDJSON.
-        let lfs_uploaded: HashMap<String, (String, u64)> =
-            self.preupload_and_upload_lfs_files(&params, revision).await?;
-
-        params.progress.emit(UploadEvent::Committing);
-        let commit_info = self
-            .post_commit(CommitRequest {
-                operations: &params.operations,
-                lfs_uploaded: &lfs_uploaded,
-                commit_message: &params.commit_message,
-                commit_description: params.commit_description.as_deref(),
-                parent_commit: params.parent_commit.as_deref(),
-                revision,
-                create_pr: params.create_pr,
-            })
-            .await?;
-        params.progress.emit(UploadEvent::Complete);
-        Ok(commit_info)
-    }
-
-    /// Build the NDJSON commit body and POST it. Adds found in `lfs_uploaded` are committed as
-    /// `lfsFile` entries; every other add is inlined as base64. Emits no progress events.
-    async fn post_commit(&self, request: CommitRequest<'_>) -> HFResult<CommitInfo> {
-        let url = format!(
-            "{}/commit/{}",
-            self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()),
-            encode_ref(request.revision)
-        );
+        let lfs_uploaded: HashMap<String, (String, u64)> = match params.pre_uploaded_lfs.take() {
+            Some(pre_uploaded) => pre_uploaded,
+            None => self.preupload_and_upload_lfs_files(&params, revision).await?,
+        };
 
         let mut ndjson_lines: Vec<Vec<u8>> = Vec::new();
 
         let mut header_value = serde_json::json!({
-            "summary": request.commit_message,
-            "description": request.commit_description.unwrap_or(""),
+            "summary": params.commit_message,
+            "description": params.commit_description.as_deref().unwrap_or(""),
         });
-        if let Some(parent) = request.parent_commit {
-            header_value["parentCommit"] = serde_json::Value::String(parent.to_string());
+        if let Some(ref parent) = params.parent_commit {
+            header_value["parentCommit"] = serde_json::Value::String(parent.clone());
         }
         let header_line = serde_json::json!({"key": "header", "value": header_value});
         ndjson_lines.push(serde_json::to_vec(&header_line)?);
 
-        for op in request.operations {
+        for op in &params.operations {
             let line = match op {
                 CommitOperation::Add { path_in_repo, source } => {
-                    if let Some((oid, size)) = request.lfs_uploaded.get(path_in_repo) {
+                    if let Some((oid, size)) = lfs_uploaded.get(path_in_repo) {
                         tracing::info!(
                             path = path_in_repo.as_str(),
                             oid = oid.as_str(),
@@ -214,10 +191,12 @@ impl<T: RepoType> HFRepository<T> {
             })
             .collect();
 
+        params.progress.emit(UploadEvent::Committing);
+
         let mut headers = self.hf_client.auth_headers();
         headers.insert(reqwest::header::CONTENT_TYPE, "application/x-ndjson".parse().unwrap());
 
-        let create_pr = request.create_pr;
+        let create_pr = params.create_pr;
         let response = retry::retry(self.hf_client.retry_config(), || {
             let mut req = self
                 .hf_client
@@ -237,6 +216,7 @@ impl<T: RepoType> HFRepository<T> {
             .check_response(response, Some(&repo_path), crate::error::NotFoundContext::Repo)
             .await?;
 
+        params.progress.emit(UploadEvent::Complete);
         Ok(response.json().await?)
     }
 
@@ -282,6 +262,7 @@ impl<T: RepoType> HFRepository<T> {
             create_pr: params.create_pr,
             parent_commit: params.parent_commit.clone(),
             progress: params.progress.clone(),
+            pre_uploaded_lfs: None,
         })
         .await
     }
@@ -300,6 +281,7 @@ impl<T: RepoType> HFRepository<T> {
             create_pr: params.create_pr,
             parent_commit: None,
             progress: None,
+            pre_uploaded_lfs: None,
         })
         .await
     }
@@ -339,6 +321,7 @@ impl<T: RepoType> HFRepository<T> {
             create_pr: params.create_pr,
             parent_commit: None,
             progress: None,
+            pre_uploaded_lfs: None,
         })
         .await
     }
@@ -790,6 +773,7 @@ impl<T: RepoType> HFRepository<T> {
             create_pr,
             parent_commit,
             progress,
+            pre_uploaded_lfs: None,
         }))
         .await
     }
@@ -871,6 +855,7 @@ impl<T: RepoType> HFRepository<T> {
     /// - `parent_commit`: expected parent commit SHA, checked on the first commit only.
     /// - `delete_patterns`: globs of remote files (full repository paths) to delete in the first commit.
     /// - `progress`: optional progress handler.
+    #[cfg(not(target_family = "wasm"))]
     #[builder(finish_fn = send)]
     pub async fn upload_operations(
         &self,

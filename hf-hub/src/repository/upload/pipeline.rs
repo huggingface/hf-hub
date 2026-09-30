@@ -12,17 +12,13 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
-#[cfg(not(target_family = "wasm"))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
-#[cfg(target_family = "wasm")]
-use web_time::Instant;
 
-use super::{CommitRequest, UploadOperationsParams, prepare_source};
+use super::{CreateCommitParams, UploadOperationsParams, prepare_source};
 use crate::constants;
 use crate::error::{HFError, HFResult, NotFoundContext};
 use crate::progress::{EmitEvent, Progress, ProgressEvent, ProgressHandler, UploadEvent};
@@ -127,33 +123,12 @@ fn push_and_take_ready(batch: &mut BatchAccumulator, add: PreparedAdd, max_files
     batch.should_flush(max_files).then(|| batch.take())
 }
 
-#[cfg(not(target_family = "wasm"))]
-async fn sleep(duration: Duration) {
-    tokio::time::sleep(duration).await;
-}
-
-#[cfg(target_family = "wasm")]
-async fn sleep(duration: Duration) {
-    use wasm_bindgen::JsCast;
-
-    let millis = i32::try_from(duration.as_millis()).unwrap_or(i32::MAX);
-    let promise = js_sys::Promise::new(&mut |resolve, _reject| {
-        let global = js_sys::global();
-        if let Ok(set_timeout) = js_sys::Reflect::get(&global, &"setTimeout".into())
-            .and_then(|set_timeout| set_timeout.dyn_into::<js_sys::Function>())
-        {
-            let _ = set_timeout.call2(&global, &resolve, &millis.into());
-        }
-    });
-    let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
-}
-
 /// Next stream item, or `None` if `deadline` passes first.
 async fn next_before<S: futures::Stream + Unpin>(stream: &mut S, deadline: Option<Instant>) -> Option<Option<S::Item>> {
     let Some(deadline) = deadline else {
         return Some(stream.next().await);
     };
-    let timer = std::pin::pin!(sleep(deadline.saturating_duration_since(Instant::now())));
+    let timer = std::pin::pin!(tokio::time::sleep(deadline.saturating_duration_since(Instant::now())));
     match futures::future::select(stream.next(), timer).await {
         futures::future::Either::Left((item, _)) => Some(item),
         futures::future::Either::Right(_) => None,
@@ -601,14 +576,15 @@ impl<T: RepoType> HFRepository<T> {
                 let add_count = operations.len() - delete_count;
                 let started_at = Instant::now();
                 let result = self
-                    .post_commit(CommitRequest {
-                        operations: &operations,
-                        lfs_uploaded: &job.lfs_uploaded,
-                        commit_message: &state.message_for_next_commit(commit_message),
-                        commit_description,
-                        parent_commit: state.parent_for_next_commit(),
-                        revision: &state.revision,
+                    .create_commit_impl(CreateCommitParams {
+                        operations: operations.clone(),
+                        commit_message: state.message_for_next_commit(commit_message).into_owned(),
+                        commit_description: commit_description.map(str::to_owned),
+                        revision: Some(state.revision.clone()),
                         create_pr: false,
+                        parent_commit: state.parent_for_next_commit().map(str::to_owned),
+                        progress: None,
+                        pre_uploaded_lfs: Some(job.lfs_uploaded.clone()),
                     })
                     .await;
                 let info = match result {

@@ -155,7 +155,7 @@ async fn main() -> hf_hub::HFResult<()> {
         .await?;
     println!("Uploaded folder: {:?}", commit.commit_url);
 
-    // Upload a stream of add operations (works on wasm too)
+    // Upload a stream of add operations
     let operations = futures::stream::iter(
         (0..10).map(|i| Ok(CommitOperation::add_bytes(format!("generated/{i}.txt"), format!("file {i}").into_bytes()))),
     );
