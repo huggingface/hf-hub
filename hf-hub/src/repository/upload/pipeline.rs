@@ -1,28 +1,30 @@
 //! Streamed multi-commit pipeline backing [`HFRepository::upload_operations`] and
 //! [`HFRepository::upload_folder`].
 //!
-//! Mirrors `huggingface_hub`'s large-folder upload: add operations are pulled from a stream,
+//! Mirrors `huggingface_hub`'s upload pipeline: add operations are pulled from a stream,
 //! classified via the `preupload` endpoint in chunks, and grouped into adaptively-sized batches. A coordinator uploads
 //! each batch's LFS content via xet while a committer commits the previous batch, so transfer and commit
-//! round-trips overlap. A small folder lands as a single commit; a large one as several chained
-//! commits. With `create_pr`, the first commit opens the pull request and every later commit
-//! targets its `refs/pr/N` ref.
+//! round-trips overlap. A small folder lands as a single commit; a large one as several commits. With
+//! `create_pr`, the pull request is opened right before the first commit and every commit targets its
+//! `refs/pr/N` ref.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
 
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
 #[cfg(target_family = "wasm")]
 use web_time::Instant;
 
 use super::{CommitRequest, UploadOperationsParams, prepare_source};
 use crate::constants;
-use crate::error::{HFError, HFResult};
+use crate::error::{HFError, HFResult, NotFoundContext};
 use crate::progress::{EmitEvent, Progress, ProgressEvent, ProgressHandler, UploadEvent};
 use crate::repository::files::matches_any_glob;
 use crate::repository::{
@@ -31,7 +33,7 @@ use crate::repository::{
 
 /// Files classified per `preupload` call.
 const PREUPLOAD_BATCH_SIZE: usize = 256;
-/// Files-per-commit ladder; grows after fast commits, shrinks after slow ones.
+/// Files-per-commit ladder; grows after fast full commits, shrinks after slow or failed ones.
 const COMMIT_SIZE_SCALE: [usize; 10] = [20, 50, 75, 100, 125, 200, 250, 400, 600, 1000];
 const INITIAL_COMMIT_SIZE_INDEX: usize = 6;
 /// Commits faster than this grow the next batch; slower ones shrink it.
@@ -56,14 +58,23 @@ impl AdaptiveCommitSize {
         COMMIT_SIZE_SCALE[self.index.load(Ordering::Relaxed)]
     }
 
-    fn record_commit(&self, duration: Duration) {
+    /// Only a fast commit that filled the current target grows it, so small tail batches do not
+    /// inflate the target.
+    fn record_success(&self, duration: Duration, files: usize) {
         let index = self.index.load(Ordering::Relaxed);
-        let next = if duration < TARGET_COMMIT_DURATION {
+        let next = if duration < TARGET_COMMIT_DURATION && files >= COMMIT_SIZE_SCALE[index] {
             (index + 1).min(COMMIT_SIZE_SCALE.len() - 1)
-        } else {
+        } else if duration > TARGET_COMMIT_DURATION {
             index.saturating_sub(1)
+        } else {
+            index
         };
         self.index.store(next, Ordering::Relaxed);
+    }
+
+    fn record_failure(&self) {
+        let index = self.index.load(Ordering::Relaxed);
+        self.index.store(index.saturating_sub(1), Ordering::Relaxed);
     }
 }
 
@@ -105,64 +116,74 @@ impl BatchAccumulator {
     }
 }
 
-/// Tracks the target ref and parent chain across the sequential commits.
+/// Adds `add` to `batch` and hands back the batch when it must be committed now: when `is_last`, or when the
+/// flush condition holds after this file. Anything pushed afterwards starts a fresh batch.
+fn push_and_take_ready(
+    batch: &mut BatchAccumulator,
+    add: PreparedAdd,
+    max_files: usize,
+    is_last: bool,
+    now: Instant,
+) -> Option<BatchAccumulator> {
+    batch.push(add);
+    (is_last || batch.should_flush(max_files, now)).then(|| std::mem::replace(batch, BatchAccumulator::new()))
+}
+
+fn duplicate_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+    let mut seen = HashSet::new();
+    let mut duplicates = Vec::new();
+    for path in paths {
+        if !seen.insert(path) && !duplicates.contains(&path) {
+            duplicates.push(path);
+        }
+    }
+    duplicates
+}
+
+/// Tracks the target ref and commit count across the sequential commits.
 struct CommitState {
     revision: String,
-    create_pr: bool,
     parent_commit: Option<String>,
-    pr: Option<(u64, Option<String>)>,
+    pr_num: Option<u64>,
     committed: usize,
 }
 
 impl CommitState {
-    fn new(revision: String, create_pr: bool) -> Self {
+    fn new(revision: String, parent_commit: Option<String>) -> Self {
         Self {
             revision,
-            create_pr,
-            parent_commit: None,
-            pr: None,
+            parent_commit,
+            pr_num: None,
             committed: 0,
         }
     }
 
-    /// Only the first commit asks the Hub to open a PR; later ones push to its ref.
-    fn open_pr_on_next_commit(&self) -> bool {
-        self.create_pr && self.pr.is_none()
+    fn record_pr(&mut self, pr_num: u64) {
+        self.revision = format!("refs/pr/{pr_num}");
+        self.pr_num = Some(pr_num);
     }
 
-    fn record(&mut self, info: &CommitInfo) -> HFResult<()> {
-        if self.open_pr_on_next_commit() {
-            let pr_num = info
-                .pr_num
-                .or_else(|| info.pr_url.as_deref().and_then(parse_pr_num))
-                .ok_or_else(|| {
-                    HFError::Other(
-                        "commit with create_pr succeeded but the response did not identify the pull request"
-                            .to_string(),
-                    )
-                })?;
-            self.revision = format!("refs/pr/{pr_num}");
-            self.pr = Some((pr_num, info.pr_url.clone()));
+    /// The expected parent only guards the first commit; later ones build on the upload's own commits.
+    fn parent_for_next_commit(&self) -> Option<&str> {
+        if self.committed == 0 {
+            self.parent_commit.as_deref()
+        } else {
+            None
         }
-        self.parent_commit = info.commit_oid.clone();
-        self.committed += 1;
-        Ok(())
     }
 
-    fn contextualize_error(&self, err: HFError) -> HFError {
-        match self.pr {
-            Some((pr_num, _)) => HFError::Other(format!(
-                "upload failed after {} commit(s) to pull request #{pr_num}; re-run with \
-                 revision=\"refs/pr/{pr_num}\" and create_pr=false to resume: {err}",
-                self.committed
-            )),
-            None => err,
+    fn message_for_next_commit<'a>(&self, commit_message: &'a str) -> Cow<'a, str> {
+        if self.committed == 0 {
+            Cow::Borrowed(commit_message)
+        } else {
+            Cow::Owned(format!("{commit_message} (part {})", self.committed + 1))
         }
     }
 }
 
-fn parse_pr_num(pr_url: &str) -> Option<u64> {
-    pr_url.trim_end_matches('/').rsplit('/').next()?.parse().ok()
+#[derive(Deserialize)]
+struct CreatedDiscussion {
+    num: u64,
 }
 
 /// Rebases per-batch xet `Progress` events onto the whole upload's totals. `total_bytes` grows as
@@ -231,7 +252,7 @@ impl ProgressHandler for AggregatingProgress {
 
 /// A batch whose LFS content is uploaded and is ready to commit.
 struct CommitJob {
-    operations: Vec<CommitOperation>,
+    adds: Vec<CommitOperation>,
     lfs_uploaded: HashMap<String, (String, u64)>,
     is_last: bool,
 }
@@ -242,6 +263,7 @@ struct PipelineContext<'a> {
     create_pr: bool,
     commit_size: &'a AdaptiveCommitSize,
     aggregator: Option<Arc<AggregatingProgress>>,
+    opened_pr: OnceLock<u64>,
 }
 
 impl<T: RepoType> HFRepository<T> {
@@ -250,6 +272,15 @@ impl<T: RepoType> HFRepository<T> {
         operations: CommitOperationStream,
         params: UploadOperationsParams,
     ) -> HFResult<CommitInfo> {
+        if params.create_pr
+            && let Some(revision) = params.revision.as_deref()
+            && revision != constants::DEFAULT_REVISION
+        {
+            return Err(HFError::InvalidParameter(format!(
+                "cannot use create_pr=true with revision={revision:?}: pull requests created by upload_operations and \
+                 upload_folder are always opened against the default branch; don't set revision when create_pr=true"
+            )));
+        }
         let revision = params.revision.as_deref().unwrap_or(constants::DEFAULT_REVISION);
         let commit_message = params.commit_message.as_deref().unwrap_or("Upload files");
 
@@ -277,20 +308,39 @@ impl<T: RepoType> HFRepository<T> {
             create_pr: params.create_pr,
             commit_size: &commit_size,
             aggregator: params.progress.clone().map(|inner| Arc::new(AggregatingProgress::new(inner))),
+            opened_pr: OnceLock::new(),
         };
 
         // Zero buffer: one ready batch may wait while the next one uploads.
         let (job_sender, job_receiver) = mpsc::channel::<CommitJob>(0);
-        let (_, info) = futures::try_join!(
-            self.coordinate(operations, delete_operations, &context, job_sender),
+        let result = futures::try_join!(
+            self.coordinate(operations, &context, job_sender),
             self.commit_batches(
                 job_receiver,
                 &context,
+                delete_operations,
+                CommitState::new(revision.to_string(), params.parent_commit),
                 commit_message,
                 params.commit_description.as_deref(),
                 &params.progress,
             ),
-        )?;
+        );
+        let info = match result {
+            Ok((_, info)) => info,
+            Err(err) => {
+                if let Some(&pr_num) = context.opened_pr.get() {
+                    tracing::warn!(
+                        pr_num,
+                        pr_url = %self.pr_url(pr_num),
+                        resume_revision = %format!("refs/pr/{pr_num}"),
+                        error = %err,
+                        "upload to pull request did not complete; to resume into the same pull request, re-run with \
+                         revision=\"refs/pr/N\" and without create_pr (create_pr=true would open a new pull request)"
+                    );
+                }
+                return Err(err);
+            },
+        };
 
         params.progress.emit(UploadEvent::Complete);
         Ok(info)
@@ -299,19 +349,10 @@ impl<T: RepoType> HFRepository<T> {
     async fn coordinate(
         &self,
         operations: CommitOperationStream,
-        delete_operations: Vec<CommitOperation>,
         context: &PipelineContext<'_>,
         mut job_sender: mpsc::Sender<CommitJob>,
     ) -> HFResult<()> {
         let mut operations = operations.peekable();
-        let mut pending_deletes = Some(delete_operations);
-        if std::pin::Pin::new(&mut operations).peek().await.is_none() {
-            let job = self
-                .upload_batch(BatchAccumulator::new(), pending_deletes.take(), context, true)
-                .await?;
-            return send_job(&mut job_sender, job).await;
-        }
-
         let mut batch = BatchAccumulator::new();
         let mut chunk = Vec::with_capacity(PREUPLOAD_BATCH_SIZE);
         loop {
@@ -321,15 +362,29 @@ impl<T: RepoType> HFRepository<T> {
                     None => break,
                 }
             }
-            self.classify_chunk(&chunk, context, &mut batch).await?;
+            let stream_done = std::pin::Pin::new(&mut operations).peek().await.is_none();
+            let prepared = self.classify_chunk(&chunk, context).await?;
             chunk.clear();
-            let is_last = std::pin::Pin::new(&mut operations).peek().await.is_none();
-            if is_last || batch.should_flush(context.commit_size.current(), Instant::now()) {
-                let full_batch = std::mem::replace(&mut batch, BatchAccumulator::new());
-                let job = self.upload_batch(full_batch, pending_deletes.take(), context, is_last).await?;
-                send_job(&mut job_sender, job).await?;
+            if prepared.is_empty() {
+                // Empty stream: the committer still owes a deletes-only commit, if any.
+                let job = CommitJob {
+                    adds: Vec::new(),
+                    lfs_uploaded: HashMap::new(),
+                    is_last: true,
+                };
+                return send_job(&mut job_sender, job).await;
             }
-            if is_last {
+            let prepared_count = prepared.len();
+            for (index, add) in prepared.into_iter().enumerate() {
+                let is_last = stream_done && index + 1 == prepared_count;
+                if let Some(full_batch) =
+                    push_and_take_ready(&mut batch, add, context.commit_size.current(), is_last, Instant::now())
+                {
+                    let job = self.upload_batch(full_batch, context, is_last).await?;
+                    send_job(&mut job_sender, job).await?;
+                }
+            }
+            if stream_done {
                 return Ok(());
             }
         }
@@ -339,8 +394,10 @@ impl<T: RepoType> HFRepository<T> {
         &self,
         chunk: &[(String, AddSource)],
         context: &PipelineContext<'_>,
-        batch: &mut BatchAccumulator,
-    ) -> HFResult<()> {
+    ) -> HFResult<Vec<PreparedAdd>> {
+        if chunk.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut prepared: Vec<(String, AddSource, u64, Vec<u8>, String)> = Vec::with_capacity(chunk.len());
         for (path_in_repo, source) in chunk {
             let (size, sample, sha256) = prepare_source(source).await?;
@@ -356,17 +413,19 @@ impl<T: RepoType> HFRepository<T> {
         let upload_modes = self
             .fetch_upload_modes(&self.repo_path(), self.repo_type.plural(), context.revision, &files, context.create_pr)
             .await?;
-        for (path_in_repo, source, size, _, sha256) in prepared {
-            let lfs = size > 0 && upload_modes.get(&path_in_repo).is_some_and(|mode| mode == "lfs");
-            batch.push(PreparedAdd {
-                path_in_repo,
-                source,
-                size,
-                sha256,
-                lfs,
-            });
-        }
-        Ok(())
+        Ok(prepared
+            .into_iter()
+            .map(|(path_in_repo, source, size, _, sha256)| {
+                let lfs = size > 0 && upload_modes.get(&path_in_repo).is_some_and(|mode| mode == "lfs");
+                PreparedAdd {
+                    path_in_repo,
+                    source,
+                    size,
+                    sha256,
+                    lfs,
+                }
+            })
+            .collect())
     }
 
     /// Upload a batch's LFS files via xet and assemble its commit job. When the Hub does not
@@ -374,12 +433,18 @@ impl<T: RepoType> HFRepository<T> {
     async fn upload_batch(
         &self,
         batch: BatchAccumulator,
-        delete_operations: Option<Vec<CommitOperation>>,
         context: &PipelineContext<'_>,
         is_last: bool,
     ) -> HFResult<CommitJob> {
-        let mut operations = delete_operations.unwrap_or_default();
-        operations.reserve(batch.adds.len());
+        let duplicates = duplicate_paths(batch.adds.iter().map(|add| add.path_in_repo.as_str()));
+        if !duplicates.is_empty() {
+            tracing::warn!(
+                ?duplicates,
+                "about to commit several add operations for the same path_in_repo; only the last one is kept"
+            );
+        }
+
+        let mut adds = Vec::with_capacity(batch.adds.len());
         let mut xet_files: Vec<(String, AddSource)> = Vec::new();
         let mut lfs_uploaded: HashMap<String, (String, u64)> = HashMap::new();
         let mut batch_content_bytes = 0u64;
@@ -389,7 +454,7 @@ impl<T: RepoType> HFRepository<T> {
                 xet_files.push((add.path_in_repo.clone(), add.source.clone()));
                 lfs_uploaded.insert(add.path_in_repo.clone(), (add.sha256, add.size));
             }
-            operations.push(CommitOperation::Add {
+            adds.push(CommitOperation::Add {
                 path_in_repo: add.path_in_repo,
                 source: add.source,
             });
@@ -427,61 +492,171 @@ impl<T: RepoType> HFRepository<T> {
         }
 
         Ok(CommitJob {
-            operations,
+            adds,
             lfs_uploaded,
             is_last,
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn commit_batches(
         &self,
         mut job_receiver: mpsc::Receiver<CommitJob>,
         context: &PipelineContext<'_>,
+        mut pending_deletes: Vec<CommitOperation>,
+        mut state: CommitState,
         commit_message: &str,
         commit_description: Option<&str>,
         progress: &Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        let mut state = CommitState::new(context.revision.to_string(), context.create_pr);
         let mut last_info: Option<CommitInfo> = None;
         while let Some(job) = job_receiver.next().await {
             if job.is_last {
                 progress.emit(UploadEvent::Committing);
             }
-            let started_at = Instant::now();
-            let info = self
-                .post_commit(CommitRequest {
-                    operations: &job.operations,
-                    lfs_uploaded: &job.lfs_uploaded,
-                    commit_message,
-                    commit_description,
-                    parent_commit: state.parent_commit.as_deref(),
-                    revision: &state.revision,
-                    create_pr: state.open_pr_on_next_commit(),
-                })
-                .await
-                .map_err(|err| state.contextualize_error(err))?;
-            context.commit_size.record_commit(started_at.elapsed());
-            state.record(&info)?;
-            tracing::info!(
-                commit_index = state.committed - 1,
-                commit_oid = info.commit_oid.as_deref(),
-                files = job.operations.len(),
-                "upload batch committed"
-            );
-            progress.emit(UploadEvent::CommitCompleted {
-                commit_index: state.committed - 1,
-                commit_oid: info.commit_oid.clone(),
-            });
-            last_info = Some(info);
+            let mut pending_pieces = VecDeque::from([job.adds]);
+            while let Some(adds) = pending_pieces.pop_front() {
+                let delete_count = if state.committed == 0 { pending_deletes.len() } else { 0 };
+                if adds.is_empty() && delete_count == 0 {
+                    continue;
+                }
+                if context.create_pr && state.pr_num.is_none() {
+                    // Opened explicitly (and lazily, so an empty upload opens none) rather than via
+                    // `?create_pr=1`, so a retried commit can never open a second pull request.
+                    let pr_num = self.create_pull_request(commit_message, commit_description).await?;
+                    let _ = context.opened_pr.set(pr_num);
+                    state.record_pr(pr_num);
+                }
+
+                let mut operations = pending_deletes[..delete_count].to_vec();
+                operations.extend(adds);
+                let add_count = operations.len() - delete_count;
+                let started_at = Instant::now();
+                let result = self
+                    .post_commit(CommitRequest {
+                        operations: &operations,
+                        lfs_uploaded: &job.lfs_uploaded,
+                        commit_message: &state.message_for_next_commit(commit_message),
+                        commit_description,
+                        parent_commit: state.parent_for_next_commit(),
+                        revision: &state.revision,
+                        create_pr: false,
+                    })
+                    .await;
+                let info = match result {
+                    Ok(info) => info,
+                    Err(err) => {
+                        context.commit_size.record_failure();
+                        let adds = operations.split_off(delete_count);
+                        if adds.len() <= COMMIT_SIZE_SCALE[0] {
+                            return Err(err);
+                        }
+                        tracing::warn!(
+                            files = adds.len(),
+                            retry_commit_size = context.commit_size.current(),
+                            error = %err,
+                            "commit failed; retrying in smaller chunks"
+                        );
+                        for piece in split_into_pieces(adds, context.commit_size.current()).into_iter().rev() {
+                            pending_pieces.push_front(piece);
+                        }
+                        continue;
+                    },
+                };
+                context.commit_size.record_success(started_at.elapsed(), add_count);
+                if delete_count > 0 {
+                    pending_deletes.clear();
+                }
+                state.committed += 1;
+                tracing::info!(
+                    commit_index = state.committed - 1,
+                    commit_oid = info.commit_oid.as_deref(),
+                    files = operations.len(),
+                    "upload batch committed"
+                );
+                progress.emit(UploadEvent::CommitCompleted {
+                    commit_index: state.committed - 1,
+                    commit_oid: info.commit_oid.clone(),
+                });
+                last_info = Some(info);
+            }
         }
 
-        let mut info = last_info.ok_or_else(|| HFError::Other("upload produced no commits".to_string()))?;
-        if let Some((pr_num, pr_url)) = state.pr {
+        let Some(mut info) = last_info else {
+            return self.head_commit_info(&state.revision, commit_message).await;
+        };
+        if let Some(pr_num) = state.pr_num {
             info.pr_num = Some(pr_num);
-            info.pr_url = pr_url;
+            info.pr_url = Some(self.pr_url(pr_num));
         }
         Ok(info)
     }
+
+    /// Nothing was committed: mirror `create_commit` and describe the revision's current head.
+    async fn head_commit_info(&self, revision: &str, commit_message: &str) -> HFResult<CommitInfo> {
+        tracing::warn!("no files to upload; skipping to prevent an empty commit");
+        let stream = self.list_commits().revision(revision.to_string()).limit(1).send()?;
+        futures::pin_mut!(stream);
+        let head = stream.next().await.transpose()?.map(|commit| commit.id);
+        Ok(CommitInfo {
+            commit_url: head.as_ref().map(|sha| {
+                format!(
+                    "{}/{}{}/commit/{sha}",
+                    self.hf_client.endpoint(),
+                    self.repo_type.url_prefix(),
+                    self.repo_path()
+                )
+            }),
+            commit_message: Some(commit_message.to_string()),
+            commit_description: None,
+            commit_oid: head,
+            pr_url: None,
+            pr_num: None,
+        })
+    }
+
+    async fn create_pull_request(&self, title: &str, description: Option<&str>) -> HFResult<u64> {
+        let url = format!("{}/discussions", self.hf_client.api_url(self.repo_type.plural(), &self.repo_path()));
+        let body = serde_json::json!({
+            "title": title.trim(),
+            "description": description.unwrap_or(""),
+            "pullRequest": true,
+        });
+        let response = self
+            .hf_client
+            .http_client()
+            .post(&url)
+            .headers(self.hf_client.auth_headers())
+            .json(&body)
+            .send()
+            .await?;
+        let repo_path = self.repo_path();
+        let response = self
+            .hf_client
+            .check_response(response, Some(&repo_path), NotFoundContext::Repo)
+            .await?;
+        let created: CreatedDiscussion = response.json().await?;
+        tracing::info!(pr_num = created.num, "opened pull request for upload");
+        Ok(created.num)
+    }
+
+    fn pr_url(&self, pr_num: u64) -> String {
+        format!(
+            "{}/{}{}/discussions/{pr_num}",
+            self.hf_client.endpoint(),
+            self.repo_type.url_prefix(),
+            self.repo_path()
+        )
+    }
+}
+
+fn split_into_pieces(mut operations: Vec<CommitOperation>, piece_size: usize) -> Vec<Vec<CommitOperation>> {
+    let mut pieces = Vec::with_capacity(operations.len().div_ceil(piece_size));
+    while !operations.is_empty() {
+        let rest = operations.split_off(piece_size.min(operations.len()));
+        pieces.push(std::mem::replace(&mut operations, rest));
+    }
+    pieces
 }
 
 fn require_add(operation: CommitOperation) -> HFResult<(String, AddSource)> {
@@ -513,12 +688,26 @@ mod tests {
     }
 
     #[test]
-    fn commit_size_grows_after_fast_commit_and_shrinks_after_slow_commit() {
+    fn commit_size_grows_after_fast_full_commit_and_shrinks_after_slow_commit() {
         let size = AdaptiveCommitSize::new();
-        size.record_commit(Duration::from_secs(5));
+        size.record_success(Duration::from_secs(5), 250);
         assert_eq!(size.current(), 400);
-        size.record_commit(Duration::from_secs(120));
-        size.record_commit(Duration::from_secs(120));
+        size.record_success(Duration::from_secs(120), 400);
+        size.record_success(Duration::from_secs(120), 250);
+        assert_eq!(size.current(), 200);
+    }
+
+    #[test]
+    fn commit_size_does_not_grow_after_fast_partial_commit() {
+        let size = AdaptiveCommitSize::new();
+        size.record_success(Duration::from_secs(5), 249);
+        assert_eq!(size.current(), 250);
+    }
+
+    #[test]
+    fn commit_size_shrinks_on_failure() {
+        let size = AdaptiveCommitSize::new();
+        size.record_failure();
         assert_eq!(size.current(), 200);
     }
 
@@ -526,23 +715,27 @@ mod tests {
     fn commit_size_is_clamped_to_scale() {
         let size = AdaptiveCommitSize::new();
         for _ in 0..20 {
-            size.record_commit(Duration::from_secs(1));
+            size.record_success(Duration::from_secs(1), 1000);
         }
         assert_eq!(size.current(), 1000);
         for _ in 0..20 {
-            size.record_commit(Duration::from_secs(120));
+            size.record_failure();
         }
         assert_eq!(size.current(), 20);
     }
 
-    fn prepared(size: u64, lfs: bool) -> PreparedAdd {
+    fn prepared_at(path: &str, size: u64, lfs: bool) -> PreparedAdd {
         PreparedAdd {
-            path_in_repo: "f".to_string(),
+            path_in_repo: path.to_string(),
             source: AddSource::bytes(Vec::new()),
             size,
             sha256: String::new(),
             lfs,
         }
+    }
+
+    fn prepared(size: u64, lfs: bool) -> PreparedAdd {
+        prepared_at("f", size, lfs)
     }
 
     #[test]
@@ -578,55 +771,189 @@ mod tests {
         assert!(!batch.should_flush(1, Instant::now() + Duration::from_secs(3600)));
     }
 
-    fn commit_info(oid: &str, pr_url: Option<&str>) -> CommitInfo {
-        CommitInfo {
-            commit_url: None,
-            commit_message: None,
-            commit_description: None,
-            commit_oid: Some(oid.to_string()),
-            pr_url: pr_url.map(str::to_string),
-            pr_num: None,
-        }
+    /// Feeds one preupload chunk through the per-file flush and returns the committed batch sizes.
+    fn flush_sizes(adds: Vec<PreparedAdd>, max_files: usize, stream_done: bool) -> (Vec<usize>, usize) {
+        let mut batch = BatchAccumulator::new();
+        let count = adds.len();
+        let sizes = adds
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, add)| {
+                let is_last = stream_done && index + 1 == count;
+                push_and_take_ready(&mut batch, add, max_files, is_last, Instant::now())
+            })
+            .map(|flushed| flushed.adds.len())
+            .collect();
+        (sizes, batch.adds.len())
     }
 
     #[test]
-    fn commit_state_chains_parents_on_branch() {
-        let mut state = CommitState::new("main".to_string(), false);
-        assert!(!state.open_pr_on_next_commit());
-        assert_eq!(state.parent_commit, None);
-        state.record(&commit_info("sha1", None)).unwrap();
-        assert_eq!(state.parent_commit.as_deref(), Some("sha1"));
-        state.record(&commit_info("sha2", None)).unwrap();
-        assert_eq!(state.parent_commit.as_deref(), Some("sha2"));
-        assert_eq!(state.revision, "main");
+    fn flushes_mid_chunk_at_small_target_and_carries_leftovers() {
+        let adds = (0..PREUPLOAD_BATCH_SIZE).map(|_| prepared(1, false)).collect();
+        let (sizes, leftover) = flush_sizes(adds, 20, false);
+        assert_eq!(sizes, vec![20; PREUPLOAD_BATCH_SIZE / 20]);
+        assert_eq!(leftover, PREUPLOAD_BATCH_SIZE % 20);
     }
 
     #[test]
-    fn commit_state_switches_to_pr_ref_after_first_commit() {
-        let mut state = CommitState::new("main".to_string(), true);
-        assert!(state.open_pr_on_next_commit());
-        state
-            .record(&commit_info("sha1", Some("https://huggingface.co/owner/repo/discussions/7")))
-            .unwrap();
-        assert!(!state.open_pr_on_next_commit());
+    fn last_file_flushes_the_remainder() {
+        let adds = (0..45).map(|_| prepared(1, false)).collect();
+        let (sizes, leftover) = flush_sizes(adds, 20, true);
+        assert_eq!(sizes, vec![20, 20, 5]);
+        assert_eq!(leftover, 0);
+    }
+
+    #[test]
+    fn regular_byte_budget_is_checked_per_file() {
+        let half = REGULAR_CONTENT_BYTES_BUDGET / 2;
+        let adds = vec![
+            prepared(half, false),
+            prepared(half, false),
+            prepared(half, false),
+            prepared(REGULAR_CONTENT_BYTES_BUDGET, true),
+            prepared(1, false),
+        ];
+        let (sizes, leftover) = flush_sizes(adds, 1000, false);
+        assert_eq!(sizes, vec![2]);
+        assert_eq!(leftover, 3);
+    }
+
+    #[test]
+    fn duplicate_paths_are_reported_once() {
+        assert_eq!(duplicate_paths(["a", "b", "a", "c", "a", "b"]), vec!["a", "b"]);
+        assert!(duplicate_paths(["a", "b"]).is_empty());
+    }
+
+    #[test]
+    fn split_into_pieces_respects_size() {
+        let operations: Vec<CommitOperation> = (0..45).map(|i| CommitOperation::delete(i.to_string())).collect();
+        let sizes: Vec<usize> = split_into_pieces(operations, 20).iter().map(Vec::len).collect();
+        assert_eq!(sizes, vec![20, 20, 5]);
+    }
+
+    #[test]
+    fn commit_state_passes_parent_only_on_first_commit() {
+        let mut state = CommitState::new("main".to_string(), Some("sha0".to_string()));
+        assert_eq!(state.parent_for_next_commit(), Some("sha0"));
+        state.committed += 1;
+        assert_eq!(state.parent_for_next_commit(), None);
+    }
+
+    #[test]
+    fn commit_state_titles_later_commits_as_parts() {
+        let mut state = CommitState::new("main".to_string(), None);
+        assert_eq!(state.message_for_next_commit("Upload folder"), "Upload folder");
+        state.committed += 1;
+        assert_eq!(state.message_for_next_commit("Upload folder"), "Upload folder (part 2)");
+        state.committed += 1;
+        assert_eq!(state.message_for_next_commit("Upload folder"), "Upload folder (part 3)");
+    }
+
+    #[test]
+    fn commit_state_targets_pr_ref_once_opened() {
+        let mut state = CommitState::new("main".to_string(), None);
+        state.record_pr(7);
         assert_eq!(state.revision, "refs/pr/7");
-        assert_eq!(state.parent_commit.as_deref(), Some("sha1"));
-        state.record(&commit_info("sha2", None)).unwrap();
-        assert_eq!(state.revision, "refs/pr/7");
-        assert!(matches!(state.pr, Some((7, Some(_)))));
+        assert_eq!(state.pr_num, Some(7));
     }
 
-    #[test]
-    fn commit_state_errors_when_pr_is_unidentified() {
-        let mut state = CommitState::new("main".to_string(), true);
-        assert!(state.record(&commit_info("sha1", None)).is_err());
+    /// Minimal Hub stand-in: every commit is rejected with 403, everything else succeeds. Records
+    /// each request line.
+    async fn spawn_rejecting_hub() -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut raw = Vec::new();
+                let mut buf = [0u8; 4096];
+                let header_end = loop {
+                    let read = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await.unwrap();
+                    raw.extend_from_slice(&buf[..read]);
+                    if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break pos + 4;
+                    }
+                };
+                let head = String::from_utf8_lossy(&raw[..header_end]).to_string();
+                let content_length: usize = head
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().to_string())
+                    })
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                while raw.len() < header_end + content_length {
+                    let read = tokio::io::AsyncReadExt::read(&mut sock, &mut buf).await.unwrap();
+                    raw.extend_from_slice(&buf[..read]);
+                }
+                let request_line = head.lines().next().unwrap_or_default().to_string();
+                let (status, body) = if request_line.contains("/commit/") {
+                    ("403 Forbidden", r#"{"error":"no"}"#)
+                } else if request_line.contains("/discussions") {
+                    ("200 OK", r#"{"num":3}"#)
+                } else {
+                    ("200 OK", r#"{"files":[]}"#)
+                };
+                recorded.lock().unwrap().push(request_line);
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                tokio::io::AsyncWriteExt::write_all(&mut sock, response.as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        (format!("http://{addr}"), requests)
     }
 
-    #[test]
-    fn parse_pr_num_from_url() {
-        assert_eq!(parse_pr_num("https://huggingface.co/datasets/o/r/discussions/12"), Some(12));
-        assert_eq!(parse_pr_num("https://huggingface.co/o/r/discussions/3/"), Some(3));
-        assert_eq!(parse_pr_num("https://huggingface.co/o/r"), None);
+    fn two_file_stream() -> CommitOperationStream {
+        Box::pin(futures::stream::iter(
+            ["a.txt", "b.txt"].map(|path| Ok(CommitOperation::add_bytes(path, b"x".to_vec()))),
+        ))
+    }
+
+    #[tokio::test]
+    async fn pr_is_opened_before_first_commit_and_commit_error_variant_is_preserved() {
+        let (endpoint, requests) = spawn_rejecting_hub().await;
+        let client = crate::HFClient::builder().endpoint(endpoint).token("hf_test").build().unwrap();
+        let result = client
+            .model("owner", "repo")
+            .upload_operations()
+            .operations(two_file_stream())
+            .create_pr(true)
+            .send()
+            .await;
+        assert!(matches!(result, Err(HFError::Forbidden { .. })), "got {result:?}");
+        let requests = requests.lock().unwrap().clone();
+        let discussion = requests
+            .iter()
+            .position(|r| r.starts_with("POST /api/models/owner/repo/discussions "));
+        let commit = requests.iter().position(|r| r.contains("/commit/"));
+        assert!(discussion.is_some() && discussion < commit, "requests: {requests:?}");
+        let commit_line = &requests[commit.unwrap()];
+        assert!(commit_line.contains("/commit/refs%2Fpr%2F3"), "{commit_line}");
+        assert!(!commit_line.contains("create_pr"), "{commit_line}");
+    }
+
+    #[tokio::test]
+    async fn create_pr_rejects_non_default_revision() {
+        let client = crate::HFClient::builder().endpoint("http://127.0.0.1:9").build().unwrap();
+        let result = client
+            .model("owner", "repo")
+            .upload_operations()
+            .operations(two_file_stream())
+            .revision("dev")
+            .create_pr(true)
+            .send()
+            .await;
+        assert!(matches!(result, Err(HFError::InvalidParameter(_))));
     }
 
     #[derive(Default)]

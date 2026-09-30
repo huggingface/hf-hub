@@ -67,6 +67,7 @@ struct UploadOperationsParams {
     commit_message: Option<String>,
     commit_description: Option<String>,
     create_pr: bool,
+    parent_commit: Option<String>,
     delete_patterns: Option<Vec<String>>,
     progress: Option<Progress>,
 }
@@ -848,7 +849,7 @@ impl<T: RepoType> HFRepository<T> {
     /// Upload a stream of add operations to a repository, split across as many commits as needed.
     ///
     /// Operations are pulled from `operations` incrementally, so the full set never has to be known
-    /// (or held in memory) upfront. They are classified in chunks and grouped into chained commits whose
+    /// (or held in memory) upfront. They are classified in chunks and grouped into sequential commits whose
     /// size adapts to how fast the Hub accepts them, with LFS content for the next commit uploading while
     /// the current one is created. Each commit reports [`UploadEvent::CommitCompleted`], and the
     /// returned [`CommitInfo`] describes the last one. Because totals are discovered as the stream is
@@ -865,7 +866,9 @@ impl<T: RepoType> HFRepository<T> {
     /// - `operations` (required): stream of add operations.
     /// - `revision`: branch to upload to. Defaults to the main branch.
     /// - `commit_message`, `commit_description`: commit metadata.
-    /// - `create_pr` (default `false`): open a pull request and commit every batch to it.
+    /// - `create_pr` (default `false`): open a pull request and commit every batch to it. Cannot be combined with a
+    ///   non-default `revision`.
+    /// - `parent_commit`: expected parent commit SHA, checked on the first commit only.
     /// - `delete_patterns`: globs of remote files (full repository paths) to delete in the first commit.
     /// - `progress`: optional progress handler.
     #[builder(finish_fn = send)]
@@ -885,6 +888,9 @@ impl<T: RepoType> HFRepository<T> {
         /// Create a pull request instead of committing directly.
         #[builder(default)]
         create_pr: bool,
+        /// Expected parent commit SHA, checked on the first commit only.
+        #[builder(into)]
+        parent_commit: Option<String>,
         /// Globs of remote files (full repository paths) to delete in the first commit.
         delete_patterns: Option<Vec<String>>,
         /// Progress handler.
@@ -898,6 +904,7 @@ impl<T: RepoType> HFRepository<T> {
                 commit_message,
                 commit_description,
                 create_pr,
+                parent_commit,
                 delete_patterns,
                 progress,
             },
@@ -909,17 +916,26 @@ impl<T: RepoType> HFRepository<T> {
     ///
     /// The folder is walked recursively and its files are fed to the same pipeline as
     /// [`HFRepository::upload_operations`]. A small folder lands as a single commit; a large one is split across
-    /// several chained commits whose size adapts to how fast the Hub accepts them (mirroring `huggingface_hub`),
+    /// several sequential commits whose size adapts to how fast the Hub accepts them (mirroring `huggingface_hub`),
     /// with LFS content for the next commit uploading while the current one is created. Each commit reports
     /// [`UploadEvent::CommitCompleted`], and the returned [`CommitInfo`] describes the last one. When
     /// `delete_patterns` is set, matching remote files are deleted in the first commit.
     ///
-    /// With `create_pr`, the first commit opens a pull request and later commits are pushed to its
-    /// `refs/pr/N` ref; the returned [`CommitInfo`] carries `pr_url` and `pr_num`.
+    /// Later commits are titled `"{commit_message} (part N)"`. `parent_commit`, if set, only guards the
+    /// first commit. When nothing is uploaded or deleted, no commit is made and the returned
+    /// [`CommitInfo`] describes the revision's current head.
     ///
-    /// Re-running an interrupted upload with the same arguments is cheap: already-committed files
-    /// produce no changes and previously uploaded xet data is deduplicated. For an interrupted
-    /// pull-request upload, re-run with `revision = "refs/pr/N"` and `create_pr = false`.
+    /// With `create_pr`, a pull request against the default branch is opened right before the first
+    /// commit (none is opened when there is nothing to commit) and every commit is pushed to its
+    /// `refs/pr/N` ref; the returned [`CommitInfo`] carries `pr_url` and `pr_num`. Combining
+    /// `create_pr` with a non-default `revision` fails with [`crate::HFError::InvalidParameter`].
+    ///
+    /// The upload is not atomic: if it fails midway, commits that already landed stay on the
+    /// target ref and the original error is returned. Re-running with the same arguments resumes
+    /// cheaply: already-committed files produce no changes and previously uploaded xet data is
+    /// deduplicated. When a pull request was opened, a warning logs how to resume into it: re-run
+    /// with `revision = "refs/pr/N"` and without `create_pr` (re-running with `create_pr = true`
+    /// opens a new pull request).
     ///
     /// All pattern arguments use [`globset`](https://docs.rs/globset) syntax (`*`, `?`, `**`,
     /// character classes, etc.). Path strings are forward-slash-joined regardless of platform.
@@ -930,7 +946,9 @@ impl<T: RepoType> HFRepository<T> {
     /// - `path_in_repo`: destination directory within the repository (default: repo root).
     /// - `revision`: branch to upload to. Defaults to the main branch.
     /// - `commit_message`, `commit_description`: commit metadata.
-    /// - `create_pr` (default `false`): open a pull request and commit every batch to it.
+    /// - `create_pr` (default `false`): open a pull request and commit every batch to it. Cannot be combined with a
+    ///   non-default `revision`.
+    /// - `parent_commit`: expected parent commit SHA, checked on the first commit only.
     /// - `allow_patterns`: globs selecting which local files to include. Matched against each discovered file's path
     ///   relative to `folder_path` (e.g., `data/train.bin`, not the absolute path and not prefixed with
     ///   `path_in_repo`). When set, only files matching at least one pattern are uploaded.
@@ -962,6 +980,9 @@ impl<T: RepoType> HFRepository<T> {
         /// Create a pull request instead of committing directly.
         #[builder(default)]
         create_pr: bool,
+        /// Expected parent commit SHA, checked on the first commit only.
+        #[builder(into)]
+        parent_commit: Option<String>,
         /// Globs selecting which local files to include. Matched against each discovered file's path
         /// relative to `folder_path` (e.g., `data/train.bin`, not the absolute path and not prefixed with
         /// `path_in_repo`). When set, only files matching at least one pattern are uploaded.
@@ -993,6 +1014,7 @@ impl<T: RepoType> HFRepository<T> {
                 commit_message: Some(commit_message.unwrap_or_else(|| "Upload folder".to_string())),
                 commit_description,
                 create_pr,
+                parent_commit,
                 delete_patterns,
                 progress,
             },
@@ -1142,6 +1164,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] commit_message: Option<String>,
         #[builder(into)] commit_description: Option<String>,
         #[builder(default)] create_pr: bool,
+        #[builder(into)] parent_commit: Option<String>,
         delete_patterns: Option<Vec<String>>,
         #[builder(into)] progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
@@ -1153,6 +1176,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .maybe_commit_message(commit_message)
                 .maybe_commit_description(commit_description)
                 .create_pr(create_pr)
+                .maybe_parent_commit(parent_commit)
                 .maybe_delete_patterns(delete_patterns)
                 .maybe_progress(progress)
                 .send(),
@@ -1171,6 +1195,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
         #[builder(into)] commit_message: Option<String>,
         #[builder(into)] commit_description: Option<String>,
         #[builder(default)] create_pr: bool,
+        #[builder(into)] parent_commit: Option<String>,
         allow_patterns: Option<Vec<String>>,
         ignore_patterns: Option<Vec<String>>,
         delete_patterns: Option<Vec<String>>,
@@ -1185,6 +1210,7 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
                 .maybe_commit_message(commit_message)
                 .maybe_commit_description(commit_description)
                 .create_pr(create_pr)
+                .maybe_parent_commit(parent_commit)
                 .maybe_allow_patterns(allow_patterns)
                 .maybe_ignore_patterns(ignore_patterns)
                 .maybe_delete_patterns(delete_patterns)
