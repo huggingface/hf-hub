@@ -140,7 +140,8 @@ impl HFBucket {
     /// # Parameters
     ///
     /// - `prefix`: filter results to entries under this prefix.
-    /// - `recursive` (default `false`): traverse subdirectories.
+    /// - `recursive`: traverse subdirectories. Only sent to the Hub when set; otherwise the endpoint's own default
+    ///   applies.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub fn list_tree(
         &self,
@@ -148,8 +149,7 @@ impl HFBucket {
         #[builder(into)]
         prefix: Option<String>,
         /// Traverse subdirectories.
-        #[builder(default)]
-        recursive: bool,
+        recursive: Option<bool>,
     ) -> HFResult<impl Stream<Item = HFResult<BucketTreeEntry>> + '_> {
         let bucket_id = self.bucket_id();
         let url_str = format!("{}/api/buckets/{}/tree", self.hf_client.endpoint(), bucket_id);
@@ -158,9 +158,10 @@ impl HFBucket {
             crate::client::append_path_segments(&mut url, prefix)?;
         }
 
-        // The endpoint defaults to a recursive listing, so the flag has to be sent even when
-        // it is false: omitting it returns every nested file flat, with no directory entries.
-        let query = vec![("recursive".to_string(), recursive.to_string())];
+        let mut query = vec![];
+        if let Some(recursive) = recursive {
+            query.push(("recursive".to_string(), recursive.to_string()));
+        }
 
         Ok(self.hf_client.paginate(url, query, None))
     }
@@ -1166,10 +1167,10 @@ impl crate::blocking::HFBucketSync {
     pub fn list_tree(
         &self,
         #[builder(into)] prefix: Option<String>,
-        #[builder(default)] recursive: bool,
+        recursive: Option<bool>,
     ) -> HFResult<Vec<BucketTreeEntry>> {
         self.runtime.block_on(async move {
-            let stream = self.inner.list_tree().maybe_prefix(prefix).recursive(recursive).send()?;
+            let stream = self.inner.list_tree().maybe_prefix(prefix).maybe_recursive(recursive).send()?;
             futures::pin_mut!(stream);
             let mut items = Vec::new();
             while let Some(item) = stream.next().await {
@@ -1260,7 +1261,7 @@ mod tests {
     use super::{BucketCopyFile, BucketCopySourceType, BucketTreeEntry, HFBucket};
 
     /// Serves one empty JSON page and hands back the request target it was asked for.
-    async fn capture_tree_request(recursive: bool) -> String {
+    async fn capture_tree_request(recursive: Option<bool>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
@@ -1280,7 +1281,7 @@ mod tests {
         let entries: Vec<BucketTreeEntry> = bucket
             .list_tree()
             .prefix("data")
-            .recursive(recursive)
+            .maybe_recursive(recursive)
             .send()
             .unwrap()
             .try_collect()
@@ -1291,28 +1292,23 @@ mod tests {
         served.await.unwrap()
     }
 
-    /// The Hub's bucket tree endpoint lists recursively unless it is told not to, so a
-    /// non-recursive listing has to send `recursive=false` rather than omit the parameter.
-    /// Omitting it collapses the tree: every nested file comes back flat and the caller
-    /// never sees a directory entry to descend into.
     #[tokio::test]
-    async fn non_recursive_list_tree_sends_the_flag_explicitly() {
-        let request = capture_tree_request(false).await;
-        assert!(
-            request.contains("recursive=false"),
-            "expected recursive=false in the request target, got: {request}"
-        );
+    async fn list_tree_omits_the_recursive_flag_by_default() {
+        let request = capture_tree_request(None).await;
+        assert!(!request.contains("recursive"), "expected no recursive param, got: {request}");
     }
 
     #[tokio::test]
-    async fn recursive_list_tree_sends_the_flag() {
-        let request = capture_tree_request(true).await;
-        assert!(request.contains("recursive=true"), "expected recursive=true in the request target, got: {request}");
+    async fn list_tree_sends_the_recursive_flag_when_set() {
+        let request = capture_tree_request(Some(false)).await;
+        assert!(request.contains("recursive=false"), "expected recursive=false, got: {request}");
+        let request = capture_tree_request(Some(true)).await;
+        assert!(request.contains("recursive=true"), "expected recursive=true, got: {request}");
     }
 
     #[tokio::test]
     async fn list_tree_puts_the_prefix_in_the_path() {
-        let request = capture_tree_request(false).await;
+        let request = capture_tree_request(None).await;
         assert!(
             request.contains("/api/buckets/my-org/my-bucket/tree/data"),
             "expected the prefix as a path segment, got: {request}"

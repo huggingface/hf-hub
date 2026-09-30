@@ -137,10 +137,8 @@ async fn test_bucket_upload_small_text_file() {
     delete_test_bucket(&client, &namespace, &name).await;
 }
 
-/// A non-recursive listing must collapse nested files into a directory entry the caller
-/// can descend into. Every other bucket test here lists with `recursive(true)`, which
-/// masked a bug where `recursive(false)` was never sent and the endpoint's recursive
-/// default won: the tree came back flat, with nested paths and no directory entries.
+/// An explicit `recursive(false)` must collapse nested files into a directory entry the caller
+/// can descend into.
 #[tokio::test]
 async fn test_bucket_list_tree_non_recursive_returns_directories() {
     let Some(client) = api() else { return };
