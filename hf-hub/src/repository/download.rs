@@ -521,12 +521,12 @@ impl<T: RepoType> HFRepository<T> {
         let xet_hash = extract_xet_hash(&head_response);
         let has_xet_hash = xet_hash.is_some();
         let file_size = if has_xet_hash {
-            extract_xet_file_size(&head_response, &params.filename)
+            extract_xet_file_size(&head_response, &params.filename)?
         } else {
-            Ok(extract_file_size(&head_response).unwrap_or_else(|| {
+            extract_file_size(&head_response).unwrap_or_else(|| {
                 tracing::warn!(url = %url, "missing or invalid Content-Length/X-Linked-Size header, defaulting file size to 0");
                 0
-            }))
+            })
         };
 
         if !status.is_success() && !status.is_redirection() {
@@ -544,7 +544,6 @@ impl<T: RepoType> HFRepository<T> {
         let etag = etag?;
         let commit_hash =
             commit_hash.ok_or_else(|| HFError::malformed_response_at("missing X-Repo-Commit header", url.clone()))?;
-        let file_size = file_size?;
 
         params.progress.emit(DownloadEvent::Start {
             total_files: 1,
