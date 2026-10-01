@@ -90,7 +90,7 @@ fn collect_targets(dir: &Path) -> HashMap<PathBuf, u64> {
 /// trimmed content names `commit`. Recursion follows only real directories, and only real
 /// files (never symlinks) are read and removed, so a symlink planted under `refs_dir`
 /// can't be used to read or delete something outside the cache.
-fn remove_matching_refs(refs_dir: &Path, commit: &str) {
+fn remove_matching_refs(refs_dir: &Path, commit: &str) -> std::io::Result<()> {
     let mut stack = vec![refs_dir.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -109,10 +109,11 @@ fn remove_matching_refs(refs_dir: &Path, commit: &str) {
             }
             let path = entry.path();
             if std::fs::read_to_string(&path).is_ok_and(|c| c.trim() == commit) {
-                let _ = std::fs::remove_file(&path);
+                try_delete(&path, "ref")?;
             }
         }
     }
+    Ok(())
 }
 
 /// Sum of file sizes under `dir`. Recursion follows only real directories.
@@ -136,14 +137,36 @@ fn dir_size(dir: &Path) -> u64 {
     total
 }
 
+/// Removes a file, symlink, or directory tree. Matching `huggingface_hub`'s
+/// `_try_delete_path`, a missing path or a permission error is logged and skipped; any
+/// other I/O error is returned.
+fn try_delete(path: &Path, kind: &'static str) -> std::io::Result<()> {
+    let result = match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
+        Ok(_) => std::fs::remove_file(path),
+        Err(e) => Err(e),
+    };
+    match result {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(kind, path = %path.display(), "couldn't delete: file not found");
+            Ok(())
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            tracing::warn!(kind, path = %path.display(), error = %e, "couldn't delete: permission denied");
+            Ok(())
+        },
+        other => other,
+    }
+}
+
 /// Removes `dir` and returns the number of bytes it held, or `0` if it doesn't exist.
-fn remove_dir_and_size(dir: &Path) -> u64 {
+fn remove_dir_and_size(dir: &Path, kind: &'static str) -> std::io::Result<u64> {
     if !dir.is_dir() {
-        return 0;
+        return Ok(0);
     }
     let size = dir_size(dir);
-    let _ = std::fs::remove_dir_all(dir);
-    size
+    try_delete(dir, kind)?;
+    Ok(size)
 }
 
 /// Paths under `snapshots_dir` (other than `snap` itself) that are still referenced,
@@ -244,8 +267,8 @@ pub(crate) fn apply(plan: DeletePlan) -> HFResult<ApplyOutcome> {
         candidate_etags: _,
     } = plan;
 
-    std::fs::remove_dir_all(&snap)?;
-    remove_matching_refs(&repo.join("refs"), &commit);
+    try_delete(&snap, "snapshot")?;
+    remove_matching_refs(&repo.join("refs"), &commit)?;
 
     // Recompute `keep` now, with every doomed blob's lock held, instead of trusting the
     // set `plan` computed earlier. A concurrent download's content-addressed dedup fast
@@ -262,11 +285,10 @@ pub(crate) fn apply(plan: DeletePlan) -> HFResult<ApplyOutcome> {
         }
         if blobs_dir_canon.as_ref().is_some_and(|b| path.starts_with(b)) {
             // Unix: pointer files are symlinks, so `path` is the real blob under
-            // `blobs/`. Only count it as freed if we actually removed it. Its hf-hub
-            // blob lock is held by the caller for the duration of this call.
-            if std::fs::remove_file(&path).is_ok() {
-                freed += size;
-            }
+            // `blobs/`. Its hf-hub blob lock is held by the caller for the duration of
+            // this call.
+            try_delete(&path, "blob")?;
+            freed += size;
         } else if snap_canon.as_ref().is_some_and(|s| path.starts_with(s)) {
             // Windows: pointer files are plain copies, not symlinks, so canonicalizing a
             // snapshot file returns the snapshot file itself. It was already removed
@@ -280,14 +302,14 @@ pub(crate) fn apply(plan: DeletePlan) -> HFResult<ApplyOutcome> {
         // (e.g. a symlink escaping the cache) is left untouched and not counted as freed.
     }
 
-    freed += remove_dir_and_size(&repo.join(".no_exist").join(&commit));
+    freed += remove_dir_and_size(&repo.join(".no_exist").join(&commit), "no_exist")?;
 
     let snapshots_empty = std::fs::read_dir(&snapshots_dir)
         .map(|mut it| it.next().is_none())
         .unwrap_or(true);
     let mut repo_removed = false;
     if snapshots_empty {
-        freed += remove_dir_and_size(&repo);
+        freed += remove_dir_and_size(&repo, "repo")?;
         repo_removed = true;
     }
 
@@ -334,6 +356,32 @@ mod tests {
         std::fs::write(repo.join("refs").join("main"), "aaa").unwrap();
 
         repo
+    }
+
+    #[test]
+    fn try_delete_skips_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        try_delete(&dir.path().join("missing"), "blob").unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn try_delete_skips_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let file = locked.join("blob");
+        std::fs::write(&file, b"x").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = try_delete(&file, "blob");
+        let still_there = file.exists();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        result.unwrap();
+        assert!(still_there);
     }
 
     #[test]
