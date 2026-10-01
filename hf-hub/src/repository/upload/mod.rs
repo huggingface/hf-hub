@@ -631,8 +631,44 @@ async fn prepare_source(source: &AddSource) -> HFResult<(u64, Vec<u8>, String)> 
     }
 }
 
-/// Recursively collect files from a directory into CommitOperation::Add entries.
-/// Respects allow_patterns and ignore_patterns (glob-style).
+#[cfg(not(target_family = "wasm"))]
+const FOLDER_WALK_CHANNEL_CAPACITY: usize = 1024;
+
+/// Walk `root` on a blocking thread and stream its files as they are discovered, so hashing,
+/// uploading and committing start before the walk finishes. Walk errors are yielded as items, and
+/// a panicked walk surfaces as an error instead of a silently truncated stream.
+#[cfg(not(target_family = "wasm"))]
+fn walk_folder_stream(
+    root: PathBuf,
+    base_repo_path: String,
+    allow_patterns: Option<Vec<String>>,
+    ignore_patterns: Option<Vec<String>>,
+) -> CommitOperationStream {
+    let (sender, receiver) = futures::channel::mpsc::channel::<HFResult<CommitOperation>>(FOLDER_WALK_CHANNEL_CAPACITY);
+    let walk = tokio::task::spawn_blocking(move || {
+        let mut sender = sender;
+        let mut emit = |operation: CommitOperation| {
+            futures::executor::block_on(futures::SinkExt::send(&mut sender, Ok(operation))).is_ok()
+        };
+        if let Err(e) =
+            collect_files_recursive(&root, &root, &base_repo_path, &allow_patterns, &ignore_patterns, &mut emit)
+        {
+            let _ = futures::executor::block_on(futures::SinkExt::send(&mut sender, Err(e)));
+        }
+    });
+    let walk_outcome = futures::stream::once(walk).filter_map(|joined| {
+        futures::future::ready(
+            joined
+                .err()
+                .map(|e| Err(HFError::Other(format!("folder walk task failed: {e}")))),
+        )
+    });
+    Box::pin(receiver.chain(walk_outcome))
+}
+
+/// Recursively walk a directory, passing each file as a CommitOperation::Add to `emit`.
+/// Respects allow_patterns and ignore_patterns (glob-style). Stops early, without error, once
+/// `emit` returns false.
 #[cfg(not(target_family = "wasm"))]
 fn collect_files_recursive(
     root: &Path,
@@ -640,15 +676,17 @@ fn collect_files_recursive(
     base_repo_path: &str,
     allow_patterns: &Option<Vec<String>>,
     ignore_patterns: &Option<Vec<String>>,
-    operations: &mut Vec<CommitOperation>,
-) -> HFResult<()> {
+    emit: &mut dyn FnMut(CommitOperation) -> bool,
+) -> HFResult<bool> {
     for entry in std::fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
         let metadata = entry.metadata()?;
 
         if metadata.is_dir() {
-            collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, operations)?;
+            if !collect_files_recursive(root, &path, base_repo_path, allow_patterns, ignore_patterns, emit)? {
+                return Ok(false);
+            }
         } else if metadata.is_file() {
             let relative = path.strip_prefix(root).map_err(|e| {
                 HFError::InvalidParameter(format!("path {} is not under {}: {e}", path.display(), root.display()))
@@ -679,16 +717,65 @@ fn collect_files_recursive(
                 format!("{}/{}", base_repo_path.trim_end_matches('/'), relative_str)
             };
 
-            operations.push(CommitOperation::add_file(repo_path, path));
+            if !emit(CommitOperation::add_file(repo_path, path)) {
+                return Ok(false);
+            }
         }
     }
 
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    use super::walk_folder_stream;
+    use crate::repository::CommitOperation;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn walk_folder_stream_yields_filtered_files_under_repo_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nested/deeper")).unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"a").unwrap();
+        std::fs::write(dir.path().join("nested/b.txt"), b"b").unwrap();
+        std::fs::write(dir.path().join("nested/deeper/c.txt"), b"c").unwrap();
+        std::fs::write(dir.path().join("skip.log"), b"x").unwrap();
+
+        let mut paths: Vec<String> =
+            walk_folder_stream(dir.path().to_path_buf(), "prefix/".to_string(), None, Some(vec!["*.log".to_string()]))
+                .map(|operation| match operation.unwrap() {
+                    CommitOperation::Add { path_in_repo, .. } => path_in_repo,
+                    CommitOperation::Delete { .. } => panic!("walk produced a delete"),
+                })
+                .collect()
+                .await;
+        paths.sort();
+
+        assert_eq!(paths, ["prefix/a.txt", "prefix/nested/b.txt", "prefix/nested/deeper/c.txt"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn walk_folder_stream_yields_error_for_missing_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let items: Vec<_> = walk_folder_stream(dir.path().join("missing"), String::new(), None, None)
+            .collect()
+            .await;
+        assert_eq!(items.len(), 1);
+        assert!(items[0].is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn walk_folder_stream_stops_when_receiver_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..(super::FOLDER_WALK_CHANNEL_CAPACITY * 3) {
+            std::fs::write(dir.path().join(format!("{i}.txt")), b"x").unwrap();
+        }
+        let mut stream = walk_folder_stream(dir.path().to_path_buf(), String::new(), None, None);
+        assert!(stream.next().await.unwrap().is_ok());
+        drop(stream);
+    }
 
     #[tokio::test]
     async fn create_pr_calls_preupload_url() {
@@ -899,12 +986,14 @@ impl<T: RepoType> HFRepository<T> {
 
     /// Upload a local folder to a repository.
     ///
-    /// The folder is walked recursively and its files are fed to the same pipeline as
-    /// [`HFRepository::upload_operations`]. A small folder lands as a single commit; a large one is split across
-    /// several sequential commits whose size adapts to how fast the Hub accepts them (mirroring `huggingface_hub`),
-    /// with LFS content for the next commit uploading while the current one is created. Each commit reports
-    /// [`UploadEvent::CommitCompleted`], and the returned [`CommitInfo`] describes the last one. When
-    /// `delete_patterns` is set, matching remote files are deleted in the first commit.
+    /// The folder is walked recursively on a blocking thread, and files are fed to the same pipeline as
+    /// [`HFRepository::upload_operations`] as they are discovered, so uploading starts before the walk
+    /// finishes. A read error partway through the walk can therefore leave earlier commits in place. A small folder
+    /// lands as a single commit; a large one is split across several sequential commits whose size adapts to how
+    /// fast the Hub accepts them (mirroring `huggingface_hub`), with LFS content for the next commit uploading
+    /// while the current one is created. Each commit reports [`UploadEvent::CommitCompleted`], and the returned
+    /// [`CommitInfo`] describes the last one. When `delete_patterns` is set, matching remote files are deleted in
+    /// the first commit.
     ///
     /// Later commits are titled `"{commit_message} (part N)"`. `parent_commit`, if set, only guards the
     /// first commit. When nothing is uploaded or deleted, no commit is made and the returned
@@ -983,17 +1072,10 @@ impl<T: RepoType> HFRepository<T> {
         #[builder(into)]
         progress: Option<Progress>,
     ) -> HFResult<CommitInfo> {
-        let mut add_operations = Vec::new();
-        collect_files_recursive(
-            &folder_path,
-            &folder_path,
-            path_in_repo.as_deref().unwrap_or(""),
-            &allow_patterns,
-            &ignore_patterns,
-            &mut add_operations,
-        )?;
+        let operations =
+            walk_folder_stream(folder_path, path_in_repo.unwrap_or_default(), allow_patterns, ignore_patterns);
         Box::pin(self.upload_operations_pipeline(
-            Box::pin(futures::stream::iter(add_operations.into_iter().map(Ok))),
+            operations,
             UploadOperationsParams {
                 revision,
                 commit_message: Some(commit_message.unwrap_or_else(|| "Upload folder".to_string())),
