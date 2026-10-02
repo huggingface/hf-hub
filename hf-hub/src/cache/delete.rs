@@ -181,7 +181,7 @@ fn remove_dir_and_size(dir: &Path, kind: &'static str) -> std::io::Result<u64> {
 
 /// Store entries reached from the pointers under `snap`, mapped to the repo-level
 /// `blobs/<etag>` links the pointers go through.
-fn collect_shared_links(store: &Path, snap: &Path) -> HashMap<PathBuf, Vec<PathBuf>> {
+fn collect_shared_links(store: &Path, blobs_dir: &Path, snap: &Path) -> HashMap<PathBuf, Vec<PathBuf>> {
     let mut out: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
     let mut stack = vec![snap.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -193,7 +193,7 @@ fn collect_shared_links(store: &Path, snap: &Path) -> HashMap<PathBuf, Vec<PathB
                 stack.push(entry.path());
                 continue;
             }
-            if let Some((link, target)) = shared_blobs::repo_link_for_pointer(store, &entry.path()) {
+            if let Some((link, target)) = shared_blobs::repo_link_for_pointer(store, blobs_dir, &entry.path()) {
                 let links = out.entry(target).or_default();
                 if !links.contains(&link) {
                     links.push(link);
@@ -211,7 +211,7 @@ fn repo_store_targets(store: &Path, blobs_dir: &Path) -> Vec<PathBuf> {
     };
     entries
         .flatten()
-        .filter_map(|entry| shared_blobs::store_target(store, &entry.path()))
+        .filter_map(|entry| shared_blobs::store_target(store, &entry.path()).ok().flatten())
         .collect()
 }
 
@@ -269,9 +269,9 @@ pub(crate) fn plan(cache_dir: &Path, repo_folder: &str, commit: &str) -> HFResul
     let snap_canon = std::fs::canonicalize(&snap).ok();
     let blobs_dir_canon = std::fs::canonicalize(repo.join("blobs")).ok();
     let store = shared_blobs::store_dir(cache_dir);
-    let shared = match &store {
-        Some(store) => collect_shared_links(store, &snap),
-        None => HashMap::new(),
+    let shared = match (&store, &blobs_dir_canon) {
+        (Some(store), Some(blobs_dir)) => collect_shared_links(store, blobs_dir, &snap),
+        _ => HashMap::new(),
     };
 
     let mut candidate_etags: Vec<String> = Vec::new();
@@ -354,7 +354,7 @@ pub(crate) fn apply(plan: DeletePlan) -> HFResult<ApplyOutcome> {
             for link in links {
                 try_delete(link, "blob")?;
             }
-            freed += shared_blobs::sweep(&cache_dir, store, &path)?;
+            freed += shared_blobs::sweep(&cache_dir, store, &path);
             continue;
         }
         if blobs_dir_canon.as_ref().is_some_and(|b| path.starts_with(b)) {
@@ -391,7 +391,7 @@ pub(crate) fn apply(plan: DeletePlan) -> HFResult<ApplyOutcome> {
         repo_removed = true;
         if let Some(store) = &store {
             for entry in leftover_shared {
-                freed += shared_blobs::sweep(&cache_dir, store, &entry)?;
+                freed += shared_blobs::sweep(&cache_dir, store, &entry);
             }
         }
     }
