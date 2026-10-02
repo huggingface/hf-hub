@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use super::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
+use super::{CachedFileInfo, CachedIncompleteFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo, shared_blobs};
 
 pub(crate) struct CacheLock {
     _file: File,
@@ -174,6 +174,7 @@ fn read_commit_refs(repo_path: &Path) -> HashMap<String, Vec<String>> {
                 if entry_path.is_dir() {
                     stack.push(entry_path);
                 } else if entry_path.is_file()
+                    && !is_ignored_file(&ref_entry.file_name())
                     && let Ok(content) = std::fs::read_to_string(&entry_path)
                 {
                     let commit = content.trim().to_string();
@@ -189,27 +190,65 @@ fn read_commit_refs(repo_path: &Path) -> HashMap<String, Vec<String>> {
     commit_refs
 }
 
+/// OS-created helper files that `huggingface_hub` skips while scanning.
+const FILES_TO_IGNORE: [&str; 3] = [".DS_Store", "Thumbs.db", "desktop.ini"];
+
+fn is_ignored_file(name: &std::ffi::OsStr) -> bool {
+    FILES_TO_IGNORE.iter().any(|ignored| name == *ignored)
+}
+
+fn scan_incomplete_files(blobs_dir: &Path, out: &mut Vec<CachedIncompleteFileInfo>) {
+    let Ok(entries) = std::fs::read_dir(blobs_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_path = entry.path();
+        if file_path.extension().is_none_or(|ext| ext != "incomplete") {
+            continue;
+        }
+        if let Ok(meta) = std::fs::metadata(&file_path) {
+            out.push(CachedIncompleteFileInfo {
+                file_path,
+                size_on_disk: meta.len(),
+            });
+        }
+    }
+}
+
 struct BlobInfo {
+    shared: bool,
     blob_path: PathBuf,
     size: u64,
     accessed: SystemTime,
     modified: SystemTime,
 }
 
-fn resolve_blob_info(file_path: &Path) -> Result<BlobInfo, String> {
+/// A pointer into the shared-blob store reports its repo-level `blobs/<etag>` link as the
+/// blob path, as Python does, rather than the store payload.
+fn resolve_blob_info(file_path: &Path, store: Option<&Path>) -> Result<BlobInfo, String> {
     let resolved =
         std::fs::canonicalize(file_path).map_err(|e| format!("Cannot resolve {}: {}", file_path.display(), e))?;
     let meta =
         std::fs::metadata(&resolved).map_err(|e| format!("Cannot read blob for {}: {}", file_path.display(), e))?;
+    let shared_link = store
+        .filter(|store| resolved.starts_with(store))
+        .and_then(|store| shared_blobs::repo_link_for_pointer(store, file_path))
+        .map(|(link, _)| link);
     Ok(BlobInfo {
-        blob_path: resolved,
+        shared: shared_link.is_some(),
+        blob_path: shared_link.unwrap_or(resolved),
         size: meta.len(),
         accessed: meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH),
         modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
     })
 }
 
-fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFileInfo> {
+fn scan_snapshot(
+    snap_path: &Path,
+    store: Option<&Path>,
+    shared_blobs: &mut HashSet<PathBuf>,
+    warnings: &mut Vec<String>,
+) -> Vec<CachedFileInfo> {
     let mut files = Vec::new();
     let mut stack = vec![snap_path.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -227,7 +266,7 @@ fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFile
                     .to_string_lossy()
                     .to_string();
 
-                let blob = match resolve_blob_info(&file_path) {
+                let blob = match resolve_blob_info(&file_path, store) {
                     Ok(b) => b,
                     Err(msg) => {
                         warnings.push(msg);
@@ -235,6 +274,9 @@ fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFile
                     },
                 };
 
+                if blob.shared {
+                    shared_blobs.insert(blob.blob_path.clone());
+                }
                 files.push(CachedFileInfo {
                     file_name,
                     file_path: file_path.clone(),
@@ -253,6 +295,9 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
     let mut repos = Vec::new();
     let mut warnings = Vec::new();
     let mut total_size: u64 = 0;
+    let store = shared_blobs::store_dir(cache_dir);
+    let mut shared_blob_paths = HashSet::new();
+    let mut incomplete_files = Vec::new();
 
     let entries = match std::fs::read_dir(cache_dir) {
         Ok(e) => e,
@@ -261,6 +306,7 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
                 cache_dir: cache_dir.to_path_buf(),
                 repos: vec![],
                 size_on_disk: 0,
+                incomplete_files: vec![],
                 warnings: vec![],
             });
         },
@@ -276,6 +322,7 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         };
 
         let repo_path = entry.path();
+        scan_incomplete_files(&repo_path.join("blobs"), &mut incomplete_files);
         let commit_refs = read_commit_refs(&repo_path);
 
         let mut revisions = Vec::new();
@@ -291,7 +338,7 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
                 }
 
                 let commit_hash = snap_entry.file_name().to_string_lossy().to_string();
-                let files = scan_snapshot(&snap_path, &mut warnings);
+                let files = scan_snapshot(&snap_path, store.as_deref(), &mut shared_blob_paths, &mut warnings);
 
                 let rev_size: u64 = files.iter().map(|f| f.size_on_disk).sum();
                 let rev_last_modified = files
@@ -330,7 +377,11 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         }
         let repo_size: u64 = unique_blobs.values().sum();
 
-        total_size += repo_size;
+        total_size += unique_blobs
+            .iter()
+            .filter(|(path, _)| !shared_blob_paths.contains(*path))
+            .map(|(_, size)| size)
+            .sum::<u64>();
         repos.push(CachedRepoInfo {
             repo_id,
             repo_type,
@@ -343,10 +394,15 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         });
     }
 
+    if let Some(store) = &store {
+        total_size += shared_blobs::payload_total(store);
+    }
+
     Ok(HFCacheInfo {
         cache_dir: cache_dir.to_path_buf(),
         repos,
         size_on_disk: total_size,
+        incomplete_files,
         warnings,
     })
 }
@@ -635,6 +691,34 @@ mod tests {
         let refs = read_commit_refs(&repo_path);
         assert_eq!(refs.get("commit1").unwrap(), &vec!["main".to_string()]);
         assert_eq!(refs.get("commit2").unwrap(), &vec!["refs/pr/1".to_string()]);
+    }
+
+    #[test]
+    fn test_read_commit_refs_skips_os_helper_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_path = dir.path().join("models--gpt2");
+        let refs_dir = repo_path.join("refs");
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::write(refs_dir.join("main"), "commit1").unwrap();
+        std::fs::write(refs_dir.join(".DS_Store"), "junk").unwrap();
+
+        let refs = read_commit_refs(&repo_path);
+        assert_eq!(refs.len(), 1);
+        assert!(refs.contains_key("commit1"));
+    }
+
+    #[tokio::test]
+    async fn test_scan_cache_reports_incomplete_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = dir.path().join("models--gpt2").join("blobs");
+        std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::write(blobs.join("abc.incomplete"), b"1234").unwrap();
+        std::fs::write(blobs.join("def"), b"done").unwrap();
+
+        let result = scan_cache_dir(dir.path()).await.unwrap();
+        assert_eq!(result.incomplete_files.len(), 1);
+        assert_eq!(result.incomplete_files[0].file_path, blobs.join("abc.incomplete"));
+        assert_eq!(result.incomplete_size_on_disk(), 4);
     }
 
     #[cfg(not(windows))]
