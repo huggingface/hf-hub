@@ -128,6 +128,7 @@ pub(crate) struct HFClientInner {
     pub(crate) token: Option<String>,
     pub(crate) cache_dir: std::path::PathBuf,
     pub(crate) cache_enabled: bool,
+    pub(crate) xet_cache_dir: Option<std::path::PathBuf>,
     pub(crate) xet_state: std::sync::Mutex<crate::xet::XetState>,
 }
 
@@ -143,6 +144,7 @@ pub struct HFClientBuilder {
     client: Option<reqwest::Client>,
     cache_dir: Option<std::path::PathBuf>,
     cache_enabled: Option<bool>,
+    xet_cache_dir: Option<std::path::PathBuf>,
     retry_max_attempts: Option<usize>,
     retry_base_delay: Option<Duration>,
 }
@@ -158,6 +160,7 @@ impl HFClientBuilder {
             client: None,
             cache_dir: None,
             cache_enabled: None,
+            xet_cache_dir: None,
             retry_max_attempts: None,
             retry_base_delay: None,
         }
@@ -206,6 +209,13 @@ impl HFClientBuilder {
     /// Enables or disables the local file cache. Caching is on by default.
     pub fn cache_enabled(mut self, enabled: bool) -> Self {
         self.cache_enabled = Some(enabled);
+        self
+    }
+
+    /// Sets the directory used for the Xet chunk cache and staging files. The path is used
+    /// as-is. When unset, hf-xet picks its own default location. Ignored on wasm.
+    pub fn xet_cache_dir(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.xet_cache_dir = Some(path.into());
         self
     }
 
@@ -275,6 +285,7 @@ impl HFClientBuilder {
                 token,
                 cache_dir,
                 cache_enabled: self.cache_enabled.unwrap_or(true),
+                xet_cache_dir: self.xet_cache_dir,
                 xet_state: std::sync::Mutex::new(crate::xet::XetState::default()),
             }),
         })
@@ -514,7 +525,10 @@ impl HFClient {
         }
 
         #[cfg(not(target_family = "wasm"))]
-        let builder = xet::xet_session::XetSessionBuilder::new();
+        let builder = match &self.inner.xet_cache_dir {
+            Some(dir) => xet::xet_session::XetSessionBuilder::new().with_cache_dir(dir),
+            None => xet::xet_session::XetSessionBuilder::new(),
+        };
         // Cap transfer concurrency on wasm to avoid exhausting linear memory.
         #[cfg(target_family = "wasm")]
         let builder = {

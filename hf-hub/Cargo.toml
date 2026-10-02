@@ -32,7 +32,8 @@ pathdiff = "0.2"
 percent-encoding = "2"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
-hf-xet = { version = "1.6", default-features = false }
+# TODO: switch to version = "1.7" once released; main is needed for XetSessionBuilder::with_cache_dir
+hf-xet = { git = "https://github.com/huggingface/xet-core", branch = "main", default-features = false }
 sha2 = "0.11"
 
 [features]
