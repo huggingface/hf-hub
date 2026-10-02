@@ -209,7 +209,8 @@ hf-hub/
 │   │   │   └── sync.rs             # BucketSync* types, HFBucket::sync — plan computation and execution
 │   │   └── cache/
 │   │       ├── mod.rs              # CachedFileInfo/CachedRepoInfo/HFCacheInfo + scan_cache API
-│   │       └── storage.rs          # pub(crate) on-disk plumbing: scan, locking, ref read/write, symlinks
+│   │       ├── storage.rs          # pub(crate) on-disk plumbing: scan, locking, ref read/write, symlinks
+│   │       └── shared_blobs.rs     # Python-compatible shared-blob store: detection, manifest sweep
 │   ├── tests/
 │   │   └── future_size.rs          # Regression tests: heavyweight builder send() futures stay boxed/small
 │   └── (unit tests live next to their modules in #[cfg(test)] blocks)

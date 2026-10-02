@@ -3,7 +3,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use super::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
+use super::{CachedFileInfo, CachedIncompleteFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo, shared_blobs};
 
 pub(crate) struct CacheLock {
     _file: File,
@@ -155,6 +155,7 @@ fn read_commit_refs(repo_path: &Path) -> HashMap<String, Vec<String>> {
                 if entry_path.is_dir() {
                     stack.push(entry_path);
                 } else if entry_path.is_file()
+                    && !is_ignored_file(&ref_entry.file_name())
                     && let Ok(content) = std::fs::read_to_string(&entry_path)
                 {
                     let commit = content.trim().to_string();
@@ -170,27 +171,67 @@ fn read_commit_refs(repo_path: &Path) -> HashMap<String, Vec<String>> {
     commit_refs
 }
 
+/// OS-created helper files that `huggingface_hub` skips while scanning.
+const FILES_TO_IGNORE: [&str; 3] = [".DS_Store", "Thumbs.db", "desktop.ini"];
+
+fn is_ignored_file(name: &std::ffi::OsStr) -> bool {
+    FILES_TO_IGNORE.iter().any(|ignored| name == *ignored)
+}
+
+fn scan_incomplete_files(blobs_dir: &Path, out: &mut Vec<CachedIncompleteFileInfo>) {
+    let Ok(entries) = std::fs::read_dir(blobs_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_path = entry.path();
+        if file_path.extension().is_none_or(|ext| ext != "incomplete") {
+            continue;
+        }
+        if let Ok(meta) = std::fs::metadata(&file_path) {
+            out.push(CachedIncompleteFileInfo {
+                file_path,
+                size_on_disk: meta.len(),
+            });
+        }
+    }
+}
+
 struct BlobInfo {
+    /// Canonical location of the content, for counting physical size once.
+    physical_path: PathBuf,
     blob_path: PathBuf,
     size: u64,
     accessed: SystemTime,
     modified: SystemTime,
 }
 
-fn resolve_blob_info(file_path: &Path) -> Result<BlobInfo, String> {
+/// A pointer into the shared-blob store reports its repo-level `blobs/<etag>` link as the
+/// blob path, as Python does, rather than the store payload. `store` pairs the canonical
+/// store directory with the repo's canonical `blobs/` directory.
+fn resolve_blob_info(file_path: &Path, store: Option<(&Path, &Path)>) -> Result<BlobInfo, String> {
     let resolved =
         std::fs::canonicalize(file_path).map_err(|e| format!("Cannot resolve {}: {}", file_path.display(), e))?;
     let meta =
         std::fs::metadata(&resolved).map_err(|e| format!("Cannot read blob for {}: {}", file_path.display(), e))?;
+    let shared_link = store
+        .filter(|(store, _)| resolved.starts_with(store))
+        .and_then(|(store, repo_blobs)| shared_blobs::repo_link_for_pointer(store, repo_blobs, file_path))
+        .map(|(link, _)| link);
     Ok(BlobInfo {
-        blob_path: resolved,
+        blob_path: shared_link.unwrap_or_else(|| resolved.clone()),
+        physical_path: resolved,
         size: meta.len(),
         accessed: meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH),
         modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
     })
 }
 
-fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFileInfo> {
+fn scan_snapshot(
+    snap_path: &Path,
+    store: Option<(&Path, &Path)>,
+    physical_blobs: &mut HashMap<PathBuf, u64>,
+    warnings: &mut Vec<String>,
+) -> Vec<CachedFileInfo> {
     let mut files = Vec::new();
     let mut stack = vec![snap_path.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -208,7 +249,7 @@ fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFile
                     .to_string_lossy()
                     .to_string();
 
-                let blob = match resolve_blob_info(&file_path) {
+                let blob = match resolve_blob_info(&file_path, store) {
                     Ok(b) => b,
                     Err(msg) => {
                         warnings.push(msg);
@@ -216,6 +257,10 @@ fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFile
                     },
                 };
 
+                // Store payloads are counted once from the store itself.
+                if !store.is_some_and(|(store, _)| blob.physical_path.starts_with(store)) {
+                    physical_blobs.insert(blob.physical_path, blob.size);
+                }
                 files.push(CachedFileInfo {
                     file_name,
                     file_path: file_path.clone(),
@@ -233,7 +278,10 @@ fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFile
 pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<HFCacheInfo> {
     let mut repos = Vec::new();
     let mut warnings = Vec::new();
-    let mut total_size: u64 = 0;
+    let store = shared_blobs::store_dir(cache_dir);
+    let mut physical_blobs = HashMap::new();
+    let mut repos_size_sum: u64 = 0;
+    let mut incomplete_files = Vec::new();
 
     let entries = match std::fs::read_dir(cache_dir) {
         Ok(e) => e,
@@ -242,6 +290,7 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
                 cache_dir: cache_dir.to_path_buf(),
                 repos: vec![],
                 size_on_disk: 0,
+                incomplete_files: vec![],
                 warnings: vec![],
             });
         },
@@ -257,7 +306,10 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         };
 
         let repo_path = entry.path();
+        scan_incomplete_files(&repo_path.join("blobs"), &mut incomplete_files);
         let commit_refs = read_commit_refs(&repo_path);
+        let repo_blobs_dir = std::fs::canonicalize(repo_path.join("blobs")).ok();
+        let repo_store = store.as_deref().zip(repo_blobs_dir.as_deref());
 
         let mut revisions = Vec::new();
         let mut repo_last_accessed = SystemTime::UNIX_EPOCH;
@@ -272,7 +324,7 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
                 }
 
                 let commit_hash = snap_entry.file_name().to_string_lossy().to_string();
-                let files = scan_snapshot(&snap_path, &mut warnings);
+                let files = scan_snapshot(&snap_path, repo_store, &mut physical_blobs, &mut warnings);
 
                 let rev_size: u64 = files.iter().map(|f| f.size_on_disk).sum();
                 let rev_last_modified = files
@@ -310,8 +362,8 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
             }
         }
         let repo_size: u64 = unique_blobs.values().sum();
+        repos_size_sum += repo_size;
 
-        total_size += repo_size;
         repos.push(CachedRepoInfo {
             repo_id,
             repo_type,
@@ -324,10 +376,17 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         });
     }
 
+    // Without a marked store this is the sum of per-repo sizes, as in Python.
+    let total_size = match &store {
+        Some(store) => physical_blobs.values().sum::<u64>() + shared_blobs::payload_total(store),
+        None => repos_size_sum,
+    };
+
     Ok(HFCacheInfo {
         cache_dir: cache_dir.to_path_buf(),
         repos,
         size_on_disk: total_size,
+        incomplete_files,
         warnings,
     })
 }
@@ -577,6 +636,34 @@ mod tests {
         let refs = read_commit_refs(&repo_path);
         assert_eq!(refs.get("commit1").unwrap(), &vec!["main".to_string()]);
         assert_eq!(refs.get("commit2").unwrap(), &vec!["refs/pr/1".to_string()]);
+    }
+
+    #[test]
+    fn test_read_commit_refs_skips_os_helper_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_path = dir.path().join("models--gpt2");
+        let refs_dir = repo_path.join("refs");
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::write(refs_dir.join("main"), "commit1").unwrap();
+        std::fs::write(refs_dir.join(".DS_Store"), "junk").unwrap();
+
+        let refs = read_commit_refs(&repo_path);
+        assert_eq!(refs.len(), 1);
+        assert!(refs.contains_key("commit1"));
+    }
+
+    #[tokio::test]
+    async fn test_scan_cache_reports_incomplete_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = dir.path().join("models--gpt2").join("blobs");
+        std::fs::create_dir_all(&blobs).unwrap();
+        std::fs::write(blobs.join("abc.incomplete"), b"1234").unwrap();
+        std::fs::write(blobs.join("def"), b"done").unwrap();
+
+        let result = scan_cache_dir(dir.path()).await.unwrap();
+        assert_eq!(result.incomplete_files.len(), 1);
+        assert_eq!(result.incomplete_files[0].file_path, blobs.join("abc.incomplete"));
+        assert_eq!(result.incomplete_size_on_disk(), 4);
     }
 
     #[cfg(not(windows))]
