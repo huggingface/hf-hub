@@ -6,8 +6,8 @@
 //! `<repo_folder>/blobs/<etag>` linked to the payload, one per line. The manifest is only a
 //! hint: a line counts only while that path is still a symlink resolving to the payload.
 
-use std::fs::File;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{ErrorKind, Write};
 use std::path::{Component, Path, PathBuf};
 
 const STORE_DIR: &str = "blobs";
@@ -18,11 +18,14 @@ const MARKER_CONTENT: &[u8] = b"1\n";
 pub(crate) fn store_dir(cache_dir: &Path) -> Option<PathBuf> {
     let store = cache_dir.join(STORE_DIR);
     let marker = store.join(MARKER);
-    let is_marker_file = std::fs::symlink_metadata(&marker).is_ok_and(|m| m.is_file());
-    if !is_marker_file || std::fs::read(&marker).ok()?.as_slice() != MARKER_CONTENT {
+    if !is_regular_file(&marker) || std::fs::read(&marker).ok()?.as_slice() != MARKER_CONTENT {
         return None;
     }
     std::fs::canonicalize(store).ok()
+}
+
+fn is_regular_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
 }
 
 fn is_hash(name: &str) -> bool {
@@ -30,27 +33,46 @@ fn is_hash(name: &str) -> bool {
 }
 
 /// The store entry `repo_blob` (a repo's `blobs/<etag>`) links to, if it is a symlink into
-/// the store at `store` with a valid `<prefix>/<hash>` layout.
-pub(crate) fn store_target(store: &Path, repo_blob: &Path) -> Option<PathBuf> {
-    if !std::fs::symlink_metadata(repo_blob).ok()?.file_type().is_symlink() {
-        return None;
+/// the store at `store` with a valid `<prefix>/<hash>` layout. A missing or dangling link
+/// is `Ok(None)`; any other I/O error is returned, so a reference that can't be checked is
+/// never mistaken for one that is gone.
+pub(crate) fn store_target(store: &Path, repo_blob: &Path) -> std::io::Result<Option<PathBuf>> {
+    let meta = match std::fs::symlink_metadata(repo_blob) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    if !meta.file_type().is_symlink() {
+        return Ok(None);
     }
-    let target = std::fs::canonicalize(repo_blob).ok()?;
-    let hash = target.file_name()?.to_str()?;
-    let prefix_dir = target.parent()?;
-    let prefix = prefix_dir.file_name()?.to_str()?;
-    (is_hash(hash) && hash.starts_with(prefix) && prefix.len() == 2 && prefix_dir.parent() == Some(store))
-        .then_some(target)
+    let target = match std::fs::canonicalize(repo_blob) {
+        Ok(target) => target,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let is_entry = (|| {
+        let hash = target.file_name()?.to_str()?;
+        let prefix_dir = target.parent()?;
+        let prefix = prefix_dir.file_name()?.to_str()?;
+        Some(is_hash(hash) && prefix.len() == 2 && hash.starts_with(prefix) && prefix_dir.parent() == Some(store))
+    })()
+    .unwrap_or(false);
+    Ok(is_entry.then_some(target))
 }
 
-/// For a snapshot pointer, the repo-level `blobs/<etag>` it links to, if that is a symlink
-/// into the store. The returned path has a canonical parent and an uncanonicalized file
-/// name, so it names the link itself rather than the payload.
-pub(crate) fn repo_link_for_pointer(store: &Path, pointer: &Path) -> Option<(PathBuf, PathBuf)> {
+/// For a snapshot pointer, the `blobs/<etag>` link in `repo_blobs_dir` it goes through, and
+/// the store entry that link resolves to. The link's parent is canonical but its file name
+/// isn't resolved, so it names the link itself rather than the payload. Pointers that go
+/// anywhere other than `repo_blobs_dir` are ignored.
+pub(crate) fn repo_link_for_pointer(store: &Path, repo_blobs_dir: &Path, pointer: &Path) -> Option<(PathBuf, PathBuf)> {
     let link_target = std::fs::read_link(pointer).ok()?;
     let resolved = pointer.parent()?.join(link_target);
-    let repo_link = std::fs::canonicalize(resolved.parent()?).ok()?.join(resolved.file_name()?);
-    let entry = store_target(store, &repo_link)?;
+    let link_dir = std::fs::canonicalize(resolved.parent()?).ok()?;
+    if link_dir != repo_blobs_dir {
+        return None;
+    }
+    let repo_link = link_dir.join(resolved.file_name()?);
+    let entry = store_target(store, &repo_link).ok()??;
     Some((repo_link, entry))
 }
 
@@ -62,49 +84,95 @@ fn lock_path(entry: &Path) -> PathBuf {
     entry.with_extension("lock")
 }
 
+/// Opens `path` for writing without following a symlink and only if it is a regular file,
+/// so a planted link can't redirect the write. Lock and manifest files are made
+/// world-writable like Python's, so every user of a shared cache can lock and append.
+fn open_regular_for_write(path: &Path, truncate: bool) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(truncate);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW).mode(0o666);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::new(ErrorKind::InvalidInput, format!("{} is not a regular file", path.display())));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Fails when another user owns the file, which is fine: whoever created it already
+        // set the mode.
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    Ok(file)
+}
+
 /// Mirrors Python's `_is_valid_ref`: a relative `<type>s--<name>/blobs/<etag>` path with no
 /// `..`, which is currently a symlink resolving to `entry`.
-fn is_valid_ref(cache_dir: &Path, store: &Path, entry: &Path, line: &str) -> bool {
+fn is_valid_ref(cache_dir: &Path, store: &Path, entry: &Path, line: &str) -> std::io::Result<bool> {
     let rel = Path::new(line);
-    let parts: Vec<&str> = match rel
+    let parts: Option<Vec<&str>> = rel
         .components()
         .map(|c| match c {
             Component::Normal(s) => s.to_str(),
             _ => None,
         })
-        .collect()
-    {
-        Some(parts) => parts,
-        None => return false,
+        .collect();
+    let Some(parts) = parts else {
+        return Ok(false);
     };
     let [repo_folder, "blobs", _etag] = parts.as_slice() else {
-        return false;
+        return Ok(false);
     };
     let has_type_prefix = ["models--", "datasets--", "spaces--", "kernels--"]
         .iter()
         .any(|p| repo_folder.starts_with(p));
-    has_type_prefix && store_target(store, &cache_dir.join(rel)).as_deref() == Some(entry)
+    if !has_type_prefix {
+        return Ok(false);
+    }
+    Ok(store_target(store, &cache_dir.join(rel))?.as_deref() == Some(entry))
 }
 
-/// Deletes the store entry if no valid reference to it remains, returning the bytes
-/// freed; otherwise rewrites its manifest with only the valid lines. Runs under the entry's
-/// `<hash>.lock`, shared with Python. A missing or unreadable manifest keeps the entry, as
-/// in Python, since its references can't be proven gone.
-pub(crate) fn sweep(cache_dir: &Path, store: &Path, entry: &Path) -> std::io::Result<u64> {
-    let lock = File::create(lock_path(entry))?;
+/// Deletes the store entry if no valid reference to it remains, returning the bytes freed;
+/// otherwise rewrites its manifest with only the valid lines. Runs under the entry's
+/// `<hash>.lock`, shared with Python. As in Python, the entry is kept and nothing is
+/// reported freed when its references can't be checked: the manifest is missing or
+/// unreadable, or any I/O error occurs while sweeping.
+pub(crate) fn sweep(cache_dir: &Path, store: &Path, entry: &Path) -> u64 {
+    match try_sweep(cache_dir, store, entry) {
+        Ok(freed) => freed,
+        Err(e) => {
+            tracing::warn!(entry = %entry.display(), error = %e, "couldn't sweep shared blob");
+            0
+        },
+    }
+}
+
+fn try_sweep(cache_dir: &Path, store: &Path, entry: &Path) -> std::io::Result<u64> {
+    let lock = open_regular_for_write(&lock_path(entry), false)?;
     lock.lock()?;
 
     let manifest = manifest_path(entry);
+    if !is_regular_file(&manifest) {
+        return Ok(0);
+    }
     let Ok(content) = std::fs::read_to_string(&manifest) else {
         return Ok(0);
     };
-    let valid: Vec<&str> = content
-        .lines()
-        .filter(|line| is_valid_ref(cache_dir, store, entry, line))
-        .collect();
+    let mut valid = Vec::new();
+    for line in content.lines() {
+        if is_valid_ref(cache_dir, store, entry, line)? {
+            valid.push(line);
+        }
+    }
 
     if valid.is_empty() {
-        let size = std::fs::symlink_metadata(entry).map(|m| m.len()).unwrap_or(0);
+        if !is_regular_file(entry) {
+            return Ok(0);
+        }
+        let size = std::fs::symlink_metadata(entry)?.len();
         super::delete::try_delete(entry, "shared blob")?;
         super::delete::try_delete(&manifest, "shared blob manifest")?;
         return Ok(size);
@@ -113,7 +181,7 @@ pub(crate) fn sweep(cache_dir: &Path, store: &Path, entry: &Path) -> std::io::Re
     let rewritten: String = valid.iter().map(|line| format!("{line}\n")).collect();
     if rewritten != content {
         let tmp = manifest.with_extension(format!("refs.{}.tmp", std::process::id()));
-        let mut file = File::create(&tmp)?;
+        let mut file = open_regular_for_write(&tmp, true)?;
         file.write_all(rewritten.as_bytes())?;
         file.sync_all()?;
         std::fs::rename(&tmp, &manifest)?;

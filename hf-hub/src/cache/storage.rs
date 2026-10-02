@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -197,7 +197,8 @@ fn scan_incomplete_files(blobs_dir: &Path, out: &mut Vec<CachedIncompleteFileInf
 }
 
 struct BlobInfo {
-    shared: bool,
+    /// Canonical location of the content, for counting physical size once.
+    physical_path: PathBuf,
     blob_path: PathBuf,
     size: u64,
     accessed: SystemTime,
@@ -205,19 +206,20 @@ struct BlobInfo {
 }
 
 /// A pointer into the shared-blob store reports its repo-level `blobs/<etag>` link as the
-/// blob path, as Python does, rather than the store payload.
-fn resolve_blob_info(file_path: &Path, store: Option<&Path>) -> Result<BlobInfo, String> {
+/// blob path, as Python does, rather than the store payload. `store` pairs the canonical
+/// store directory with the repo's canonical `blobs/` directory.
+fn resolve_blob_info(file_path: &Path, store: Option<(&Path, &Path)>) -> Result<BlobInfo, String> {
     let resolved =
         std::fs::canonicalize(file_path).map_err(|e| format!("Cannot resolve {}: {}", file_path.display(), e))?;
     let meta =
         std::fs::metadata(&resolved).map_err(|e| format!("Cannot read blob for {}: {}", file_path.display(), e))?;
     let shared_link = store
-        .filter(|store| resolved.starts_with(store))
-        .and_then(|store| shared_blobs::repo_link_for_pointer(store, file_path))
+        .filter(|(store, _)| resolved.starts_with(store))
+        .and_then(|(store, repo_blobs)| shared_blobs::repo_link_for_pointer(store, repo_blobs, file_path))
         .map(|(link, _)| link);
     Ok(BlobInfo {
-        shared: shared_link.is_some(),
-        blob_path: shared_link.unwrap_or(resolved),
+        blob_path: shared_link.unwrap_or_else(|| resolved.clone()),
+        physical_path: resolved,
         size: meta.len(),
         accessed: meta.accessed().unwrap_or(SystemTime::UNIX_EPOCH),
         modified: meta.modified().unwrap_or(SystemTime::UNIX_EPOCH),
@@ -226,8 +228,8 @@ fn resolve_blob_info(file_path: &Path, store: Option<&Path>) -> Result<BlobInfo,
 
 fn scan_snapshot(
     snap_path: &Path,
-    store: Option<&Path>,
-    shared_blobs: &mut HashSet<PathBuf>,
+    store: Option<(&Path, &Path)>,
+    physical_blobs: &mut HashMap<PathBuf, u64>,
     warnings: &mut Vec<String>,
 ) -> Vec<CachedFileInfo> {
     let mut files = Vec::new();
@@ -255,8 +257,9 @@ fn scan_snapshot(
                     },
                 };
 
-                if blob.shared {
-                    shared_blobs.insert(blob.blob_path.clone());
+                // Store payloads are counted once from the store itself.
+                if !store.is_some_and(|(store, _)| blob.physical_path.starts_with(store)) {
+                    physical_blobs.insert(blob.physical_path, blob.size);
                 }
                 files.push(CachedFileInfo {
                     file_name,
@@ -275,9 +278,9 @@ fn scan_snapshot(
 pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<HFCacheInfo> {
     let mut repos = Vec::new();
     let mut warnings = Vec::new();
-    let mut total_size: u64 = 0;
     let store = shared_blobs::store_dir(cache_dir);
-    let mut shared_blob_paths = HashSet::new();
+    let mut physical_blobs = HashMap::new();
+    let mut repos_size_sum: u64 = 0;
     let mut incomplete_files = Vec::new();
 
     let entries = match std::fs::read_dir(cache_dir) {
@@ -305,6 +308,8 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         let repo_path = entry.path();
         scan_incomplete_files(&repo_path.join("blobs"), &mut incomplete_files);
         let commit_refs = read_commit_refs(&repo_path);
+        let repo_blobs_dir = std::fs::canonicalize(repo_path.join("blobs")).ok();
+        let repo_store = store.as_deref().zip(repo_blobs_dir.as_deref());
 
         let mut revisions = Vec::new();
         let mut repo_last_accessed = SystemTime::UNIX_EPOCH;
@@ -319,7 +324,7 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
                 }
 
                 let commit_hash = snap_entry.file_name().to_string_lossy().to_string();
-                let files = scan_snapshot(&snap_path, store.as_deref(), &mut shared_blob_paths, &mut warnings);
+                let files = scan_snapshot(&snap_path, repo_store, &mut physical_blobs, &mut warnings);
 
                 let rev_size: u64 = files.iter().map(|f| f.size_on_disk).sum();
                 let rev_last_modified = files
@@ -357,12 +362,8 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
             }
         }
         let repo_size: u64 = unique_blobs.values().sum();
+        repos_size_sum += repo_size;
 
-        total_size += unique_blobs
-            .iter()
-            .filter(|(path, _)| !shared_blob_paths.contains(*path))
-            .map(|(_, size)| size)
-            .sum::<u64>();
         repos.push(CachedRepoInfo {
             repo_id,
             repo_type,
@@ -375,9 +376,11 @@ pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<H
         });
     }
 
-    if let Some(store) = &store {
-        total_size += shared_blobs::payload_total(store);
-    }
+    // Without a marked store this is the sum of per-repo sizes, as in Python.
+    let total_size = match &store {
+        Some(store) => physical_blobs.values().sum::<u64>() + shared_blobs::payload_total(store),
+        None => repos_size_sum,
+    };
 
     Ok(HFCacheInfo {
         cache_dir: cache_dir.to_path_buf(),

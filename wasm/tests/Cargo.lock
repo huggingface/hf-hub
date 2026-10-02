@@ -776,6 +776,7 @@ dependencies = [
  "globset",
  "hf-xet",
  "hyper",
+ "libc",
  "pathdiff",
  "percent-encoding",
  "reqwest",

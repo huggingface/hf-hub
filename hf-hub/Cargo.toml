@@ -50,6 +50,9 @@ socks = ["reqwest/socks"]
 # with a bare `302 Found`. reqwest itself only requires 0.6.8.
 tower-http = { version = "0.6.9", default-features = false }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_family = "wasm")'.dependencies]
 # `tokio-retry` -> `rand` 0.8 -> `rand_core` 0.6 -> `getrandom` 0.2 transitively
 # needs the `js` feature on wasm32 to compile.

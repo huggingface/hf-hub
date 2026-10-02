@@ -8,7 +8,7 @@
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
-use super::{delete, storage};
+use super::{delete, shared_blobs, storage};
 
 const REPO_A: &str = "models--o--a";
 const REPO_B: &str = "models--o--b";
@@ -167,4 +167,160 @@ async fn scan_ignores_store_without_marker() {
     let info = storage::scan_cache_dir(dir.path()).await.unwrap();
 
     assert_eq!(info.size_on_disk, 17 + 10, "per-repo sizes summed, store payloads not added");
+}
+
+fn store(cache: &Path) -> PathBuf {
+    shared_blobs::store_dir(cache).unwrap()
+}
+
+#[test]
+fn sweep_rewrites_manifest_keeping_only_valid_references() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path();
+    write_python_shared_cache(cache);
+    std::fs::write(
+        manifest(cache, SHARED_HASH),
+        "models--o--a/blobs/e_shared\nmodels--o--gone/blobs/e_shared\n../models--o--b/blobs/e_shared\n/abs/blobs/x\nfoo/blobs/e_shared\nmodels--o--b/blobs/e_shared\n",
+    )
+    .unwrap();
+
+    let store = store(cache);
+    let entry = std::fs::canonicalize(store_entry(cache, SHARED_HASH)).unwrap();
+    assert_eq!(shared_blobs::sweep(cache, &store, &entry), 0);
+
+    assert_eq!(
+        std::fs::read_to_string(manifest(cache, SHARED_HASH)).unwrap(),
+        "models--o--a/blobs/e_shared\nmodels--o--b/blobs/e_shared\n"
+    );
+}
+
+#[test]
+fn sweep_refuses_symlinked_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path();
+    write_python_shared_cache(cache);
+    let victim = cache.join("victim");
+    std::fs::write(&victim, b"precious").unwrap();
+    symlink(&victim, store_entry(cache, ORPHAN_HASH).with_extension("lock")).unwrap();
+
+    let store = store(cache);
+    let entry = std::fs::canonicalize(store_entry(cache, ORPHAN_HASH)).unwrap();
+    assert_eq!(shared_blobs::sweep(cache, &store, &entry), 0);
+
+    assert_eq!(std::fs::read(&victim).unwrap(), b"precious");
+    assert!(store_entry(cache, ORPHAN_HASH).exists());
+}
+
+#[test]
+fn sweep_keeps_payload_with_symlinked_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path();
+    write_python_shared_cache(cache);
+    let real = cache.join("real.refs");
+    std::fs::write(&real, "").unwrap();
+    std::fs::remove_file(manifest(cache, ORPHAN_HASH)).unwrap();
+    symlink(&real, manifest(cache, ORPHAN_HASH)).unwrap();
+
+    let store = store(cache);
+    let entry = std::fs::canonicalize(store_entry(cache, ORPHAN_HASH)).unwrap();
+    assert_eq!(shared_blobs::sweep(cache, &store, &entry), 0);
+    assert!(store_entry(cache, ORPHAN_HASH).exists());
+}
+
+#[test]
+fn sweep_keeps_payload_when_a_reference_cannot_be_checked() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path();
+    write_python_shared_cache(cache);
+    std::fs::write(manifest(cache, SHARED_HASH), "models--o--b/blobs/e_shared\n").unwrap();
+    let blobs_b = cache.join(REPO_B).join("blobs");
+    std::fs::set_permissions(&blobs_b, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let store = store(cache);
+    let entry = std::fs::canonicalize(store_entry(cache, SHARED_HASH)).unwrap();
+    let freed = shared_blobs::sweep(cache, &store, &entry);
+    std::fs::set_permissions(&blobs_b, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(freed, 0);
+    assert!(store_entry(cache, SHARED_HASH).exists());
+}
+
+#[test]
+fn sweep_does_not_remove_hash_named_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path();
+    write_python_shared_cache(cache);
+    let entry = store_entry(cache, ORPHAN_HASH);
+    std::fs::remove_file(&entry).unwrap();
+    std::fs::create_dir(&entry).unwrap();
+
+    let store = store(cache);
+    let entry = std::fs::canonicalize(entry).unwrap();
+    assert_eq!(shared_blobs::sweep(cache, &store, &entry), 0);
+    assert!(entry.is_dir());
+}
+
+#[test]
+fn delete_sweeps_leftover_store_links_when_repo_is_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path();
+    write_python_shared_cache(cache);
+    std::fs::write(manifest(cache, ORPHAN_HASH), "models--o--b/blobs/e_orphan\n").unwrap();
+    link_repo_blob(cache, REPO_B, "e_orphan", ORPHAN_HASH);
+
+    let outcome = delete::apply(delete::plan(cache, REPO_B, "c2").unwrap()).unwrap();
+
+    assert!(outcome.repo_removed);
+    assert_eq!(outcome.freed, 3);
+    assert!(!store_entry(cache, ORPHAN_HASH).exists());
+    assert!(store_entry(cache, SHARED_HASH).exists());
+}
+
+#[test]
+fn delete_frees_payload_once_when_two_etags_link_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path();
+    write_python_shared_cache(cache);
+    std::fs::write(manifest(cache, ONLY_A_HASH), "models--o--a/blobs/e_only_a\nmodels--o--a/blobs/e_only_a2\n")
+        .unwrap();
+    link_repo_blob(cache, REPO_A, "e_only_a2", ONLY_A_HASH);
+    link_snapshot_file(cache, REPO_A, "c1", "z.bin", "e_only_a2");
+
+    let outcome = delete::apply(delete::plan(cache, REPO_A, "c1").unwrap()).unwrap();
+
+    assert_eq!(outcome.freed, 7);
+    assert!(!store_entry(cache, ONLY_A_HASH).exists());
+    for etag in ["e_only_a", "e_only_a2"] {
+        assert!(std::fs::symlink_metadata(cache.join(REPO_A).join("blobs").join(etag)).is_err());
+    }
+}
+
+#[test]
+fn delete_does_not_unlink_another_repos_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path();
+    write_python_shared_cache(cache);
+    let snap = cache.join(REPO_A).join("snapshots").join("c3");
+    std::fs::create_dir_all(&snap).unwrap();
+    symlink("../../../models--o--b/blobs/e_shared", snap.join("x.bin")).unwrap();
+
+    delete::apply(delete::plan(cache, REPO_A, "c3").unwrap()).unwrap();
+
+    assert!(cache.join(REPO_B).join("blobs").join("e_shared").exists());
+}
+
+#[tokio::test]
+async fn scan_counts_payload_once_when_pointer_skips_repo_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path();
+    write_python_shared_cache(cache);
+    let snap = cache.join(REPO_B).join("snapshots").join("c4");
+    std::fs::create_dir_all(&snap).unwrap();
+    symlink(format!("../../../blobs/ab/{SHARED_HASH}"), snap.join("direct.bin")).unwrap();
+
+    let info = storage::scan_cache_dir(cache).await.unwrap();
+
+    assert_eq!(info.size_on_disk, 10 + 7 + 3);
 }
