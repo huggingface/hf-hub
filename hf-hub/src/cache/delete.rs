@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::storage;
+use super::{shared_blobs, storage};
 use crate::error::{HFError, HFResult};
 
 /// Everything needed to delete one cached revision, computed by [`plan`] before any blob
@@ -29,6 +29,12 @@ pub(crate) struct DeletePlan {
     /// rechecks references itself once those locks are held, since this snapshot of `keep`
     /// can go stale between planning and locking.
     pub(crate) candidate_etags: Vec<String>,
+    pub(crate) cache_dir: PathBuf,
+    /// Canonical shared-blob store directory, when the cache has one.
+    pub(crate) store: Option<PathBuf>,
+    /// Store entries the snapshot reaches, mapped to this repo's `blobs/<etag>` links to
+    /// them. A pointer into the store canonicalizes to the store entry, outside `blobs/`.
+    pub(crate) shared: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
 /// Result of [`apply`]: bytes freed, and whether the repo folder was removed because no
@@ -129,7 +135,11 @@ fn dir_size(dir: &Path) -> u64 {
                 stack.push(entry.path());
                 continue;
             }
-            if let Ok(meta) = std::fs::metadata(entry.path()) {
+            // Skipping symlinks keeps a shared-store payload, which may still be in use
+            // by another repo, out of the count; `shared_blobs::sweep` reports it instead.
+            if let Ok(meta) = entry.metadata()
+                && !meta.file_type().is_symlink()
+            {
                 total += meta.len();
             }
         }
@@ -140,7 +150,7 @@ fn dir_size(dir: &Path) -> u64 {
 /// Removes a file, symlink, or directory tree. Matching `huggingface_hub`'s
 /// `_try_delete_path`, a missing path or a permission error is logged and skipped; any
 /// other I/O error is returned.
-fn try_delete(path: &Path, kind: &'static str) -> std::io::Result<()> {
+pub(crate) fn try_delete(path: &Path, kind: &'static str) -> std::io::Result<()> {
     let result = match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
         Ok(_) => std::fs::remove_file(path),
@@ -167,6 +177,42 @@ fn remove_dir_and_size(dir: &Path, kind: &'static str) -> std::io::Result<u64> {
     let size = dir_size(dir);
     try_delete(dir, kind)?;
     Ok(size)
+}
+
+/// Store entries reached from the pointers under `snap`, mapped to the repo-level
+/// `blobs/<etag>` links the pointers go through.
+fn collect_shared_links(store: &Path, blobs_dir: &Path, snap: &Path) -> HashMap<PathBuf, Vec<PathBuf>> {
+    let mut out: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    let mut stack = vec![snap.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if is_dir_no_follow(&entry) {
+                stack.push(entry.path());
+                continue;
+            }
+            if let Some((link, target)) = shared_blobs::repo_link_for_pointer(store, blobs_dir, &entry.path()) {
+                let links = out.entry(target).or_default();
+                if !links.contains(&link) {
+                    links.push(link);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Store entries linked from the entries of a repo's `blobs/` directory.
+fn repo_store_targets(store: &Path, blobs_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(blobs_dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| shared_blobs::store_target(store, &entry.path()).ok().flatten())
+        .collect()
 }
 
 /// Paths under `snapshots_dir` (other than `snap` itself) that are still referenced,
@@ -222,6 +268,11 @@ pub(crate) fn plan(cache_dir: &Path, repo_folder: &str, commit: &str) -> HFResul
     // resolvable for the Windows-copy case handled there.
     let snap_canon = std::fs::canonicalize(&snap).ok();
     let blobs_dir_canon = std::fs::canonicalize(repo.join("blobs")).ok();
+    let store = shared_blobs::store_dir(cache_dir);
+    let shared = match (&store, &blobs_dir_canon) {
+        (Some(store), Some(blobs_dir)) => collect_shared_links(store, blobs_dir, &snap),
+        _ => HashMap::new(),
+    };
 
     let mut candidate_etags: Vec<String> = Vec::new();
     for path in doomed.keys() {
@@ -232,6 +283,14 @@ pub(crate) fn plan(cache_dir: &Path, repo_folder: &str, commit: &str) -> HFResul
             && let Some(etag) = path.file_name()
         {
             candidate_etags.push(etag.to_string_lossy().into_owned());
+        }
+        if let Some(links) = shared.get(path) {
+            candidate_etags.extend(
+                links
+                    .iter()
+                    .filter_map(|link| link.file_name())
+                    .map(|etag| etag.to_string_lossy().into_owned()),
+            );
         }
     }
 
@@ -246,6 +305,9 @@ pub(crate) fn plan(cache_dir: &Path, repo_folder: &str, commit: &str) -> HFResul
         snap_canon,
         blobs_dir_canon,
         candidate_etags,
+        cache_dir: cache_dir.to_path_buf(),
+        store,
+        shared,
     })
 }
 
@@ -265,6 +327,9 @@ pub(crate) fn apply(plan: DeletePlan) -> HFResult<ApplyOutcome> {
         snap_canon,
         blobs_dir_canon,
         candidate_etags: _,
+        cache_dir,
+        store,
+        shared,
     } = plan;
 
     try_delete(&snap, "snapshot")?;
@@ -281,6 +346,15 @@ pub(crate) fn apply(plan: DeletePlan) -> HFResult<ApplyOutcome> {
     let mut freed: u64 = 0;
     for (path, size) in doomed {
         if keep.contains_key(&path) {
+            continue;
+        }
+        if let (Some(store), Some(links)) = (&store, shared.get(&path)) {
+            // Shared-blob store: unlink this repo's `blobs/<etag>` links, then delete the
+            // payload only if no other repo still references it.
+            for link in links {
+                try_delete(link, "blob")?;
+            }
+            freed += shared_blobs::sweep(&cache_dir, store, &path);
             continue;
         }
         if blobs_dir_canon.as_ref().is_some_and(|b| path.starts_with(b)) {
@@ -309,8 +383,17 @@ pub(crate) fn apply(plan: DeletePlan) -> HFResult<ApplyOutcome> {
         .unwrap_or(true);
     let mut repo_removed = false;
     if snapshots_empty {
+        let leftover_shared = store
+            .as_ref()
+            .map(|store| repo_store_targets(store, &repo.join("blobs")))
+            .unwrap_or_default();
         freed += remove_dir_and_size(&repo, "repo")?;
         repo_removed = true;
+        if let Some(store) = &store {
+            for entry in leftover_shared {
+                freed += shared_blobs::sweep(&cache_dir, store, &entry);
+            }
+        }
     }
 
     Ok(ApplyOutcome { freed, repo_removed })

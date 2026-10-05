@@ -22,6 +22,9 @@ use crate::error::{HFError, HFResult};
 use crate::repository::{HFRepository, RepoType};
 
 pub(crate) mod delete;
+mod shared_blobs;
+#[cfg(all(test, unix))]
+mod shared_blobs_compat_tests;
 pub(crate) mod storage;
 
 /// A single file in a cached revision.
@@ -104,11 +107,31 @@ pub struct HFCacheInfo {
     pub cache_dir: PathBuf,
     /// Cached repositories discovered under `cache_dir`.
     pub repos: Vec<CachedRepoInfo>,
-    /// Sum of [`CachedRepoInfo::size_on_disk`] across all repos.
+    /// Physical size of cached blobs. A blob in the shared-blob store is counted once even
+    /// when several repos reference it, and store payloads no repo references are included,
+    /// so this can be smaller than the sum of [`CachedRepoInfo::size_on_disk`].
     pub size_on_disk: u64,
+    /// Orphaned `<repo>/blobs/*.incomplete` files left behind by interrupted downloads.
+    pub incomplete_files: Vec<CachedIncompleteFileInfo>,
     /// Human-readable warnings for entries that could not be fully scanned —
     /// for example, snapshot pointers whose blobs are missing or unreadable.
     pub warnings: Vec<String>,
+}
+
+impl HFCacheInfo {
+    /// Sum of [`CachedIncompleteFileInfo::size_on_disk`] across all incomplete files.
+    pub fn incomplete_size_on_disk(&self) -> u64 {
+        self.incomplete_files.iter().map(|f| f.size_on_disk).sum()
+    }
+}
+
+/// A partial download left in a repo's `blobs/` folder.
+#[derive(Debug, Clone)]
+pub struct CachedIncompleteFileInfo {
+    /// Path of the `.incomplete` file.
+    pub file_path: PathBuf,
+    /// Size of the partially downloaded file in bytes.
+    pub size_on_disk: u64,
 }
 
 /// Outcome of deleting one cached revision, returned by [`HFRepository::delete_cached_revision`].

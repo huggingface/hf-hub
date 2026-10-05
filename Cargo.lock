@@ -1085,6 +1085,7 @@ dependencies = [
  "hf-xet",
  "http",
  "hyper",
+ "libc",
  "pathdiff",
  "percent-encoding",
  "reqwest",
