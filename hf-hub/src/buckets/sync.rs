@@ -221,10 +221,10 @@ fn list_local_files(root: &Path) -> HFResult<HashMap<String, (u64, f64)>> {
 /// Whether `rel` stays inside the directory it is joined onto: non-empty, relative, and made of
 /// plain names only, with no `..`, root or drive components.
 fn is_contained(rel: &str) -> bool {
-    !rel.is_empty()
-        && Path::new(rel)
-            .components()
-            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
+    let mut components = Path::new(rel).components().peekable();
+    components.peek().is_some()
+        && components.clone().any(|c| matches!(c, Component::Normal(_)))
+        && components.all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
 fn strip_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
@@ -470,10 +470,12 @@ impl HFBucket {
                 BucketTreeEntry::Directory { .. } => continue,
             }
         }
-        progress.emit(DownloadEvent::Listing {
-            files_found: files.len(),
-            bytes_found,
-        });
+        if files.is_empty() || !files.len().is_multiple_of(LISTING_PROGRESS_INTERVAL) {
+            progress.emit(DownloadEvent::Listing {
+                files_found: files.len(),
+                bytes_found,
+            });
+        }
 
         Ok((files, entries))
     }
@@ -1313,12 +1315,36 @@ mod tests {
         assert_eq!(found, vec![(1000, 10_000), (1001, 10_010)]);
     }
 
+    #[tokio::test]
+    async fn listing_an_exact_multiple_of_the_interval_does_not_repeat_the_last_event() {
+        let page = json_response(&tree_page(0..1000), None);
+        let (client, server) = mock_hub(&[("GET /api/buckets/o/b/tree?recursive=true HTTP/1.1", page.as_str())]).await;
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let progress: Option<Progress> = Some(recorder.clone().into());
+
+        let listed = client.bucket("o", "b").list_remote_files(&None, &[], &[], &progress).await;
+        server.abort();
+
+        assert_eq!(listed.unwrap().0.len(), 1000);
+        let found: Vec<usize> = recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                ProgressEvent::Download(DownloadEvent::Listing { files_found, .. }) => Some(*files_found),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(found, vec![1000]);
+    }
+
     #[test]
     fn contained_paths_are_plain_relative_paths() {
         for ok in ["a.txt", "a/b.txt", "a/./b.txt"] {
             assert!(is_contained(ok), "{ok}");
         }
-        for bad in ["", "../x", "a/../../x", "/etc/passwd", ".."] {
+        for bad in ["", "../x", "a/../../x", "/etc/passwd", "..", ".", "./"] {
             assert!(!is_contained(bad), "{bad}");
         }
     }

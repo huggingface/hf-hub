@@ -315,9 +315,9 @@ pub enum UploadEvent {
 #[non_exhaustive]
 pub enum DownloadEvent {
     /// Remote files found so far while `HFBucket::sync` lists the bucket in the download
-    /// direction. Emitted every 1000 files and once more when the listing ends, always before
-    /// `Start`. A sync that finds every file already present locally emits no `Start` or
-    /// `Complete` after it.
+    /// direction. Emitted every 1000 files and once more when the listing ends (unless the last
+    /// periodic event already reported the final count), always before `Start`. A sync that finds every file already
+    /// present locally emits no `Start` or `Complete` after it.
     Listing {
         /// Files under the sync prefix that pass its include and exclude filters.
         files_found: usize,

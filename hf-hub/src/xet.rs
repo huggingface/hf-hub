@@ -120,6 +120,10 @@ fn cached_read_token(_client: &HFClient, _token_url: &str) -> Option<XetConnecti
 #[cfg(not(target_family = "wasm"))]
 fn cache_read_token(client: &HFClient, token_url: &str, conn: &XetConnectionInfo) {
     if let Ok(mut cache) = client.inner.xet_read_tokens.lock() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        cache.retain(|_, cached| cached.expiration_unix_epoch > now);
         cache.insert(token_url.to_string(), conn.clone());
     }
 }
@@ -1158,6 +1162,21 @@ mod tests {
     use xet::error::XetError;
 
     use super::*;
+
+    #[test]
+    fn caching_a_read_token_drops_expired_entries() {
+        let client = HFClient::builder().build().unwrap();
+        let conn = |expiration_unix_epoch| XetConnectionInfo {
+            endpoint: "e".into(),
+            access_token: "t".into(),
+            expiration_unix_epoch,
+        };
+        cache_read_token(&client, "expired", &conn(1));
+        cache_read_token(&client, "fresh", &conn(u64::MAX));
+        let cache = client.inner.xet_read_tokens.lock().unwrap();
+        assert!(!cache.contains_key("expired"));
+        assert!(cache.contains_key("fresh"));
+    }
 
     #[test]
     fn test_session_poisoned_positive() {
