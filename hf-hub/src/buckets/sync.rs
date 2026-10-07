@@ -139,6 +139,9 @@ impl BucketSyncPlan {
 
 const SYNC_TIME_WINDOW_MS: f64 = 1000.0;
 
+/// While listing a bucket for a download, a [`DownloadEvent::Listing`] is emitted every this many files.
+const LISTING_PROGRESS_INTERVAL: usize = 1000;
+
 fn validate_params(params: &BucketSyncParams) -> HFResult<()> {
     if params.ignore_times && params.ignore_sizes {
         return Err(HFError::InvalidParameter("cannot use both --ignore-times and --ignore-sizes".to_string()));
@@ -422,12 +425,14 @@ impl HFBucket {
         prefix: &Option<String>,
         include: &[GlobMatcher],
         exclude: &[GlobMatcher],
+        progress: &Option<Progress>,
     ) -> HFResult<(HashMap<String, (u64, f64)>, HashMap<String, BucketTreeEntry>)> {
         let stream = self.list_tree().maybe_prefix(prefix.clone()).recursive(true).send()?;
         futures::pin_mut!(stream);
 
         let mut files: HashMap<String, (u64, f64)> = HashMap::new();
         let mut entries: HashMap<String, BucketTreeEntry> = HashMap::new();
+        let mut bytes_found: u64 = 0;
 
         let prefix_str = prefix.as_deref().unwrap_or("");
 
@@ -443,12 +448,23 @@ impl HFBucket {
                         continue;
                     }
                     let mtime_ms = mtime.as_deref().map(parse_iso_mtime).unwrap_or(0.0);
+                    bytes_found += size;
                     files.insert(rel.clone(), (*size, mtime_ms));
                     entries.insert(rel, entry);
+                    if files.len() % LISTING_PROGRESS_INTERVAL == 0 {
+                        progress.emit(DownloadEvent::Listing {
+                            files_found: files.len(),
+                            bytes_found,
+                        });
+                    }
                 },
                 BucketTreeEntry::Directory { .. } => continue,
             }
         }
+        progress.emit(DownloadEvent::Listing {
+            files_found: files.len(),
+            bytes_found,
+        });
 
         Ok((files, entries))
     }
@@ -729,7 +745,13 @@ impl HFBucket {
         let include = compile_patterns(&params.include)?;
         let exclude = compile_patterns(&params.exclude)?;
 
-        let (remote_files, remote_entries) = self.list_remote_files(&params.prefix, &include, &exclude).await?;
+        let listing_progress = match params.direction {
+            BucketSyncDirection::Download => params.progress.clone(),
+            BucketSyncDirection::Upload => None,
+        };
+        let (remote_files, remote_entries) = self
+            .list_remote_files(&params.prefix, &include, &exclude, &listing_progress)
+            .await?;
 
         match params.direction {
             BucketSyncDirection::Upload => {
@@ -1207,5 +1229,67 @@ mod tests {
 
         let op = compare_files(String::new(), CompareRole::Upload, 200, 9000.0, 100, 5000.0, &params);
         assert!(op.is_none());
+    }
+
+    use crate::progress::{ProgressEvent, ProgressHandler};
+    use crate::test_support::mock_hub;
+
+    #[derive(Default)]
+    struct Recorder(std::sync::Mutex<Vec<ProgressEvent>>);
+
+    impl ProgressHandler for Recorder {
+        fn on_progress(&self, event: &ProgressEvent) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    fn tree_page(range: std::ops::Range<usize>) -> String {
+        let entries: Vec<_> = range
+            .map(|i| serde_json::json!({"type": "file", "path": format!("f{i}"), "size": 10, "xetHash": "h"}))
+            .collect();
+        serde_json::Value::Array(entries).to_string()
+    }
+
+    fn json_response(body: &str, next: Option<&str>) -> String {
+        let link = next.map(|url| format!("Link: <{url}>; rel=\"next\"\r\n")).unwrap_or_default();
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{link}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn listing_reports_files_found_every_thousand_files_and_at_the_end() {
+        let first =
+            json_response(&tree_page(0..1000), Some("{endpoint}/api/buckets/o/b/tree?recursive=true&cursor=p2"));
+        let second = json_response(&tree_page(1000..1001), None);
+        let (client, server) = mock_hub(&[
+            ("GET /api/buckets/o/b/tree?recursive=true HTTP/1.1", first.as_str()),
+            ("GET /api/buckets/o/b/tree?recursive=true&cursor=p2 HTTP/1.1", second.as_str()),
+        ])
+        .await;
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let progress: Option<Progress> = Some(recorder.clone().into());
+
+        let bucket = client.bucket("o", "b");
+        let listed = bucket.list_remote_files(&None, &[], &[], &progress).await;
+        server.abort();
+
+        let (files, _) = listed.unwrap();
+        assert_eq!(files.len(), 1001);
+        let found: Vec<(usize, u64)> = recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| match event {
+                ProgressEvent::Download(DownloadEvent::Listing {
+                    files_found,
+                    bytes_found,
+                }) => Some((*files_found, *bytes_found)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(found, vec![(1000, 10_000), (1001, 10_010)]);
     }
 }

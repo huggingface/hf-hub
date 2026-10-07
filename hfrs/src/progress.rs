@@ -232,6 +232,7 @@ impl CliProgressHandler {
                 }
                 state.download_queue.clear();
             },
+            _ => {},
         }
     }
 

@@ -47,6 +47,7 @@
 //! ## Download event sequence
 //!
 //! ```text
+//!   (Listing ── Listing ── … only for bucket sync downloads)
 //!   Start ──┐
 //!           │ (HEAD fan-out precedes this for snapshot downloads)
 //!   Progress ── Progress ── … ── AggregateProgress ── Progress ── …
@@ -57,10 +58,10 @@
 //!
 //! Download contract, for `download_file`, `snapshot_download` and `HFBucket::download_files`:
 //!
-//! - `Start` is emitted exactly once per call, before any other event. Its `total_files` and `total_bytes` are
-//!   authoritative and never re-announced: a snapshot does not emit a `Start` per file. For `snapshot_download`,
-//!   `total_files` counts every selected file that exists at the resolved commit (including files already present
-//!   locally), and `total_bytes` is the sum of their sizes.
+//! - `Start` is emitted exactly once per call, before any other event except `Listing`. Its `total_files` and
+//!   `total_bytes` are authoritative and never re-announced: a snapshot does not emit a `Start` per file. For
+//!   `snapshot_download`, `total_files` counts every selected file that exists at the resolved commit (including files
+//!   already present locally), and `total_bytes` is the sum of their sizes.
 //! - Every file counted in `Start.total_files` gets at least one [`FileProgress`] with [`FileStatus::Complete`] before
 //!   `Complete`, carrying `bytes_completed == total_bytes == <file size>`. That includes files that needed no transfer
 //!   (already in the snapshot, blob already cached, destination already present, or content shared with another file of
@@ -81,6 +82,9 @@
 //!   `Start` was announced yet and the cached file's size can't be read, the progress event for that file is skipped
 //!   (logged as a warning) instead of failing the call.
 //! - `snapshot_download` with `local_files_only` makes no network calls and emits no events at all.
+//! - Bucket sync downloads first emit [`DownloadEvent::Listing`] while the bucket is listed. Their `Start` counts only
+//!   the files the sync will transfer; files already present locally are skipped silently, and a sync with nothing to
+//!   transfer emits no `Start` or `Complete`.
 //!
 //! # Implementing a handler
 //!
@@ -308,7 +312,19 @@ pub enum UploadEvent {
 /// docs](self) for ordering, the two-channel `Progress` vs `AggregateProgress`
 /// model, and cache-hit fast paths.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum DownloadEvent {
+    /// Remote files found so far while `HFBucket::sync` lists the bucket in the download
+    /// direction. Emitted every 1000 files and once more when the listing ends, always before
+    /// `Start`. A sync that finds every file already present locally emits no `Start` or
+    /// `Complete` after it.
+    Listing {
+        /// Files under the sync prefix that pass its include and exclude filters.
+        files_found: usize,
+        /// Sum of those files' sizes in bytes.
+        bytes_found: u64,
+    },
+
     /// Download operation has begun; totals are known. Fires exactly once per call, after the
     /// HEAD round-trip (or HEAD fan-out for `snapshot_download`), and its totals are final.
     Start {

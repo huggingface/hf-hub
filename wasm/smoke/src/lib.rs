@@ -202,6 +202,14 @@ impl ProgressHandler for JsProgressHandler {
 fn event_to_js(event: &ProgressEvent) -> JsValue {
     let obj = Object::new();
     match event {
+        ProgressEvent::Download(DownloadEvent::Listing {
+            files_found,
+            bytes_found,
+        }) => {
+            set_kind(&obj, "download.listing");
+            set_number(&obj, "files_found", *files_found as f64);
+            set_number(&obj, "bytes_found", *bytes_found as f64);
+        },
         ProgressEvent::Download(DownloadEvent::Start {
             total_files,
             total_bytes,
@@ -232,6 +240,9 @@ fn event_to_js(event: &ProgressEvent) -> JsValue {
         },
         ProgressEvent::Download(DownloadEvent::Complete) => {
             set_kind(&obj, "download.complete");
+        },
+        ProgressEvent::Download(_) => {
+            set_kind(&obj, "download.unknown");
         },
         ProgressEvent::Upload(UploadEvent::Start {
             total_files,

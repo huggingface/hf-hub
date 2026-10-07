@@ -14,6 +14,12 @@ impl ProgressHandler for PrintProgressHandler {
     fn on_progress(&self, event: &ProgressEvent) {
         match event {
             ProgressEvent::Download(dl) => match dl {
+                DownloadEvent::Listing {
+                    files_found,
+                    bytes_found,
+                } => {
+                    println!("Listing: {files_found} file(s), {bytes_found} bytes found so far");
+                },
                 DownloadEvent::Start {
                     total_files,
                     total_bytes,
@@ -41,6 +47,7 @@ impl ProgressHandler for PrintProgressHandler {
                 DownloadEvent::Complete => {
                     println!("Download complete.");
                 },
+                _ => {},
             },
             ProgressEvent::Upload(ul) => match ul {
                 UploadEvent::Start {
