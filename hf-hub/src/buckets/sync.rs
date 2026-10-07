@@ -17,7 +17,7 @@
 //!   unnecessary transfers.
 
 use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use bon::bon;
 use futures::StreamExt;
@@ -216,6 +216,15 @@ fn list_local_files(root: &Path) -> HFResult<HashMap<String, (u64, f64)>> {
     }
 
     Ok(result)
+}
+
+/// Whether `rel` stays inside the directory it is joined onto: non-empty, relative, and made of
+/// plain names only, with no `..`, root or drive components.
+fn is_contained(rel: &str) -> bool {
+    !rel.is_empty()
+        && Path::new(rel)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
 }
 
 fn strip_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
@@ -653,6 +662,17 @@ impl HFBucket {
     }
 
     async fn execute_download_plan(&self, plan: &BucketSyncPlan, params: &BucketSyncParams) -> HFResult<()> {
+        if let Some(op) = plan
+            .operations
+            .iter()
+            .find(|op| op.action == BucketSyncAction::Download && !is_contained(&op.path))
+        {
+            return Err(HFError::InvalidParameter(format!(
+                "refusing to download {:?}: the path leaves {}",
+                op.path,
+                params.local_path.display()
+            )));
+        }
         let mut xet_batch_files = Vec::new();
         let mut total_bytes: u64 = 0;
 
@@ -1291,5 +1311,37 @@ mod tests {
             })
             .collect();
         assert_eq!(found, vec![(1000, 10_000), (1001, 10_010)]);
+    }
+
+    #[test]
+    fn contained_paths_are_plain_relative_paths() {
+        for ok in ["a.txt", "a/b.txt", "a/./b.txt"] {
+            assert!(is_contained(ok), "{ok}");
+        }
+        for bad in ["", "../x", "a/../../x", "/etc/passwd", ".."] {
+            assert!(!is_contained(bad), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn download_refuses_remote_paths_that_leave_the_destination() {
+        let body = r#"[{"type":"file","path":"../evil.txt","size":1,"xetHash":"h"}]"#;
+        let response = json_response(body, None);
+        let (client, server) =
+            mock_hub(&[("GET /api/buckets/o/b/tree?recursive=true HTTP/1.1", response.as_str())]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("dest");
+
+        let result = client
+            .bucket("o", "b")
+            .sync()
+            .local_path(local.clone())
+            .direction(BucketSyncDirection::Download)
+            .send()
+            .await;
+        server.abort();
+
+        assert!(matches!(result, Err(HFError::InvalidParameter(_))), "{result:?}");
+        assert!(!dir.path().join("evil.txt").exists());
     }
 }
