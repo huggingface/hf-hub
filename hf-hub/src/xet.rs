@@ -16,7 +16,7 @@ use std::{
 };
 
 use serde::Deserialize;
-#[cfg(test)]
+#[cfg(any(test, not(target_family = "wasm")))]
 use xet::error::XetError;
 use xet::xet_session::XetFileInfo;
 #[cfg(not(target_family = "wasm"))]
@@ -124,6 +124,32 @@ fn emit_remaining_completes(progress: &Option<Progress>, tracked: &[TrackedDownl
     if !files.is_empty() {
         progress.emit(DownloadEvent::Progress { files });
     }
+}
+
+/// Waits for every queued download and renames each file into place as soon as its own download
+/// finishes, so files that completed are kept even when another file of the batch fails. A
+/// re-run that skips files already present (bucket sync) then fetches only what is missing.
+/// Returns the first error once every download has settled.
+#[cfg(not(target_family = "wasm"))]
+async fn finalize_each<F>(pending: Vec<(F, PathBuf, PathBuf)>, operation: XetOperation) -> HFResult<()>
+where
+    F: std::future::Future<Output = Result<(), XetError>>,
+{
+    let mut in_flight: futures::stream::FuturesUnordered<_> = pending
+        .into_iter()
+        .map(|(download, incomplete, final_path)| async move {
+            download.await.map_err(|e| HFError::xet(operation, e))?;
+            std::fs::rename(&incomplete, &final_path)?;
+            Ok::<(), HFError>(())
+        })
+        .collect();
+    let mut first_error = None;
+    while let Some(result) = futures::StreamExt::next(&mut in_flight).await {
+        if let Err(error) = result {
+            first_error.get_or_insert(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 /// Owns a spawned task's [`JoinHandle`](tokio::task::JoinHandle) and aborts it on drop.
@@ -772,7 +798,7 @@ impl<T: RepoType> HFRepository<T> {
         .map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
 
         let mut tracked_vec = Vec::with_capacity(files.len());
-        let mut incomplete_paths = Vec::with_capacity(files.len());
+        let mut pending = Vec::with_capacity(files.len());
         for file in files {
             if let Some(parent) = file.path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -787,26 +813,25 @@ impl<T: RepoType> HFRepository<T> {
                 .await
                 .map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
 
+            let download = handle.clone();
+            pending.push((async move { download.finish().await.map(|_| ()) }, incomplete, file.path.clone()));
             tracked_vec.push(TrackedDownload {
                 handle,
                 filename: file.filename.clone(),
                 file_size: file.file_size,
                 complete_emitted: AtomicBool::new(false),
             });
-            incomplete_paths.push((incomplete, file.path.clone()));
         }
 
         let tracked = Arc::new(tracked_vec);
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
-        let result = group.finish().await;
+        let finalized = finalize_each(pending, XetOperation::BatchDownload).await;
+        let finished = group.finish().await;
         drop(poll_handle);
-        result.map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
+        finalized?;
+        finished.map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
         emit_remaining_completes(progress, &tracked);
-
-        for (incomplete, final_path) in &incomplete_paths {
-            std::fs::rename(incomplete, final_path)?;
-        }
 
         Ok(())
     }
@@ -904,7 +929,7 @@ impl crate::buckets::HFBucket {
         .map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
 
         let mut tracked_vec = Vec::with_capacity(files.len());
-        let mut incomplete_paths = Vec::with_capacity(files.len());
+        let mut pending = Vec::with_capacity(files.len());
         for file in files {
             if let Some(parent) = file.path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -919,26 +944,25 @@ impl crate::buckets::HFBucket {
                 .await
                 .map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
 
+            let download = handle.clone();
+            pending.push((async move { download.finish().await.map(|_| ()) }, incomplete, file.path.clone()));
             tracked_vec.push(TrackedDownload {
                 handle,
                 filename: file.filename.clone(),
                 file_size: file.file_size,
                 complete_emitted: AtomicBool::new(false),
             });
-            incomplete_paths.push((incomplete, file.path.clone()));
         }
 
         let tracked = Arc::new(tracked_vec);
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
-        let result = group.finish().await;
+        let finalized = finalize_each(pending, XetOperation::BucketBatchDownload).await;
+        let finished = group.finish().await;
         drop(poll_handle);
-        result.map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
+        finalized?;
+        finished.map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
         emit_remaining_completes(progress, &tracked);
-
-        for (incomplete, final_path) in &incomplete_paths {
-            std::fs::rename(incomplete, final_path)?;
-        }
 
         Ok(())
     }
@@ -1144,5 +1168,55 @@ mod tests {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), rx)
             .await
             .expect("task should have been aborted (dropping its future) shortly after the guard was dropped");
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn finalize_each_renames_finished_files_even_when_another_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| dir.path().join(name);
+        std::fs::write(path("a.bin.incomplete"), b"a").unwrap();
+        std::fs::write(path("b.bin.incomplete"), b"b").unwrap();
+        let pending = vec![
+            (futures::future::ready(Ok(())), path("a.bin.incomplete"), path("a.bin")),
+            (
+                futures::future::ready(Err(XetError::Network("reset".into()))),
+                path("b.bin.incomplete"),
+                path("b.bin"),
+            ),
+        ];
+
+        let result = finalize_each(pending, XetOperation::BucketBatchDownload).await;
+
+        assert!(
+            matches!(
+                result,
+                Err(HFError::Xet {
+                    operation: XetOperation::BucketBatchDownload,
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(std::fs::read(path("a.bin")).unwrap(), b"a");
+        assert!(path("b.bin.incomplete").exists());
+        assert!(!path("b.bin").exists());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn finalize_each_reports_a_failed_rename_after_finishing_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| dir.path().join(name);
+        std::fs::write(path("a.bin.incomplete"), b"a").unwrap();
+        let pending = vec![
+            (futures::future::ready(Ok(())), path("gone.incomplete"), path("gone")),
+            (futures::future::ready(Ok(())), path("a.bin.incomplete"), path("a.bin")),
+        ];
+
+        let result = finalize_each(pending, XetOperation::BatchDownload).await;
+
+        assert!(matches!(result, Err(HFError::Io(_))), "{result:?}");
+        assert!(path("a.bin").exists());
     }
 }
