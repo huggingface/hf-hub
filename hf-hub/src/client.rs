@@ -129,6 +129,10 @@ pub(crate) struct HFClientInner {
     pub(crate) cache_dir: std::path::PathBuf,
     pub(crate) cache_enabled: bool,
     pub(crate) xet_state: std::sync::Mutex<crate::xet::XetState>,
+    /// Xet read-token responses keyed by token URL. Scoped to this client, so a client built for
+    /// other credentials starts empty.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) xet_read_tokens: std::sync::Mutex<std::collections::HashMap<String, crate::xet::XetConnectionInfo>>,
 }
 
 /// Builder for [`HFClient`].
@@ -276,6 +280,8 @@ impl HFClientBuilder {
                 cache_dir,
                 cache_enabled: self.cache_enabled.unwrap_or(true),
                 xet_state: std::sync::Mutex::new(crate::xet::XetState::default()),
+                #[cfg(not(target_family = "wasm"))]
+                xet_read_tokens: std::sync::Mutex::new(std::collections::HashMap::new()),
             }),
         })
     }

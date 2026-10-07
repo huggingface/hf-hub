@@ -46,6 +46,7 @@ pub(crate) struct XetState {
     pub(crate) generation: u64,
 }
 
+#[derive(Clone)]
 pub(crate) struct XetConnectionInfo {
     pub(crate) endpoint: String,
     pub(crate) access_token: String,
@@ -72,6 +73,59 @@ async fn fetch_xet_connection_info(
         expiration_unix_epoch: token_resp.exp,
     })
 }
+
+/// A cached read token is handed out only while it has at least this long left, so a transfer that
+/// starts with it is not cut short. Xet refreshes tokens itself through the refresh URL after that.
+#[cfg(not(target_family = "wasm"))]
+const XET_READ_TOKEN_MIN_REMAINING_SECS: u64 = 60;
+
+/// Read-token connection info for `token_url`, reused from the client's cache while it is fresh, so
+/// repeated small reads (file previews) skip the token request.
+async fn xet_read_connection_info(
+    client: &HFClient,
+    token_url: &str,
+    not_found_id: Option<&str>,
+    not_found_ctx: crate::error::NotFoundContext,
+) -> HFResult<XetConnectionInfo> {
+    if let Some(conn) = cached_read_token(client, token_url) {
+        return Ok(conn);
+    }
+    let conn = fetch_xet_connection_info(client, token_url, not_found_id, not_found_ctx).await?;
+    cache_read_token(client, token_url, &conn);
+    Ok(conn)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn cached_read_token(client: &HFClient, token_url: &str) -> Option<XetConnectionInfo> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let mut cache = client.inner.xet_read_tokens.lock().ok()?;
+    match cache.get(token_url) {
+        Some(conn) if conn.expiration_unix_epoch > now + XET_READ_TOKEN_MIN_REMAINING_SECS => Some(conn.clone()),
+        Some(_) => {
+            cache.remove(token_url);
+            None
+        },
+        None => None,
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn cached_read_token(_client: &HFClient, _token_url: &str) -> Option<XetConnectionInfo> {
+    None
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn cache_read_token(client: &HFClient, token_url: &str, conn: &XetConnectionInfo) {
+    if let Ok(mut cache) = client.inner.xet_read_tokens.lock() {
+        cache.insert(token_url.to_string(), conn.clone());
+    }
+}
+
+#[cfg(target_family = "wasm")]
+fn cache_read_token(_client: &HFClient, _token_url: &str, _conn: &XetConnectionInfo) {}
 
 fn repo_xet_token_url(client: &HFClient, token_type: &str, repo_id: &str, api_segment: &str, revision: &str) -> String {
     format!(
@@ -632,7 +686,7 @@ impl<T: RepoType> HFRepository<T> {
         let file_size: u64 = crate::repository::extract_file_size(head_response).unwrap_or(0);
 
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
-        let conn = fetch_xet_connection_info(
+        let conn = xet_read_connection_info(
             &self.hf_client,
             &token_url,
             Some(&repo_path),
@@ -700,7 +754,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let api_segment = self.repo_type.plural();
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
-        let conn = fetch_xet_connection_info(
+        let conn = xet_read_connection_info(
             &self.hf_client,
             &token_url,
             Some(&repo_path),
@@ -770,7 +824,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let api_segment = self.repo_type.plural();
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
-        let conn = fetch_xet_connection_info(
+        let conn = xet_read_connection_info(
             &self.hf_client,
             &token_url,
             Some(&repo_path),
@@ -900,7 +954,7 @@ impl crate::buckets::HFBucket {
         let bucket_id = self.bucket_id();
         tracing::info!(bucket = bucket_id.as_str(), file_count = files.len(), "fetching xet read token");
         let token_url = bucket_xet_token_url(&self.hf_client, "read", &bucket_id);
-        let conn = fetch_xet_connection_info(
+        let conn = xet_read_connection_info(
             &self.hf_client,
             &token_url,
             Some(&bucket_id),
@@ -981,7 +1035,7 @@ impl crate::buckets::HFBucket {
     ) -> HFResult<impl futures::Stream<Item = HFResult<bytes::Bytes>> + use<>> {
         let bucket_id = self.bucket_id();
         let token_url = bucket_xet_token_url(&self.hf_client, "read", &bucket_id);
-        let conn = fetch_xet_connection_info(
+        let conn = xet_read_connection_info(
             &self.hf_client,
             &token_url,
             Some(&bucket_id),
@@ -1046,7 +1100,7 @@ impl<T: RepoType> HFRepository<T> {
         let repo_path = self.repo_path();
         let api_segment = self.repo_type.plural();
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
-        let conn = fetch_xet_connection_info(
+        let conn = xet_read_connection_info(
             &self.hf_client,
             &token_url,
             Some(&repo_path),
@@ -1218,5 +1272,75 @@ mod tests {
 
         assert!(matches!(result, Err(HFError::Io(_))), "{result:?}");
         assert!(path("a.bin").exists());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn token_response(exp: u64) -> String {
+        let body = format!(r#"{{"accessToken":"tok","exp":{exp},"casUrl":"http://cas.invalid"}}"#);
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn unix_now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn read_token(client: &HFClient) -> HFResult<XetConnectionInfo> {
+        let url = bucket_xet_token_url(client, "read", "o/b");
+        xet_read_connection_info(client, &url, Some("o/b"), crate::error::NotFoundContext::Bucket).await
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn read_tokens_are_reused_until_close_to_expiry() {
+        let response = token_response(unix_now() + 3600);
+        let (client, server) =
+            crate::test_support::mock_hub(&[("GET /api/buckets/o/b/xet-read-token HTTP/1.1", response.as_str())]).await;
+        let first = read_token(&client).await.unwrap();
+        server.abort();
+        let _ = server.await;
+
+        let second = read_token(&client).await.unwrap();
+        assert_eq!(second.access_token, first.access_token);
+        assert_eq!(second.endpoint, "http://cas.invalid");
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn read_tokens_close_to_expiry_are_fetched_again() {
+        let response = token_response(unix_now() + 30);
+        let (client, server) =
+            crate::test_support::mock_hub(&[("GET /api/buckets/o/b/xet-read-token HTTP/1.1", response.as_str())]).await;
+        read_token(&client).await.unwrap();
+        server.abort();
+        let _ = server.await;
+
+        assert!(read_token(&client).await.is_err(), "a token with 30 s left must not be reused");
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn a_client_built_for_other_credentials_does_not_see_cached_tokens() {
+        let response = token_response(unix_now() + 3600);
+        let (client, server) =
+            crate::test_support::mock_hub(&[("GET /api/buckets/o/b/xet-read-token HTTP/1.1", response.as_str())]).await;
+        read_token(&client).await.unwrap();
+        server.abort();
+        let _ = server.await;
+
+        let other = HFClient::builder()
+            .endpoint(client.endpoint())
+            .token("other-token")
+            .retry_max_attempts(0)
+            .build()
+            .unwrap();
+        assert!(read_token(&other).await.is_err());
     }
 }
