@@ -1124,8 +1124,9 @@ dependencies = [
 
 [[package]]
 name = "hf-xet"
-version = "1.6.0"
-source = "git+https://github.com/huggingface/xet-core?branch=main#d2f667cc247a7ae54a2cf93e413f8fee96c3c927"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f24754aef4f6c3d57bc4a0dc2648ca74487050eda01c361b3eefa11feeafd662"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3884,8 +3885,9 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 
 [[package]]
 name = "xet-client"
-version = "1.6.0"
-source = "git+https://github.com/huggingface/xet-core?branch=main#d2f667cc247a7ae54a2cf93e413f8fee96c3c927"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15500e5fc9e17be15224f9e34cb07d41fb2805d9dbbf7bd3507c982fd1eb3efd"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3921,8 +3923,9 @@ dependencies = [
 
 [[package]]
 name = "xet-core-structures"
-version = "1.6.0"
-source = "git+https://github.com/huggingface/xet-core?branch=main#d2f667cc247a7ae54a2cf93e413f8fee96c3c927"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5080d5803c8bf15fa56ef934050a46b225801bad3ea4cb8bb3c46c5c37976516"
 dependencies = [
  "async-trait",
  "base64",
@@ -3953,8 +3956,9 @@ dependencies = [
 
 [[package]]
 name = "xet-data"
-version = "1.6.0"
-source = "git+https://github.com/huggingface/xet-core?branch=main#d2f667cc247a7ae54a2cf93e413f8fee96c3c927"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1287a1657fb67de846030f6605a9960dcdad401c467b490657e6e909d2e0d1c0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3984,8 +3988,9 @@ dependencies = [
 
 [[package]]
 name = "xet-runtime"
-version = "1.6.0"
-source = "git+https://github.com/huggingface/xet-core?branch=main#d2f667cc247a7ae54a2cf93e413f8fee96c3c927"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "921953c885ce83e02b21e8d26444b75c78c9e83076699ced08d5c6fc1cdb48ac"
 dependencies = [
  "anyhow",
  "async-trait",
