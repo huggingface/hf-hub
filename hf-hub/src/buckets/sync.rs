@@ -460,7 +460,7 @@ impl HFBucket {
                     bytes_found += size;
                     files.insert(rel.clone(), (*size, mtime_ms));
                     entries.insert(rel, entry);
-                    if files.len() % LISTING_PROGRESS_INTERVAL == 0 {
+                    if files.len().is_multiple_of(LISTING_PROGRESS_INTERVAL) {
                         progress.emit(DownloadEvent::Listing {
                             files_found: files.len(),
                             bytes_found,
