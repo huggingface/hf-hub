@@ -2705,4 +2705,32 @@ mod tests {
         let head = server.await.unwrap();
         assert!(head.starts_with("DELETE /api/models/acme/thing/like HTTP/1.1\r\n"), "unexpected request {head:?}");
     }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn info_sends_each_expand_field_and_reads_used_storage() {
+        let body = r#"{"_id":"x","id":"o/r","sha":"abc","usedStorage":42}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let (client, server) = crate::test_support::mock_hub(&[(
+            "GET /api/models/o/r?expand=sha&expand=usedStorage HTTP/1.1",
+            response.as_str(),
+        )])
+        .await;
+
+        let info = client
+            .repository(super::RepoTypeAny::Model, "o", "r")
+            .info()
+            .expand(vec!["sha".to_string(), "usedStorage".to_string()])
+            .send()
+            .await;
+        server.abort();
+
+        let info = info.unwrap();
+        assert_eq!(info.sha(), Some("abc"));
+        assert_eq!(info.used_storage(), Some(42));
+        assert!(info.siblings().is_none());
+    }
 }
