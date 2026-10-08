@@ -374,8 +374,8 @@ pub(crate) fn extract_file_size(response: &reqwest::Response) -> Option<u64> {
 /// File size for a file that will be downloaded through Xet.
 ///
 /// Xet downloads need the size up front, so a missing or invalid `X-Linked-Size` header on a
-/// Xet file is a malformed response rather than a `0` fallback: a fabricated size would only
-/// surface later as a confusing size-mismatch error from the Xet client.
+/// Xet file is a malformed response rather than a `0` fallback: the Xet client bounds the
+/// reconstruction by the given size, so a fabricated `0` would silently produce an empty file.
 pub(crate) fn extract_xet_file_size(response: &reqwest::Response, filename: &str) -> HFResult<u64> {
     extract_file_size(response).ok_or_else(|| {
         HFError::malformed_response_at(
