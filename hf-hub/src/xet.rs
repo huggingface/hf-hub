@@ -225,6 +225,31 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// Aborts a xet upload commit when its future is dropped before the commit finished, so a
+/// canceled upload stops sending data instead of draining its queue in the background.
+#[cfg(not(target_family = "wasm"))]
+struct AbortCommitOnDrop(Option<xet::xet_session::XetUploadCommit>);
+
+#[cfg(not(target_family = "wasm"))]
+impl AbortCommitOnDrop {
+    fn new(commit: &xet::xet_session::XetUploadCommit) -> Self {
+        Self(Some(commit.clone()))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl Drop for AbortCommitOnDrop {
+    fn drop(&mut self) {
+        if let Some(commit) = self.0.take() {
+            let _ = commit.abort();
+        }
+    }
+}
+
 /// Aborts a xet download group when its future is dropped before the group finished, so a
 /// canceled or timed-out download stops transferring instead of draining its whole queue in the
 /// background (the group's tasks run on xet's own runtime and otherwise outlive the caller).
@@ -396,6 +421,7 @@ async fn xet_upload_inner(
     .build()
     .await
     .map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+    let mut abort_guard = AbortCommitOnDrop::new(&commit);
     tracing::info!("xet upload commit built, queuing file uploads");
 
     // Each file gets a handle; `task_id_or_stream` records, *in input order*,
@@ -554,7 +580,9 @@ async fn xet_upload_inner(
         stream_xet_infos.insert(i, info);
     }
 
-    let results = commit.commit().await.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
+    let committed = commit.commit().await;
+    abort_guard.disarm();
+    let results = committed.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
     if let Some(mut guard) = poll_handle
         && let Some(h) = guard.0.take()
     {
