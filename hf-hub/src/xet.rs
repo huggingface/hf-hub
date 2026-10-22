@@ -225,6 +225,32 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// Aborts a xet download group when its future is dropped before the group finished, so a
+/// canceled or timed-out download stops transferring instead of draining its whole queue in the
+/// background (the group's tasks run on xet's own runtime and otherwise outlive the caller).
+#[cfg(not(target_family = "wasm"))]
+struct AbortGroupOnDrop(Option<xet::xet_session::XetFileDownloadGroup>);
+
+#[cfg(not(target_family = "wasm"))]
+impl AbortGroupOnDrop {
+    fn new(group: &xet::xet_session::XetFileDownloadGroup) -> Self {
+        Self(Some(group.clone()))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl Drop for AbortGroupOnDrop {
+    fn drop(&mut self) {
+        if let Some(group) = self.0.take() {
+            let _ = group.abort();
+        }
+    }
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn spawn_download_progress_poller(
     progress: &Option<Progress>,
@@ -722,6 +748,7 @@ impl<T: RepoType> HFRepository<T> {
         .build()
         .await
         .map_err(|e| HFError::xet(XetOperation::Download, e))?;
+        let mut abort_guard = AbortGroupOnDrop::new(&group);
 
         let file_info = XetFileInfo::new(file_hash, file_size);
 
@@ -739,6 +766,7 @@ impl<T: RepoType> HFRepository<T> {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
+        abort_guard.disarm();
         drop(poll_handle);
         result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
         emit_remaining_completes(progress, &tracked);
@@ -790,6 +818,7 @@ impl<T: RepoType> HFRepository<T> {
         .build()
         .await
         .map_err(|e| HFError::xet(XetOperation::Download, e))?;
+        let mut abort_guard = AbortGroupOnDrop::new(&group);
 
         let file_info = XetFileInfo::new(file_hash.to_string(), file_size);
 
@@ -807,6 +836,7 @@ impl<T: RepoType> HFRepository<T> {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
+        abort_guard.disarm();
         drop(poll_handle);
         result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
         emit_remaining_completes(progress, &tracked);
@@ -854,6 +884,7 @@ impl<T: RepoType> HFRepository<T> {
         .build()
         .await
         .map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
+        let mut abort_guard = AbortGroupOnDrop::new(&group);
 
         let mut tracked_vec = Vec::with_capacity(files.len());
         let mut pending = Vec::with_capacity(files.len());
@@ -886,6 +917,7 @@ impl<T: RepoType> HFRepository<T> {
 
         let finalized = finalize_each(pending, XetOperation::BatchDownload).await;
         let finished = group.finish().await;
+        abort_guard.disarm();
         drop(poll_handle);
         finalized?;
         finished.map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
@@ -985,6 +1017,7 @@ impl crate::buckets::HFBucket {
         .build()
         .await
         .map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
+        let mut abort_guard = AbortGroupOnDrop::new(&group);
 
         let mut tracked_vec = Vec::with_capacity(files.len());
         let mut pending = Vec::with_capacity(files.len());
@@ -1017,6 +1050,7 @@ impl crate::buckets::HFBucket {
 
         let finalized = finalize_each(pending, XetOperation::BucketBatchDownload).await;
         let finished = group.finish().await;
+        abort_guard.disarm();
         drop(poll_handle);
         finalized?;
         finished.map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
