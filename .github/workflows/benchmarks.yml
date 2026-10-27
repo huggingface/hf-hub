@@ -44,14 +44,14 @@ jobs:
             -f "output[summary]=Compiling and running benchmarks..."
 
       - name: Install Rust Stable
-        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
 
       - name: Set up HF registry proxies
         uses: huggingface/hf-workflows/.github/actions/setup-hf-registry-proxies@514eaf34ed7574421e6556e62592cdd1c65c5eff  # main
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
 
       - name: Run benchmarks
         run: cargo bench --bench sync_api -- --output-format bencher 2>&1 | tee bench_output.txt
