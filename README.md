@@ -16,8 +16,6 @@ Both an **async** interface (`HFClient`, on by default) and a **synchronous** in
 - **Streaming pagination** — async list endpoints return `impl Stream<Item = Result<T>>` for lazy, memory-efficient iteration; blocking counterparts collect into `Vec<T>`
 - **Bucket operations** — create, delete, list, and move buckets; upload, download, and delete files within buckets
 - **Xet high-performance transfers** — support for Hugging Face's Xet storage backend
-- **Download progress** — Xet aggregate events report network transfer bytes/rate separately from file reconstruction;
-  see [`examples/progress.rs`](examples/progress.rs) for a callback implementation.
 - **Async or blocking** — use `HFClient` with your own tokio runtime, or `HFClientSync` for synchronous callers (requires the `blocking` feature)
 
 ## Installation
