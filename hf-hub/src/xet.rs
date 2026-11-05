@@ -20,7 +20,9 @@ use serde::Deserialize;
 use xet::error::XetError;
 use xet::xet_session::XetFileInfo;
 #[cfg(not(target_family = "wasm"))]
-use xet::xet_session::{Sha256Policy, XetFileDownload, XetFileMetadata, XetFileUpload, XetStreamUpload};
+use xet::xet_session::{
+    GroupProgressReport, Sha256Policy, XetFileDownload, XetFileMetadata, XetFileUpload, XetStreamUpload,
+};
 
 use crate::client::HFClient;
 use crate::error::{HFError, HFResult, XetOperation};
@@ -127,6 +129,18 @@ fn emit_remaining_completes(progress: &Option<Progress>, tracked: &[TrackedDownl
 }
 
 #[cfg(not(target_family = "wasm"))]
+fn download_aggregate_progress(report: &GroupProgressReport) -> DownloadEvent {
+    DownloadEvent::AggregateProgress {
+        bytes_completed: report.total_bytes_completed,
+        total_bytes: report.total_bytes,
+        bytes_per_sec: report.total_bytes_completion_rate,
+        transfer_bytes_completed: report.total_transfer_bytes_completed,
+        transfer_bytes: report.total_transfer_bytes,
+        transfer_bytes_per_sec: report.total_transfer_bytes_completion_rate,
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
 fn spawn_download_progress_poller(
     progress: &Option<Progress>,
     group: &xet::xet_session::XetFileDownloadGroup,
@@ -139,11 +153,7 @@ fn spawn_download_progress_poller(
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
             let report = group.progress();
-            handler.emit(DownloadEvent::AggregateProgress {
-                bytes_completed: report.total_bytes_completed,
-                total_bytes: report.total_bytes,
-                bytes_per_sec: report.total_bytes_completion_rate,
-            });
+            handler.emit(download_aggregate_progress(&report));
 
             let mut files = Vec::new();
 
@@ -620,8 +630,11 @@ impl<T: RepoType> HFRepository<T> {
         let result = group.finish().await;
         if let Some(h) = poll_handle {
             h.abort();
+            // Stop in-flight callbacks before emitting the final aggregate snapshot.
+            let _ = h.await;
         }
-        result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
+        let report = result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
+        progress.emit(download_aggregate_progress(&report.progress));
         emit_remaining_completes(progress, &tracked);
 
         Ok(dest_path)
@@ -690,8 +703,11 @@ impl<T: RepoType> HFRepository<T> {
         let result = group.finish().await;
         if let Some(h) = poll_handle {
             h.abort();
+            // Stop in-flight callbacks before emitting the final aggregate snapshot.
+            let _ = h.await;
         }
-        result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
+        let report = result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
+        progress.emit(download_aggregate_progress(&report.progress));
         emit_remaining_completes(progress, &tracked);
 
         std::fs::rename(&incomplete_path, path)?;
@@ -769,8 +785,11 @@ impl<T: RepoType> HFRepository<T> {
         let result = group.finish().await;
         if let Some(h) = poll_handle {
             h.abort();
+            // Stop in-flight callbacks before emitting the final aggregate snapshot.
+            let _ = h.await;
         }
-        result.map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
+        let report = result.map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
+        progress.emit(download_aggregate_progress(&report.progress));
         emit_remaining_completes(progress, &tracked);
 
         for (incomplete, final_path) in &incomplete_paths {
@@ -903,8 +922,11 @@ impl crate::buckets::HFBucket {
         let result = group.finish().await;
         if let Some(h) = poll_handle {
             h.abort();
+            // Stop in-flight callbacks before emitting the final aggregate snapshot.
+            let _ = h.await;
         }
-        result.map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
+        let report = result.map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
+        progress.emit(download_aggregate_progress(&report.progress));
         emit_remaining_completes(progress, &tracked);
 
         for (incomplete, final_path) in &incomplete_paths {
@@ -1050,7 +1072,8 @@ impl<T: RepoType> HFRepository<T> {
 mod tests {
     use xet::error::XetError;
 
-    use super::*;
+    use super::is_session_poisoned;
+    use crate::error::{HFError, XetOperation};
 
     #[test]
     fn test_session_poisoned_positive() {
@@ -1092,6 +1115,84 @@ mod tests {
         match hf_err {
             HFError::Xet { operation, .. } => assert_eq!(operation, XetOperation::Download),
             other => panic!("expected HFError::Xet, got {other:?}"),
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    mod download_progress {
+        use xet::xet_session::GroupProgressReport;
+
+        use super::super::download_aggregate_progress;
+        use crate::progress::DownloadEvent;
+
+        #[test]
+        fn network_activity_is_visible_before_reconstruction_starts() {
+            let report = GroupProgressReport {
+                total_bytes: 4_000_000_000,
+                total_transfer_bytes: 256_000_000,
+                total_transfer_bytes_completed: 16_000_000,
+                total_transfer_bytes_completion_rate: Some(2_000_000.0),
+                ..Default::default()
+            };
+            let DownloadEvent::AggregateProgress {
+                bytes_completed,
+                total_bytes,
+                bytes_per_sec,
+                transfer_bytes_completed,
+                transfer_bytes,
+                transfer_bytes_per_sec,
+            } = download_aggregate_progress(&report)
+            else {
+                panic!("expected aggregate download progress");
+            };
+            assert_eq!((bytes_completed, total_bytes, bytes_per_sec), (0, 4_000_000_000, None));
+            assert_eq!(
+                (transfer_bytes_completed, transfer_bytes, transfer_bytes_per_sec),
+                (16_000_000, 256_000_000, Some(2_000_000.0))
+            );
+        }
+
+        #[test]
+        fn completed_transfer_does_not_complete_reconstruction() {
+            let report = GroupProgressReport {
+                total_bytes: 1_000,
+                total_bytes_completed: 100,
+                total_bytes_completion_rate: Some(10.0),
+                total_transfer_bytes: 500,
+                total_transfer_bytes_completed: 500,
+                ..Default::default()
+            };
+            let DownloadEvent::AggregateProgress {
+                bytes_completed,
+                total_bytes,
+                bytes_per_sec,
+                transfer_bytes_completed,
+                transfer_bytes,
+                transfer_bytes_per_sec,
+            } = download_aggregate_progress(&report)
+            else {
+                panic!("expected aggregate download progress");
+            };
+            assert_eq!((bytes_completed, total_bytes, bytes_per_sec), (100, 1_000, Some(10.0)));
+            assert_eq!((transfer_bytes_completed, transfer_bytes, transfer_bytes_per_sec), (500, 500, None));
+        }
+
+        #[test]
+        fn unknown_totals_and_rates_are_not_inferred_from_file_size() {
+            let report = GroupProgressReport {
+                total_bytes: 1_000,
+                ..Default::default()
+            };
+            assert!(matches!(
+                download_aggregate_progress(&report),
+                DownloadEvent::AggregateProgress {
+                    bytes_per_sec: None,
+                    transfer_bytes_completed: 0,
+                    transfer_bytes: 0,
+                    transfer_bytes_per_sec: None,
+                    ..
+                }
+            ));
         }
     }
 }

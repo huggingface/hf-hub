@@ -4,9 +4,11 @@
 //! real-time progress callbacks during file transfers.
 //!
 //! Run: cargo run -p examples --example progress
+//! To observe network transfer separately from reconstruction on an Xet file:
+//! cargo run -p examples --example progress -- openai-community/gpt2 model.safetensors
 
-use hf_hub::HFClient;
 use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler, UploadEvent};
+use hf_hub::{HFClient, HFError, split_id};
 
 struct PrintProgressHandler;
 
@@ -34,9 +36,14 @@ impl ProgressHandler for PrintProgressHandler {
                 DownloadEvent::AggregateProgress {
                     bytes_completed,
                     total_bytes,
+                    transfer_bytes_completed,
+                    transfer_bytes,
+                    transfer_bytes_per_sec,
                     ..
                 } => {
-                    println!("  aggregate: {bytes_completed}/{total_bytes}");
+                    let rate = transfer_bytes_per_sec.map(|r| format!(" ({r:.1} B/s)")).unwrap_or_default();
+                    println!("  reconstructed: {bytes_completed}/{total_bytes}");
+                    println!("  network: {transfer_bytes_completed}/{transfer_bytes}{rate}");
                 },
                 DownloadEvent::Complete => {
                     println!("Download complete.");
@@ -88,14 +95,23 @@ impl ProgressHandler for PrintProgressHandler {
 
 #[tokio::main]
 async fn main() -> hf_hub::HFResult<()> {
+    let mut args = std::env::args().skip(1);
+    let repo_id = args.next().unwrap_or_else(|| "openai-community/gpt2".to_string());
+    let filename = args.next().unwrap_or_else(|| "config.json".to_string());
+    let revision = args.next();
+    if args.next().is_some() {
+        return Err(HFError::InvalidParameter("usage: progress [REPO_ID [FILENAME [REVISION]]]".to_string()));
+    }
     let client = HFClient::new()?;
-    let model = client.model("openai-community", "gpt2");
+    let (namespace, name) = split_id(&repo_id);
+    let model = client.model(namespace, name);
 
-    let tmp_dir = tempfile::tempdir().expect("failed to create tempdir");
+    let tmp_dir = tempfile::tempdir()?;
 
     let path = model
         .download_file()
-        .filename("config.json")
+        .filename(filename)
+        .maybe_revision(revision)
         .local_dir(tmp_dir.path().to_path_buf())
         .progress(PrintProgressHandler)
         .send()
