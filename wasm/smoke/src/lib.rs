@@ -218,11 +218,17 @@ fn event_to_js(event: &ProgressEvent) -> JsValue {
             bytes_completed,
             total_bytes,
             bytes_per_sec,
+            transfer_bytes_completed,
+            transfer_bytes,
+            transfer_bytes_per_sec,
         }) => {
             set_kind(&obj, "download.aggregate_progress");
             set_number(&obj, "bytes_completed", *bytes_completed as f64);
             set_number(&obj, "total_bytes", *total_bytes as f64);
             set_optional_number(&obj, "bytes_per_sec", *bytes_per_sec);
+            set_number(&obj, "transfer_bytes_completed", *transfer_bytes_completed as f64);
+            set_number(&obj, "transfer_bytes", *transfer_bytes as f64);
+            set_optional_number(&obj, "transfer_bytes_per_sec", *transfer_bytes_per_sec);
         },
         ProgressEvent::Download(DownloadEvent::Complete) => {
             set_kind(&obj, "download.complete");
