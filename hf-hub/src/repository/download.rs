@@ -91,6 +91,36 @@ struct SnapshotDownloadParams {
     progress: Option<Progress>,
 }
 
+/// Reject a repo file path that would resolve outside the directory it is joined onto.
+///
+/// Download destinations are built with `dir.join(filename)`, where `dir` is the caller's
+/// `local_dir` or the cache snapshot folder and `filename` comes from the caller or from the
+/// repo's file listing. `Path::join` follows `..` and replaces the base entirely when given an
+/// absolute, root-relative, drive or UNC path. Same rules as the Python client's
+/// `_validate_relative_filename`, applied under both POSIX and Windows path rules on every
+/// platform, so a tree written on Linux is still safe to read on Windows.
+#[cfg(not(target_family = "wasm"))]
+fn ensure_relative_repo_path(filename: &str) -> Result<(), String> {
+    let normalized = filename.replace('\\', "/");
+    if normalized.split('/').any(|segment| segment == "..") {
+        return Err(format!("file path {filename:?} must not contain a '..' segment"));
+    }
+    let anchored = filename.starts_with(['/', '\\'])
+        || filename.split('/').any(|part| {
+            let bytes = part.as_bytes();
+            part.starts_with('\\') || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        });
+    if anchored {
+        return Err(format!(
+            "file path {filename:?} must be relative to the repository root (no absolute, drive or UNC path)"
+        ));
+    }
+    if normalized.split('/').all(|segment| segment.is_empty() || segment == ".") {
+        return Err(format!("file path {filename:?} does not name a file"));
+    }
+    Ok(())
+}
+
 impl<T: RepoType> HFRepository<T> {
     #[cfg(not(target_family = "wasm"))]
     async fn download_file_impl(&self, params: DownloadFileParams) -> HFResult<PathBuf> {
@@ -103,6 +133,7 @@ impl<T: RepoType> HFRepository<T> {
 
     #[cfg(not(target_family = "wasm"))]
     async fn download_file_inner(&self, params: &DownloadFileParams) -> HFResult<PathBuf> {
+        ensure_relative_repo_path(&params.filename).map_err(HFError::InvalidParameter)?;
         if params.local_dir.is_some() {
             self.download_file_to_local_dir(params).await
         } else {
@@ -769,6 +800,11 @@ impl<T: RepoType> HFRepository<T> {
         let mut filenames = self
             .list_filtered_files(&commit_hash, params.allow_patterns.as_ref(), params.ignore_patterns.as_ref())
             .await?;
+        // The listing comes from the server: a path that would land outside `local_dir` or the
+        // snapshot folder fails the whole snapshot before anything is written.
+        for filename in &filenames {
+            ensure_relative_repo_path(filename).map_err(HFError::malformed_response)?;
+        }
 
         let total_files = filenames.len();
         let force = params.force_download;
@@ -1426,6 +1462,102 @@ mod tests {
         assert!(paths.iter().all(|path| path == &paths[0]));
         assert_eq!(std::fs::read(&paths[0]).unwrap(), b"downloaded");
         assert_eq!(get_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn relative_repo_paths_are_accepted() {
+        for path in [
+            "config.json",
+            "onnx/model.onnx",
+            "a/b/c/weights.safetensors",
+            "./config.json",
+            "dir/./file",
+            "dir/..hidden/file..txt",
+            "weights:v2/model.bin",
+        ] {
+            assert!(super::ensure_relative_repo_path(path).is_ok(), "{path}");
+        }
+    }
+
+    #[test]
+    fn paths_that_leave_the_target_directory_are_rejected() {
+        for path in [
+            "",
+            ".",
+            "..",
+            "../escape.txt",
+            "a/../../escape.txt",
+            "a/..",
+            "/etc/passwd",
+        ] {
+            assert!(super::ensure_relative_repo_path(path).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn windows_style_paths_are_rejected_on_every_platform() {
+        for path in [
+            r"..\escape.txt",
+            r"a\..\..\escape.txt",
+            r"C:\escape.txt",
+            "C:escape.txt",
+            "a/C:escape.txt",
+            r"\escape.txt",
+            r"\server\share\x",
+            r"a/\server\share\x",
+        ] {
+            assert!(super::ensure_relative_repo_path(path).is_err(), "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn download_file_rejects_traversal_before_any_request() {
+        // No routes: a request would get a 404, so an InvalidParameter proves nothing was fetched.
+        let (client, server) = mock_hub(&[]).await;
+        let sandbox = tempfile::tempdir().unwrap();
+        let local_dir = sandbox.path().join("local_dir");
+        let result = client
+            .model("owner", "repo")
+            .download_file()
+            .filename("../escape.txt")
+            .local_dir(local_dir.clone())
+            .send()
+            .await;
+        server.abort();
+
+        assert!(
+            matches!(&result, Err(HFError::InvalidParameter(msg)) if msg.contains("../escape.txt")),
+            "{result:?}"
+        );
+        assert!(!sandbox.path().join("escape.txt").exists());
+        assert!(!local_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn snapshot_download_rejects_traversal_in_the_repo_listing() {
+        let listing = r#"[{"type":"file","oid":"x","size":3,"path":"config.json"},{"type":"file","oid":"y","size":3,"path":"../escape.txt"}]"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{listing}",
+            listing.len()
+        );
+        let request = format!("GET /api/models/owner/repo/tree/{TEST_COMMIT}?recursive=true HTTP/1.1");
+        let (client, server) = mock_hub(&[(request.as_str(), response.as_str())]).await;
+        let sandbox = tempfile::tempdir().unwrap();
+        let local_dir = sandbox.path().join("local_dir");
+        let result = client
+            .model("owner", "repo")
+            .snapshot_download()
+            .revision(TEST_COMMIT)
+            .local_dir(local_dir.clone())
+            .send()
+            .await;
+        server.abort();
+
+        assert!(
+            matches!(&result, Err(HFError::MalformedResponse { what, .. }) if what.contains("../escape.txt")),
+            "{result:?}"
+        );
+        assert!(!sandbox.path().join("escape.txt").exists());
     }
 
     async fn start_metadata_server(get_count: Arc<AtomicUsize>) -> String {
