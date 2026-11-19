@@ -1026,6 +1026,39 @@ async fn test_create_and_delete_branch() {
 }
 
 #[tokio::test]
+async fn test_create_empty_branch() {
+    let Some(client) = api() else { return };
+    if !write_enabled() {
+        return;
+    }
+    let repo_id = create_test_repo(&client).await;
+
+    let test_repo = repo(&client, &repo_id);
+    test_repo
+        .create_branch()
+        .branch("empty-branch")
+        .empty(true)
+        .send()
+        .await
+        .unwrap();
+
+    let refs = test_repo.list_refs().send().await.unwrap();
+    assert!(refs.branches.iter().any(|b| b.name == "empty-branch"));
+
+    let tree = test_repo.list_tree().revision("empty-branch").recursive(true).send().unwrap();
+    futures::pin_mut!(tree);
+    assert!(tree.next().await.is_none());
+
+    let commits = test_repo.list_commits().revision("empty-branch").send().unwrap();
+    futures::pin_mut!(commits);
+    let initial = commits.next().await.unwrap().unwrap();
+    assert!(initial.parents.is_empty());
+    assert!(commits.next().await.is_none());
+
+    delete_test_repo(&client, &repo_id).await;
+}
+
+#[tokio::test]
 async fn test_delete_branch_missing_returns_error() {
     let Some(client) = api() else { return };
     if !write_enabled() {

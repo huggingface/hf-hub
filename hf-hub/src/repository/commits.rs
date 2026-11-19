@@ -331,6 +331,7 @@ impl<T: RepoType> HFRepository<T> {
     ///
     /// - `branch` (required): name of the branch to create.
     /// - `revision`: revision to branch from. Defaults to the current main branch head.
+    /// - `empty`: start the branch from a single empty commit with no parents, ignoring `revision`.
     #[builder(finish_fn = send, derive(Debug, Clone))]
     pub async fn create_branch(
         &self,
@@ -339,6 +340,9 @@ impl<T: RepoType> HFRepository<T> {
         /// Revision to branch from. Defaults to the current main branch head.
         #[builder(into)]
         revision: Option<String>,
+        /// Start the branch from a single empty commit with no parents, ignoring `revision`.
+        #[builder(default)]
+        empty: bool,
     ) -> HFResult<()> {
         let url = format!(
             "{}/branch/{}",
@@ -349,6 +353,9 @@ impl<T: RepoType> HFRepository<T> {
         let mut body = serde_json::Map::new();
         if let Some(rev) = revision {
             body.insert("startingPoint".into(), serde_json::Value::String(rev));
+        }
+        if empty {
+            body.insert("emptyBranch".into(), serde_json::Value::Bool(true));
         }
 
         let headers = self.hf_client.auth_headers();
@@ -543,9 +550,20 @@ impl<T: RepoType> crate::blocking::HFRepositorySync<T> {
     /// Blocking counterpart of [`HFRepository::create_branch`]. See the async method for
     /// parameters and behavior.
     #[builder(finish_fn = send, derive(Debug, Clone))]
-    pub fn create_branch(&self, branch: &str, #[builder(into)] revision: Option<String>) -> HFResult<()> {
-        self.runtime
-            .block_on(self.inner.create_branch().branch(branch).maybe_revision(revision).send())
+    pub fn create_branch(
+        &self,
+        branch: &str,
+        #[builder(into)] revision: Option<String>,
+        #[builder(default)] empty: bool,
+    ) -> HFResult<()> {
+        self.runtime.block_on(
+            self.inner
+                .create_branch()
+                .branch(branch)
+                .maybe_revision(revision)
+                .empty(empty)
+                .send(),
+        )
     }
 
     /// Blocking counterpart of [`HFRepository::delete_branch`]. See the async method for
