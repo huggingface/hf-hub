@@ -126,15 +126,46 @@ fn emit_remaining_completes(progress: &Option<Progress>, tracked: &[TrackedDownl
     }
 }
 
+/// Owns a spawned task's [`JoinHandle`](tokio::task::JoinHandle) and aborts it on drop.
+///
+/// Used to tie a detached poller task's lifetime to a local variable: if the enclosing future
+/// (e.g. a download or upload call) is dropped, aborted, or returns early before it explicitly
+/// tears the poller down, this guard's `Drop` still runs and cancels the task, so the poller
+/// cannot outlive the transfer it reports on.
+///
+/// Holds `None` when no task was spawned (no progress handler), so callers can tear the poller
+/// down unconditionally with [`AbortOnDrop::abort`].
+#[cfg(not(target_family = "wasm"))]
+struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+
+#[cfg(not(target_family = "wasm"))]
+impl AbortOnDrop {
+    /// Aborts the task now, instead of waiting for the guard to go out of scope.
+    fn abort(self) {
+        drop(self);
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.0 {
+            handle.abort();
+        }
+    }
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn spawn_download_progress_poller(
     progress: &Option<Progress>,
     group: &xet::xet_session::XetFileDownloadGroup,
     tracked: Arc<Vec<TrackedDownload>>,
-) -> Option<tokio::task::JoinHandle<()>> {
-    let handler = progress.as_ref()?.clone();
+) -> AbortOnDrop {
+    let Some(handler) = progress.as_ref().cloned() else {
+        return AbortOnDrop(None);
+    };
     let group = group.clone();
-    Some(tokio::spawn(async move {
+    AbortOnDrop(Some(tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -193,7 +224,7 @@ fn spawn_download_progress_poller(
                 handler.emit(DownloadEvent::Progress { files });
             }
         }
-    }))
+    })))
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -358,7 +389,7 @@ async fn xet_upload_inner(
     let shared_handles: Arc<Vec<NativeAnyHandle>> = Arc::new(handles);
     let shared_name_map: Arc<HashMap<String, String>> = Arc::new(item_name_to_target_path);
 
-    let poll_handle = progress.as_ref().map(|handler| {
+    let poll_handle = AbortOnDrop(progress.as_ref().map(|handler| {
         let handler = handler.clone();
         let commit = commit.clone();
         let poll_handles = Arc::clone(&shared_handles);
@@ -398,7 +429,7 @@ async fn xet_upload_inner(
                 });
             }
         })
-    });
+    }));
     // For streams, we need each `finish()` to land before `commit.commit()`
     // — otherwise the commit waits indefinitely on the in-flight cleaners.
     // For File/Bytes, the tasks are already queued in xet's runtime and run
@@ -412,9 +443,7 @@ async fn xet_upload_inner(
     }
 
     let results = commit.commit().await.map_err(|e| HFError::xet(XetOperation::Upload, e))?;
-    if let Some(h) = poll_handle {
-        h.abort();
-    }
+    poll_handle.abort();
     tracing::info!("xet upload commit complete");
 
     let final_files: Vec<FileProgress> = files
@@ -618,9 +647,7 @@ impl<T: RepoType> HFRepository<T> {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
+        poll_handle.abort();
         result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
         emit_remaining_completes(progress, &tracked);
 
@@ -688,9 +715,7 @@ impl<T: RepoType> HFRepository<T> {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
+        poll_handle.abort();
         result.map_err(|e| HFError::xet(XetOperation::Download, e))?;
         emit_remaining_completes(progress, &tracked);
 
@@ -767,9 +792,7 @@ impl<T: RepoType> HFRepository<T> {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
+        poll_handle.abort();
         result.map_err(|e| HFError::xet(XetOperation::BatchDownload, e))?;
         emit_remaining_completes(progress, &tracked);
 
@@ -901,9 +924,7 @@ impl crate::buckets::HFBucket {
         let poll_handle = spawn_download_progress_poller(progress, &group, Arc::clone(&tracked));
 
         let result = group.finish().await;
-        if let Some(h) = poll_handle {
-            h.abort();
-        }
+        poll_handle.abort();
         result.map_err(|e| HFError::xet(XetOperation::BucketBatchDownload, e))?;
         emit_remaining_completes(progress, &tracked);
 
@@ -1093,5 +1114,51 @@ mod tests {
             HFError::Xet { operation, .. } => assert_eq!(operation, XetOperation::Download),
             other => panic!("expected HFError::Xet, got {other:?}"),
         }
+    }
+
+    /// Spawns a task that never finishes on its own, guarded so that tearing its future down
+    /// closes the returned channel.
+    #[cfg(not(target_family = "wasm"))]
+    fn spawn_never_ending_task() -> (AbortOnDrop, tokio::sync::oneshot::Receiver<()>) {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            let _tx = tx; // dropped only when this task's future is torn down.
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+            }
+        });
+        (AbortOnDrop(Some(handle)), rx)
+    }
+
+    /// Tearing down the task's future drops the sender, closing the channel; `rx` resolves (with a
+    /// `RecvError`, since nothing was ever sent) as soon as that happens. If the guard failed to
+    /// abort the task, this would hang until the timeout fires instead.
+    #[cfg(not(target_family = "wasm"))]
+    async fn assert_task_torn_down(rx: tokio::sync::oneshot::Receiver<()>) {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), rx)
+            .await
+            .expect("task should have been aborted shortly after the guard was torn down");
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn test_abort_on_drop_aborts_task_when_dropped() {
+        let (guard, rx) = spawn_never_ending_task();
+        drop(guard);
+        assert_task_torn_down(rx).await;
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn test_abort_on_drop_aborts_task_on_explicit_abort() {
+        let (guard, rx) = spawn_never_ending_task();
+        guard.abort();
+        assert_task_torn_down(rx).await;
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn test_abort_on_drop_without_task_is_inert() {
+        AbortOnDrop(None).abort();
     }
 }
