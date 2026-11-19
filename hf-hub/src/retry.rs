@@ -1,12 +1,17 @@
 use std::future::Future;
 use std::time::Duration;
 
+use reqwest::header::HeaderMap;
 use reqwest::{Error as ReqwestError, Response, StatusCode};
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::{debug, error};
 
+use crate::error::parse_retry_after;
+
 pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 5;
 pub(crate) const DEFAULT_BASE_DELAY: Duration = Duration::from_millis(100);
+/// Cap on a server-requested `Retry-After` wait, so one response can't stall a call for minutes.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RetryConfig {
@@ -91,6 +96,35 @@ fn is_transient(result: &Result<Response, ReqwestError>) -> bool {
     }
 }
 
+/// The wait a 429/503 response asks for, capped at [`MAX_RETRY_AFTER`]. On a 429 an exhausted
+/// Hub `RateLimit` quota takes precedence over `Retry-After`.
+fn retry_after(result: &Result<Response, ReqwestError>) -> Option<Duration> {
+    let resp = result.as_ref().ok()?;
+    let wait = match resp.status() {
+        StatusCode::TOO_MANY_REQUESTS => {
+            parse_rate_limit_reset(resp.headers()).or_else(|| parse_retry_after(resp.headers()))
+        },
+        StatusCode::SERVICE_UNAVAILABLE => parse_retry_after(resp.headers()),
+        _ => None,
+    }?;
+    Some(wait.min(MAX_RETRY_AFTER))
+}
+
+/// Seconds until reset from a Hub `RateLimit: "api";r=0;t=55` header, when no requests remain.
+fn parse_rate_limit_reset(headers: &HeaderMap) -> Option<Duration> {
+    let raw = headers.get("ratelimit")?.to_str().ok()?;
+    let mut remaining = None;
+    let mut reset = None;
+    for param in raw.split(';').skip(1) {
+        match param.trim().split_once('=') {
+            Some(("r", value)) => remaining = value.trim().parse::<u64>().ok(),
+            Some(("t", value)) => reset = value.trim().parse::<u64>().ok(),
+            _ => {},
+        }
+    }
+    (remaining? == 0).then_some(Duration::from_secs(reset?))
+}
+
 fn log_attempt(attempt: usize, transient: bool, result: &Result<Response, ReqwestError>) {
     match (transient, result) {
         (true, Ok(resp)) => {
@@ -129,6 +163,8 @@ fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> {
 
 /// Retry the provided async request factory using the given config.
 /// On each attempt the closure is invoked to build a fresh `send()` future.
+/// Between attempts it waits the backoff delay, or longer when a 429/503
+/// carries a `RateLimit` reset or `Retry-After`.
 /// Returns the final `Response` (including non-retryable error statuses) or
 /// a final transport error.
 pub(crate) async fn retry<F, Fut>(config: &RetryConfig, mut f: F) -> Result<Response, ReqwestError>
@@ -149,7 +185,7 @@ where
         }
 
         match delays.next() {
-            Some(delay) => tokio::time::sleep(delay).await,
+            Some(delay) => tokio::time::sleep(delay.max(retry_after(&result).unwrap_or_default())).await,
             None => {
                 log_exhausted(config.max_attempts, &result);
                 return result;
@@ -221,5 +257,94 @@ mod tests {
         };
         let total: Duration = delay_strategy(&config).sum();
         assert!(total < Duration::from_millis(500), "total sleep budget {total:?} exceeds 500ms");
+    }
+
+    fn response(status: u16, retry_after: Option<&str>) -> Result<Response, ReqwestError> {
+        response_with_headers(status, retry_after, None)
+    }
+
+    fn response_with_headers(
+        status: u16,
+        retry_after: Option<&str>,
+        rate_limit: Option<&str>,
+    ) -> Result<Response, ReqwestError> {
+        let mut builder = http::Response::builder().status(status);
+        if let Some(value) = retry_after {
+            builder = builder.header(reqwest::header::RETRY_AFTER, value);
+        }
+        if let Some(value) = rate_limit {
+            builder = builder.header("RateLimit", value);
+        }
+        Ok(Response::from(builder.body("").unwrap()))
+    }
+
+    #[test]
+    fn rate_limit_reset_used_on_429() {
+        let exhausted = Some("\"api\";r=0;t=55");
+        assert_eq!(retry_after(&response_with_headers(429, None, exhausted)), Some(Duration::from_secs(55)));
+        assert_eq!(retry_after(&response_with_headers(429, Some("3"), exhausted)), Some(Duration::from_secs(55)));
+        assert_eq!(retry_after(&response_with_headers(503, None, exhausted)), None);
+    }
+
+    #[test]
+    fn rate_limit_falls_back_to_retry_after() {
+        let remaining = Some("\"api\";r=5;t=55");
+        assert_eq!(retry_after(&response_with_headers(429, Some("3"), remaining)), Some(Duration::from_secs(3)));
+        assert_eq!(retry_after(&response_with_headers(429, Some("3"), Some("garbage"))), Some(Duration::from_secs(3)));
+        assert_eq!(
+            retry_after(&response_with_headers(429, Some("3"), Some("\"api\";r=0"))),
+            Some(Duration::from_secs(3))
+        );
+    }
+
+    #[test]
+    fn retry_after_applies_to_429_and_503_only() {
+        assert_eq!(retry_after(&response(429, Some("3"))), Some(Duration::from_secs(3)));
+        assert_eq!(retry_after(&response(503, Some("3"))), Some(Duration::from_secs(3)));
+        assert_eq!(retry_after(&response(500, Some("3"))), None);
+        assert_eq!(retry_after(&response(429, None)), None);
+    }
+
+    #[test]
+    fn retry_after_is_capped() {
+        assert_eq!(retry_after(&response(429, Some("3600"))), Some(MAX_RETRY_AFTER));
+    }
+
+    #[tokio::test]
+    async fn retry_waits_for_retry_after() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let requests = Arc::new(AtomicUsize::new(0));
+        let served = requests.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = socket.read(&mut buf).await;
+                let reply = if served.fetch_add(1, Ordering::SeqCst) == 0 {
+                    "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                } else {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                };
+                let _ = socket.write_all(reply.as_bytes()).await;
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let config = RetryConfig {
+            max_attempts: 3,
+            base_delay: Duration::from_millis(1),
+        };
+        let started = std::time::Instant::now();
+        let response = retry(&config, || client.get(&url).send()).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert!(started.elapsed() >= Duration::from_secs(1), "retried before Retry-After elapsed");
     }
 }
