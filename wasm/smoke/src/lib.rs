@@ -253,6 +253,10 @@ fn event_to_js(event: &ProgressEvent) -> JsValue {
             set_optional_number(&obj, "transfer_bytes_per_sec", *transfer_bytes_per_sec);
             set(&obj, "files", &files_to_js(files));
         },
+        ProgressEvent::Upload(UploadEvent::CommitCompleted { commit_index, .. }) => {
+            set_kind(&obj, "upload.commit_completed");
+            set_number(&obj, "commit_index", *commit_index as f64);
+        },
         ProgressEvent::Upload(UploadEvent::Committing) => {
             set_kind(&obj, "upload.committing");
         },

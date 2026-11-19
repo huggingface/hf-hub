@@ -231,6 +231,10 @@ pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>> + Send>>;
 #[cfg(target_family = "wasm")]
 pub type SourceByteStream = Pin<Box<dyn Stream<Item = HFResult<Bytes>>>>;
 
+/// Stream of add operations consumed by [`HFRepository::upload_operations`].
+#[cfg(not(target_family = "wasm"))]
+pub type CommitOperationStream = Pin<Box<dyn Stream<Item = HFResult<CommitOperation>> + Send>>;
+
 /// Factory that produces a fresh [`SourceByteStream`] each time `open` is called.
 ///
 /// The upload pipeline reads a source up to three times — a small "sample"

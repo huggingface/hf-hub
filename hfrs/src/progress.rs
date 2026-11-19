@@ -267,7 +267,7 @@ impl CliProgressHandler {
                     }
                     let pbar = self.multi.add(ProgressBar::new(0));
                     pbar.set_style(aggregate_bytes_style());
-                    pbar.set_message(format!("Processing Files (0 / {})", state.upload_total_files));
+                    pbar.set_message("Processing Files");
                     state.processing_bar = Some(pbar);
 
                     let tbar = self.multi.add(ProgressBar::new(0));
@@ -284,10 +284,13 @@ impl CliProgressHandler {
                     bar.set_length(*total_bytes);
                     bar.set_position(*bytes_completed);
                     let remaining = total_bytes.saturating_sub(*bytes_completed);
+                    let counts = if total_count == 0 {
+                        completed_count.to_string()
+                    } else {
+                        format!("{completed_count} / {total_count}")
+                    };
                     bar.set_message(format!(
-                        "Processing Files ({} / {}) • {} • ETA {}",
-                        completed_count,
-                        total_count,
+                        "Processing Files ({counts}) • {} • ETA {}",
                         format_rate(*bytes_per_sec),
                         format_eta(remaining, *bytes_per_sec),
                     ));
@@ -309,6 +312,15 @@ impl CliProgressHandler {
                 for fp in files {
                     self.process_upload_file_progress(&mut state, fp);
                 }
+            },
+            UploadEvent::CommitCompleted {
+                commit_index,
+                commit_oid,
+            } => {
+                let short_oid = commit_oid.as_deref().map(|oid| &oid[..oid.len().min(7)]).unwrap_or("?");
+                let _ = self
+                    .multi
+                    .println(format!("  committed batch {} ({short_oid})", commit_index + 1));
             },
             UploadEvent::Committing => {
                 self.cleanup_upload_bars(&mut state);
