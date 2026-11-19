@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
-use super::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
+use super::{CacheScanWarning, CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
 
 pub(crate) struct CacheLock {
     _file: File,
@@ -196,11 +197,15 @@ struct BlobInfo {
     modified: SystemTime,
 }
 
-fn resolve_blob_info(file_path: &Path) -> Result<BlobInfo, String> {
-    let resolved =
-        std::fs::canonicalize(file_path).map_err(|e| format!("Cannot resolve {}: {}", file_path.display(), e))?;
-    let meta =
-        std::fs::metadata(&resolved).map_err(|e| format!("Cannot read blob for {}: {}", file_path.display(), e))?;
+fn resolve_blob_info(file_path: &Path) -> Result<BlobInfo, CacheScanWarning> {
+    let resolved = std::fs::canonicalize(file_path).map_err(|e| CacheScanWarning::UnresolvablePointer {
+        path: file_path.to_path_buf(),
+        source: Arc::new(e),
+    })?;
+    let meta = std::fs::metadata(&resolved).map_err(|e| CacheScanWarning::UnreadableBlob {
+        path: file_path.to_path_buf(),
+        source: Arc::new(e),
+    })?;
     Ok(BlobInfo {
         blob_path: resolved,
         size: meta.len(),
@@ -209,7 +214,7 @@ fn resolve_blob_info(file_path: &Path) -> Result<BlobInfo, String> {
     })
 }
 
-fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFileInfo> {
+fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<CacheScanWarning>) -> Vec<CachedFileInfo> {
     let mut files = Vec::new();
     let mut stack = vec![snap_path.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -229,8 +234,8 @@ fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFile
 
                 let blob = match resolve_blob_info(&file_path) {
                     Ok(b) => b,
-                    Err(msg) => {
-                        warnings.push(msg);
+                    Err(warning) => {
+                        warnings.push(warning);
                         continue;
                     },
                 };
@@ -360,6 +365,7 @@ mod tests {
         no_exist_path, parse_repo_folder_name, read_commit_refs, read_ref, ref_path, repo_folder_name, scan_cache_dir,
         snapshot_path, write_ref,
     };
+    use crate::cache::CacheScanWarning;
 
     #[test]
     fn test_repo_folder_name_model_with_org() {
@@ -662,5 +668,23 @@ mod tests {
         assert!(rev_sizes.iter().all(|&s| s == 100));
         assert_eq!(result.repos[0].size_on_disk, 100);
         assert_eq!(result.size_on_disk, 100);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_scan_broken_pointer_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let snap = dir.path().join("models--org--repo/snapshots/abc123");
+        std::fs::create_dir_all(&snap).unwrap();
+        let pointer = snap.join("model.bin");
+        std::os::unix::fs::symlink("../../blobs/missing", &pointer).unwrap();
+
+        let result = scan_cache_dir(dir.path()).await.unwrap();
+
+        assert!(result.repos[0].revisions[0].files.is_empty());
+        assert!(matches!(
+            result.warnings.as_slice(),
+            [CacheScanWarning::UnresolvablePointer { path, .. }] if *path == pointer
+        ));
     }
 }
