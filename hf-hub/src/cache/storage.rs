@@ -250,6 +250,13 @@ fn scan_snapshot(snap_path: &Path, warnings: &mut Vec<String>) -> Vec<CachedFile
 }
 
 pub(crate) async fn scan_cache_dir(cache_dir: &Path) -> crate::error::HFResult<HFCacheInfo> {
+    let cache_dir = cache_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || scan_cache_dir_blocking(&cache_dir))
+        .await
+        .map_err(|e| crate::error::HFError::Other(format!("Cache scan task failed: {e}")))?
+}
+
+fn scan_cache_dir_blocking(cache_dir: &Path) -> crate::error::HFResult<HFCacheInfo> {
     let mut repos = Vec::new();
     let mut warnings = Vec::new();
     let mut total_size: u64 = 0;
