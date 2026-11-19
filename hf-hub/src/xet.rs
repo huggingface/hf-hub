@@ -566,7 +566,7 @@ impl<T: RepoType> HFRepository<T> {
         let file_hash = crate::repository::extract_xet_hash(head_response)
             .ok_or_else(|| HFError::malformed_response("missing X-Xet-Hash header"))?;
 
-        let file_size: u64 = crate::repository::extract_file_size(head_response).unwrap_or(0);
+        let file_size = crate::repository::extract_xet_file_size(head_response, filename)?;
 
         let token_url = repo_xet_token_url(&self.hf_client, "read", &repo_path, api_segment, revision);
         let conn = fetch_xet_connection_info(

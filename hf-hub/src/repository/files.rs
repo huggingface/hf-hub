@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 #[allow(unused_imports)] // used by intra-doc links
 use super::HFRepository;
 use crate::constants;
-use crate::error::HFResult;
+use crate::error::{HFError, HFResult};
 
 /// LFS metadata attached to a repository file, when the file is stored in Git LFS.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,7 +85,7 @@ pub struct FileMetadataInfo {
     /// Xet content hash if the file is stored in Xet (from the `X-Xet-Hash` header).
     pub xet_hash: Option<String>,
     /// File size in bytes. Falls back to `0` if neither `X-Linked-Size` nor `Content-Length`
-    /// is present on the response.
+    /// is present on the response; for Xet files a missing size is an error instead.
     pub file_size: u64,
     /// Final URL the HEAD request resolved to after redirects (Hub URL or CDN). `None` when no
     /// redirect was followed and the request URL itself was not preserved.
@@ -369,6 +369,20 @@ pub(crate) fn extract_file_size(response: &reqwest::Response) -> Option<u64> {
         .get(reqwest::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse().ok())
+}
+
+/// File size for a file that will be downloaded through Xet.
+///
+/// Xet downloads need the size up front, so a missing or invalid `X-Linked-Size` header on a
+/// Xet file is a malformed response rather than a `0` fallback: the Xet client bounds the
+/// reconstruction by the given size, so a fabricated `0` would silently produce an empty file.
+pub(crate) fn extract_xet_file_size(response: &reqwest::Response, filename: &str) -> HFResult<u64> {
+    extract_file_size(response).ok_or_else(|| {
+        HFError::malformed_response_at(
+            format!("missing or invalid X-Linked-Size header for xet file {filename}"),
+            response.url().to_string(),
+        )
+    })
 }
 
 pub(crate) fn extract_xet_hash(response: &reqwest::Response) -> Option<String> {
