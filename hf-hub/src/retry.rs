@@ -5,6 +5,8 @@ use reqwest::{Error as ReqwestError, Response, StatusCode};
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::{debug, error};
 
+use crate::error::{HFError, HFResult};
+
 pub(crate) const DEFAULT_MAX_ATTEMPTS: usize = 5;
 pub(crate) const DEFAULT_BASE_DELAY: Duration = Duration::from_millis(100);
 
@@ -66,6 +68,30 @@ fn is_transient_reqwest_error(err: &ReqwestError) -> bool {
             return true;
         }
         false
+    }
+}
+
+/// Whether an error raised while reading a response body is the connection
+/// dropping or timing out mid-transfer, so re-sending the request may succeed.
+fn is_transient_body_error(err: &ReqwestError) -> bool {
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = err;
+        false
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        if !(err.is_body() || err.is_decode()) {
+            return false;
+        }
+        err.is_timeout()
+            || find_source::<hyper::Error>(err).is_some_and(|hyper_err| {
+                hyper_err.is_incomplete_message()
+                    || hyper_err.is_canceled()
+                    || hyper_err.is_timeout()
+                    || find_source::<std::io::Error>(hyper_err).is_some()
+            })
+            || find_source::<std::io::Error>(err).is_some()
     }
 }
 
@@ -157,6 +183,30 @@ where
         }
 
         attempt += 1;
+    }
+}
+
+/// Runs `attempt`, starting it over when its response body is cut off
+/// mid-transfer. [`retry`] only covers getting a response, so this wraps
+/// downloads that read the whole body before returning anything.
+pub(crate) async fn restart_on_body_error<T, F, Fut>(config: &RetryConfig, mut attempt: F) -> HFResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = HFResult<T>>,
+{
+    let mut delays = delay_strategy(config);
+    loop {
+        match attempt().await {
+            Err(HFError::Request { source, url }) if is_transient_body_error(&source) => {
+                let Some(delay) = delays.next() else {
+                    error!(url = ?url, max_attempts = config.max_attempts, "download body retries exhausted");
+                    return Err(HFError::Request { source, url });
+                };
+                debug!(url = ?url, error = %source, "response body interrupted, restarting download");
+                tokio::time::sleep(delay).await;
+            },
+            result => return result,
+        }
     }
 }
 
