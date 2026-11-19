@@ -71,6 +71,12 @@ async fn main() -> hf_hub::HFResult<()> {
     repo.delete_branch().branch("feature-branch").send().await?;
     println!("Deleted branch: feature-branch");
 
+    repo.create_branch().branch("orphan-branch").empty(true).send().await?;
+    println!("Created empty branch without history: orphan-branch");
+
+    repo.delete_branch().branch("orphan-branch").send().await?;
+    println!("Deleted branch: orphan-branch");
+
     repo.create_tag().tag("v0.1.0").message("Initial release").send().await?;
     println!("Created tag: v0.1.0");
 
