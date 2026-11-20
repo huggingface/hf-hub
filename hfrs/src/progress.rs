@@ -24,6 +24,7 @@ struct ProgressState {
     /// Aggregate byte bar driven exclusively by `AggregateProgress` events
     /// (xet). Never touched by per-file events.
     aggregate_bar: Option<ProgressBar>,
+    download_transfer_bar: Option<ProgressBar>,
     file_bars: HashMap<String, ProgressBar>,
     download_queue: VecDeque<(String, u64)>,
     total_files: usize,
@@ -105,6 +106,7 @@ impl CliProgressHandler {
                 files_bar: None,
                 single_file_bar: None,
                 aggregate_bar: None,
+                download_transfer_bar: None,
                 file_bars: HashMap::new(),
                 download_queue: VecDeque::new(),
                 total_files: 0,
@@ -143,6 +145,9 @@ impl CliProgressHandler {
             },
             DownloadEvent::Progress { files } => {
                 for fp in files {
+                    if state.total_files == 1 && state.aggregate_bar.is_some() {
+                        continue;
+                    }
                     match fp.status {
                         FileStatus::Started => {
                             if state.total_files == 1 && state.single_file_bar.is_none() && fp.total_bytes > 0 {
@@ -202,17 +207,42 @@ impl CliProgressHandler {
             DownloadEvent::AggregateProgress {
                 bytes_completed,
                 total_bytes,
+                transfer_bytes_completed,
+                transfer_bytes,
+                transfer_bytes_per_sec,
                 ..
             } => {
                 if state.aggregate_bar.is_none() {
+                    if state.total_files == 1 {
+                        if let Some(bar) = state.single_file_bar.take() {
+                            bar.finish_and_clear();
+                            self.multi.remove(&bar);
+                        }
+                        for (_, bar) in state.file_bars.drain() {
+                            bar.finish_and_clear();
+                            self.multi.remove(&bar);
+                        }
+                        state.download_queue.clear();
+                    }
                     let bar = self.multi.add(ProgressBar::new(*total_bytes));
                     bar.set_style(bytes_style());
-                    bar.set_message("Downloading");
+                    bar.set_message("Reconstructing");
                     state.aggregate_bar = Some(bar);
                 }
                 if let Some(ref bar) = state.aggregate_bar {
                     bar.set_length(*total_bytes);
                     bar.set_position(*bytes_completed);
+                }
+                if state.download_transfer_bar.is_none() {
+                    let bar = self.multi.add(ProgressBar::new(*transfer_bytes));
+                    // Xet discovers transfer totals incrementally; do not derive a file ETA from them.
+                    bar.set_style(aggregate_bytes_style());
+                    state.download_transfer_bar = Some(bar);
+                }
+                if let Some(ref bar) = state.download_transfer_bar {
+                    bar.set_length(*transfer_bytes);
+                    bar.set_position(*transfer_bytes_completed);
+                    bar.set_message(format!("Downloading ({})", format_rate(*transfer_bytes_per_sec)));
                 }
             },
             DownloadEvent::Complete => {
@@ -223,6 +253,9 @@ impl CliProgressHandler {
                     bar.finish_and_clear();
                 }
                 if let Some(ref bar) = state.aggregate_bar {
+                    bar.finish_and_clear();
+                }
+                if let Some(ref bar) = state.download_transfer_bar {
                     bar.finish_and_clear();
                 }
                 for (_, bar) in state.file_bars.drain() {
@@ -420,7 +453,60 @@ pub fn progress_disabled_by_env() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use hf_hub::progress::{DownloadEvent, FileProgress, FileStatus};
+    use indicatif::{MultiProgress, ProgressDrawTarget};
+
+    use super::{CliProgressHandler, format_eta, format_rate};
+
+    #[test]
+    fn network_progress_does_not_advance_reconstruction_or_finish_download() {
+        let handler = CliProgressHandler::new(MultiProgress::with_draw_target(ProgressDrawTarget::hidden()));
+        handler.handle_download(&DownloadEvent::Start {
+            total_files: 1,
+            total_bytes: 1_000,
+        });
+        handler.handle_download(&DownloadEvent::AggregateProgress {
+            bytes_completed: 0,
+            total_bytes: 1_000,
+            bytes_per_sec: None,
+            transfer_bytes_completed: 500,
+            transfer_bytes: 500,
+            transfer_bytes_per_sec: Some(250.0),
+        });
+        {
+            let state = handler.state.lock().unwrap();
+            let reconstruction = state.aggregate_bar.as_ref().unwrap();
+            let transfer = state.download_transfer_bar.as_ref().unwrap();
+            assert_eq!(reconstruction.position(), 0);
+            assert_eq!(transfer.position(), 500);
+            assert!(state.single_file_bar.is_none());
+            assert!(transfer.message().contains(&format_rate(Some(250.0))));
+            assert!(!reconstruction.is_finished());
+            assert!(!transfer.is_finished());
+        }
+        handler.handle_download(&DownloadEvent::Complete);
+        let state = handler.state.lock().unwrap();
+        assert!(state.aggregate_bar.as_ref().unwrap().is_finished());
+        assert!(state.download_transfer_bar.as_ref().unwrap().is_finished());
+    }
+
+    #[test]
+    fn http_file_progress_does_not_create_xet_network_bar() {
+        let handler = CliProgressHandler::new(MultiProgress::with_draw_target(ProgressDrawTarget::hidden()));
+        handler.handle_download(&DownloadEvent::Start {
+            total_files: 1,
+            total_bytes: 1_000,
+        });
+        handler.handle_download(&DownloadEvent::Progress {
+            files: vec![FileProgress {
+                filename: "config.json".to_string(),
+                bytes_completed: 1_000,
+                total_bytes: 1_000,
+                status: FileStatus::Complete,
+            }],
+        });
+        assert!(handler.state.lock().unwrap().download_transfer_bar.is_none());
+    }
 
     #[test]
     fn format_rate_returns_placeholder_for_none() {

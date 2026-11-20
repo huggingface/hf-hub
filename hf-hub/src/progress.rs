@@ -41,6 +41,10 @@
 //!   Complete
 //! ```
 //!
+//! For Xet downloads, `AggregateProgress` keeps reconstructed file bytes separate
+//! from network transfer bytes and rates. Use the transfer fields to show activity
+//! while reconstruction is still at zero; do not add the two byte counts together.
+//!
 //! # Implementing a handler
 //!
 //! ```
@@ -262,7 +266,7 @@ pub enum UploadEvent {
 }
 
 /// Lifecycle events for a single download operation. See the [module-level
-/// docs](self) for ordering, the two-channel `Progress` vs `AggregateProgress`
+/// docs](self) for ordering, the per-file `Progress` vs batch `AggregateProgress`
 /// model, and cache-hit fast paths.
 #[derive(Debug, Clone)]
 pub enum DownloadEvent {
@@ -283,16 +287,26 @@ pub enum DownloadEvent {
         files: Vec<FileProgress>,
     },
 
-    /// Aggregate byte-level progress for the in-flight xet batch (~10Hz). Reports
-    /// cumulative bytes for the entire batch with no per-file breakdown — xet
-    /// reports aggregate stats only.
+    /// Aggregate progress for the in-flight xet batch (~10Hz).
+    ///
+    /// Logical bytes measure file reconstruction; transfer bytes measure network
+    /// activity and can advance before any reconstructed bytes are reported.
+    /// Compression, caching and deduplication mean the two dimensions can differ.
+    /// Transfer totals are discovered during reconstruction and can grow, so they
+    /// must not be used as a fixed file size or as a file-completion signal.
     AggregateProgress {
-        /// Bytes downloaded so far across the in-flight xet batch.
+        /// Logical file bytes reconstructed so far across the in-flight xet batch.
         bytes_completed: u64,
-        /// Total bytes for the in-flight xet batch.
+        /// Total logical file bytes for the in-flight xet batch.
         total_bytes: u64,
-        /// Download rate in bytes/sec. `None` until enough samples accumulate.
+        /// Reconstruction rate in bytes/sec. `None` until enough samples accumulate.
         bytes_per_sec: Option<f64>,
+        /// Network bytes received so far across the in-flight xet batch.
+        transfer_bytes_completed: u64,
+        /// Currently known network bytes to receive. Can grow as more ranges are discovered.
+        transfer_bytes: u64,
+        /// Network transfer rate in bytes/sec. `None` until enough samples accumulate.
+        transfer_bytes_per_sec: Option<f64>,
     },
 
     /// Terminal event on success. Not emitted on failure — check the returned `Result`.
@@ -307,7 +321,8 @@ pub struct FileProgress {
     /// Path as known by the repository or bucket (the `path_in_repo` used when
     /// uploading, or the remote path as returned from tree listing).
     pub filename: String,
-    /// Bytes transferred so far for this file.
+    /// Logical content bytes completed for this file. For Xet downloads this is
+    /// reconstructed data, not network bytes; see [`DownloadEvent::AggregateProgress`].
     pub bytes_completed: u64,
     /// Total bytes expected for this file. Zero when the size is unknown (e.g.,
     /// fast-path cached files emitted purely to signal completion).
