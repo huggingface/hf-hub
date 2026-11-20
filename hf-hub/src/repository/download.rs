@@ -40,6 +40,9 @@ use crate::error::{HFError, HFResult};
 use crate::progress::{DownloadEvent, EmitEvent, FileProgress, FileStatus, Progress};
 use crate::{constants, retry};
 
+#[cfg(not(target_family = "wasm"))]
+mod http_stream;
+
 /// Boxed byte stream returned by [`HFRepository::download_file_stream`].
 ///
 /// `Send + Unpin` on native targets; on wasm the browser `reqwest` backend
@@ -66,6 +69,8 @@ struct DownloadFileStreamParams {
     revision: Option<String>,
     range: Option<std::ops::Range<u64>>,
     progress: Option<Progress>,
+    #[cfg(not(target_family = "wasm"))]
+    resume_http: bool,
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -230,8 +235,12 @@ impl<T: RepoType> HFRepository<T> {
             .range
             .as_ref()
             .map(|r| format!("bytes={}-{}", r.start, r.end.saturating_sub(1)));
-        let response = retry::retry(self.hf_client.retry_config(), || {
-            let mut req = self.hf_client.http_client().get(&url).headers(headers.clone());
+        let client = self.hf_client.http_client().clone();
+        let request = move || client.get(&url).headers(headers.clone());
+        let retry_config = self.hf_client.retry_config();
+        let mut delays = retry::delay_strategy(retry_config);
+        let response = retry::retry_with_delays(retry_config.max_attempts, &mut delays, || {
+            let mut req = request();
             if let Some(ref range) = range_header {
                 req = req.header(reqwest::header::RANGE, range);
             }
@@ -251,13 +260,19 @@ impl<T: RepoType> HFRepository<T> {
 
         let content_length = extract_file_size(&response);
         let total_bytes = content_length.unwrap_or(0);
-        let stream = response.bytes_stream().map(|r| r.map_err(HFError::from));
+        #[cfg(not(target_family = "wasm"))]
+        let stream: HFByteStream = if params.resume_http {
+            http_stream::resume(response, params.range.as_ref(), request, retry_config.max_attempts, delays)
+        } else {
+            Box::new(Box::pin(response.bytes_stream().map(|r| r.map_err(HFError::from))))
+        };
+        #[cfg(target_family = "wasm")]
+        let stream = Box::new(Box::pin(response.bytes_stream().map(|r| r.map_err(HFError::from))));
         params.progress.emit(DownloadEvent::Start {
             total_files: 1,
             total_bytes,
         });
-        let wrapped =
-            wrap_stream_with_progress(Box::new(Box::pin(stream)), params.progress, params.filename, total_bytes);
+        let wrapped = wrap_stream_with_progress(stream, params.progress, params.filename, total_bytes);
         #[cfg(target_family = "wasm")]
         let wrapped = buffer_wasm_stream(wrapped);
         Ok((content_length, wrapped))
@@ -1319,18 +1334,253 @@ pub(crate) fn wrap_stream_with_progress(
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use futures::{StreamExt, TryStreamExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::task::JoinHandle;
 
     use crate::cache::storage as cache;
+    use crate::progress::{DownloadEvent, ProgressEvent, ProgressHandler};
     use crate::test_support::mock_hub;
     use crate::{HFClientBuilder, HFError};
 
     const TEST_COMMIT: &str = "0123456789012345678901234567890123456789";
     const OLD_COMMIT: &str = "1111111111111111111111111111111111111111";
     const TEST_ETAG: &str = "etag-http";
+
+    const SHORT_BODY: &str =
+        "HTTP/1.1 200 OK\r\nETag: \"artifact\"\r\nContent-Length: 8\r\nConnection: close\r\n\r\nabc";
+    const RESUMED_BODY: &str = "HTTP/1.1 206 Partial Content\r\nETag: \"artifact\"\r\nContent-Range: bytes 3-7/8\r\nContent-Length: 5\r\nConnection: close\r\n\r\ndefgh";
+    const UNAVAILABLE: &str = "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+    #[derive(Default)]
+    struct StreamProgress(Mutex<Vec<DownloadEvent>>);
+
+    impl ProgressHandler for StreamProgress {
+        fn on_progress(&self, event: &ProgressEvent) {
+            if let ProgressEvent::Download(event) = event {
+                self.0.lock().unwrap().push(event.clone());
+            }
+        }
+    }
+
+    async fn interrupted_stream_server(
+        responses: Vec<&'static str>,
+        max_attempts: usize,
+    ) -> (crate::HFClient, Arc<Mutex<Vec<String>>>, JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let received = Arc::clone(&requests);
+        let server = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket = BufReader::new(socket);
+                let mut request = String::new();
+                loop {
+                    if socket.read_line(&mut request).await.unwrap_or(0) == 0 || request.ends_with("\r\n\r\n") {
+                        break;
+                    }
+                }
+                let response = if request.starts_with("HEAD ") {
+                    "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n"
+                } else {
+                    let mut requests = received.lock().unwrap();
+                    let response = responses.get(requests.len()).copied();
+                    requests.push(request.to_ascii_lowercase());
+                    response.unwrap_or("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                };
+                let _ = socket.get_mut().write_all(response.as_bytes()).await;
+            }
+        });
+        let client = HFClientBuilder::new()
+            .endpoint(endpoint)
+            .token("test-token")
+            .client(reqwest::Client::builder().no_proxy().build().unwrap())
+            .retry_max_attempts(max_attempts)
+            .retry_base_delay(Duration::ZERO)
+            .build()
+            .unwrap();
+        (client, requests, server)
+    }
+
+    #[tokio::test]
+    async fn stream_resumes_after_http_body_disconnect() {
+        let (client, requests, server) = interrupted_stream_server(vec![SHORT_BODY, RESUMED_BODY], 1).await;
+        let progress = Arc::new(StreamProgress::default());
+        let (len, stream) = client
+            .model("owner", "repo")
+            .download_file_stream()
+            .filename("model.bin")
+            .progress(Arc::clone(&progress))
+            .send()
+            .await
+            .unwrap();
+        let chunks = stream.try_collect::<Vec<_>>().await;
+        server.abort();
+        assert_eq!(len, Some(8));
+        assert_eq!(chunks.unwrap().concat(), b"abcdefgh");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(!requests[0].contains("\r\nrange:"));
+        assert!(requests[1].contains("\r\nrange: bytes=3-7\r\n"));
+        assert!(requests[1].contains("\r\nif-range: \"artifact\"\r\n"));
+        let progress = progress.0.lock().unwrap();
+        let [
+            DownloadEvent::Start { total_bytes: 8, .. },
+            events @ ..,
+            DownloadEvent::Complete,
+        ] = progress.as_slice()
+        else {
+            panic!("unexpected download progress: {progress:?}");
+        };
+        let completed: Vec<_> = events
+            .iter()
+            .map(|event| match event {
+                DownloadEvent::Progress { files } => files[0].bytes_completed,
+                _ => panic!("unexpected progress event: {event:?}"),
+            })
+            .collect();
+        assert_eq!(completed.last(), Some(&8));
+        assert!(completed.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[tokio::test]
+    async fn stream_resumes_from_absolute_offsets_for_a_clamped_range() {
+        let responses = vec![
+            "HTTP/1.1 206 Partial Content\r\nETag: \"artifact\"\r\nContent-Range: bytes 3-7/8\r\nContent-Length: 5\r\nConnection: close\r\n\r\nde",
+            "HTTP/1.1 206 Partial Content\r\nETag: \"artifact\"\r\nContent-Range: bytes 5-7/8\r\nContent-Length: 3\r\nConnection: close\r\n\r\nf",
+            "HTTP/1.1 206 Partial Content\r\nETag: \"artifact\"\r\nContent-Range: bytes 6-7/8\r\nContent-Length: 2\r\nConnection: close\r\n\r\ngh",
+        ];
+        let (client, requests, server) = interrupted_stream_server(responses, 2).await;
+        let (len, stream) = client
+            .model("owner", "repo")
+            .download_file_stream()
+            .filename("model.bin")
+            .range(3..12)
+            .send()
+            .await
+            .unwrap();
+        let chunks = stream.try_collect::<Vec<_>>().await;
+        server.abort();
+        assert_eq!(len, Some(5));
+        assert_eq!(chunks.unwrap().concat(), b"defgh");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        for (request, range) in requests.iter().zip(["3-11", "5-7", "6-7"]) {
+            assert!(request.contains(&format!("\r\nrange: bytes={range}\r\n")));
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_rejects_unverified_resume_responses() {
+        let cases = [
+            vec!["HTTP/1.1 200 OK\r\nETag: \"artifact\"\r\nContent-Length: 8\r\nConnection: close\r\n\r\nabcdefgh"],
+            vec![
+                "HTTP/1.1 206 Partial Content\r\nETag: \"new-artifact\"\r\nContent-Range: bytes 3-7/8\r\nContent-Length: 5\r\nConnection: close\r\n\r\nijklm",
+            ],
+            vec![
+                "HTTP/1.1 206 Partial Content\r\nETag: \"artifact\"\r\nContent-Range: bytes 2-6/8\r\nContent-Length: 5\r\nConnection: close\r\n\r\ncdefg",
+            ],
+            vec![
+                "HTTP/1.1 206 Partial Content\r\nETag: \"artifact\"\r\nContent-Range: bytes 3-7/8\r\nContent-Length: 5\r\nContent-Encoding: gzip\r\nConnection: close\r\n\r\ndefgh",
+            ],
+            vec![
+                "HTTP/1.1 307 Temporary Redirect\r\nLocation: /another-resource\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                RESUMED_BODY,
+            ],
+        ];
+        for responses in cases {
+            let count = 1 + responses.len();
+            let (client, requests, server) =
+                interrupted_stream_server(std::iter::once(SHORT_BODY).chain(responses).collect(), 1).await;
+            let progress = Arc::new(StreamProgress::default());
+            let (_, mut stream) = client
+                .model("owner", "repo")
+                .download_file_stream()
+                .filename("model.bin")
+                .progress(Arc::clone(&progress))
+                .send()
+                .await
+                .unwrap();
+            let mut prefix = Vec::new();
+            loop {
+                match stream.next().await {
+                    Some(Ok(chunk)) => prefix.extend_from_slice(&chunk),
+                    Some(Err(HFError::Request { .. })) => break,
+                    other => panic!("expected a terminal request error, got {other:?}"),
+                }
+            }
+            assert_eq!(prefix, b"abc");
+            assert!(stream.next().await.is_none());
+            server.abort();
+            assert_eq!(requests.lock().unwrap().len(), count);
+            assert!(
+                !progress
+                    .0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|event| matches!(event, DownloadEvent::Complete))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_uses_one_retry_budget_for_headers_and_body() {
+        let responses = vec![UNAVAILABLE, SHORT_BODY, UNAVAILABLE, RESUMED_BODY];
+        let (client, requests, server) = interrupted_stream_server(responses, 2).await;
+        let (_, stream) = client
+            .model("owner", "repo")
+            .download_file_stream()
+            .filename("model.bin")
+            .send()
+            .await
+            .unwrap();
+        let result = stream.try_collect::<Vec<_>>().await;
+        server.abort();
+        assert!(matches!(result, Err(HFError::Request { .. })));
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[2].contains("\r\nrange: bytes=3-7\r\n"));
+    }
+
+    #[tokio::test]
+    async fn stream_preserves_errors_when_resuming_is_disabled_or_unverifiable() {
+        let weak = "HTTP/1.1 200 OK\r\nETag: W/\"artifact\"\r\nContent-Length: 8\r\nConnection: close\r\n\r\nabc";
+        let missing = "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nabc";
+        for (first, retries) in [(SHORT_BODY, 0), (weak, 1), (missing, 1)] {
+            let (client, requests, server) = interrupted_stream_server(vec![first, RESUMED_BODY], retries).await;
+            let (_, stream) = client
+                .model("owner", "repo")
+                .download_file_stream()
+                .filename("model.bin")
+                .send()
+                .await
+                .unwrap();
+            let result = stream.try_collect::<Vec<_>>().await;
+            server.abort();
+            assert!(matches!(result, Err(HFError::Request { .. })));
+            assert_eq!(requests.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn buffered_download_does_not_resume_a_body() {
+        let (client, requests, server) = interrupted_stream_server(vec![SHORT_BODY, RESUMED_BODY], 1).await;
+        let result = client
+            .model("owner", "repo")
+            .download_file_to_bytes()
+            .filename("model.bin")
+            .send()
+            .await;
+        server.abort();
+        assert!(matches!(result, Err(HFError::Request { .. })));
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
 
     #[cfg(not(windows))]
     #[tokio::test]
@@ -1675,6 +1925,8 @@ impl<T: RepoType> HFRepository<T> {
     /// when the server provides a `Content-Length` header.
     ///
     /// When `range` is set, only the specified byte range is fetched.
+    /// On native targets, HTTP streams with a known byte range and a strong ETag
+    /// can resume after transient body errors using the client's retry budget.
     ///
     /// # Parameters
     ///
@@ -1710,6 +1962,8 @@ impl<T: RepoType> HFRepository<T> {
             revision,
             range,
             progress,
+            #[cfg(not(target_family = "wasm"))]
+            resume_http: true,
         }))
         .await
     }
@@ -1754,6 +2008,8 @@ impl<T: RepoType> HFRepository<T> {
             revision,
             range,
             progress,
+            #[cfg(not(target_family = "wasm"))]
+            resume_http: false,
         }))
         .await
     }

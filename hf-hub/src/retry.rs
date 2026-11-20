@@ -69,6 +69,11 @@ fn is_transient_reqwest_error(err: &ReqwestError) -> bool {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn is_transient_body_error(err: &ReqwestError) -> bool {
+    err.is_timeout() || ((err.is_body() || err.is_decode()) && find_source::<hyper::Error>(err).is_some())
+}
+
 fn find_source<T: std::error::Error + 'static>(err: &dyn std::error::Error) -> Option<&T> {
     let mut source = err.source();
     while let Some(e) = source {
@@ -119,7 +124,7 @@ fn log_exhausted(max_attempts: usize, result: &Result<Response, ReqwestError>) {
 /// Yields at most `config.max_attempts` durations. With `base_delay = B` and `max_attempts = N`
 /// the pre-jitter schedule is `2B, 4B, 8B, ..., 2^N * B`; `jitter` multiplies each by a random
 /// factor in `[0, 1)`, so the total sleep budget is bounded above by `B * (2^(N+1) - 2)`.
-fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> {
+pub(crate) fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> + use<> {
     let base_ms = config.base_delay.as_millis().min(u64::MAX as u128) as u64;
     ExponentialBackoff::from_millis(2)
         .factor(base_ms)
@@ -131,13 +136,24 @@ fn delay_strategy(config: &RetryConfig) -> impl Iterator<Item = Duration> {
 /// On each attempt the closure is invoked to build a fresh `send()` future.
 /// Returns the final `Response` (including non-retryable error statuses) or
 /// a final transport error.
-pub(crate) async fn retry<F, Fut>(config: &RetryConfig, mut f: F) -> Result<Response, ReqwestError>
+pub(crate) async fn retry<F, Fut>(config: &RetryConfig, f: F) -> Result<Response, ReqwestError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<Response, ReqwestError>>,
 {
-    let mut delays = delay_strategy(config);
+    retry_with_delays(config.max_attempts, &mut delay_strategy(config), f).await
+}
 
+/// Retry with the remaining delays of an operation that can also fail while reading a body.
+pub(crate) async fn retry_with_delays<F, Fut>(
+    max_attempts: usize,
+    delays: &mut impl Iterator<Item = Duration>,
+    mut f: F,
+) -> Result<Response, ReqwestError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Response, ReqwestError>>,
+{
     let mut attempt = 0usize;
     loop {
         let result = f().await;
@@ -151,7 +167,7 @@ where
         match delays.next() {
             Some(delay) => tokio::time::sleep(delay).await,
             None => {
-                log_exhausted(config.max_attempts, &result);
+                log_exhausted(max_attempts, &result);
                 return result;
             },
         }
